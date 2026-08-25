@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "minecheck",
+  "version": "0.1.0",
+  "name": "Minecheck",
+  "description": "Scripted automation of the Minecraft client and server for mod development",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "net.minecheck.loader.fabric.FabricEntrypoint"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.22",
+    "fabric-api": "*",
+    "minecraft": ">=1.19.2 <1.20"
+  }
+}
