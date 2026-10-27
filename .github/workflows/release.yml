@@ -232,13 +232,6 @@ jobs:
                   if not version:
                       errors.append(f"{dev}: could not read the root project version")
 
-                  if version and main_exists:
-                      main_version = project_version(main)
-                      if main_version and main_version != version:
-                          errors.append(
-                              f"{main}: root version {main_version} differs from {version} on {dev}"
-                          )
-
                   notes = changelog_notes(dev) if version else None
                   if not notes:
                       errors.append(f"{dev}: CHANGELOG.md has no pending release notes")
@@ -259,6 +252,17 @@ jobs:
                   errors.append(f"docs/lua-api.md differs across versions ({detail}); refusing to release")
               elif not documented:
                   errors.append("docs/lua-api.md is missing on the selected branches")
+
+              # `main` is deliberately absent from this comparison: the version reaches main
+              # from the promotion PR this job opens, so it can only be checked after the merge.
+              # The release step does that before it builds, tags or publishes anything.
+              declared = {row["mc"]: row["version"] for row in rows if row["version"]}
+              if len(set(declared.values())) > 1:
+                  detail = ", ".join(f"{mc}={version}" for mc, version in declared.items())
+                  errors.append(
+                      "root project version differs across the branches being released "
+                      f"({detail}); refusing to release"
+                  )
 
               for row in rows:
                   if not row["version"]:
@@ -369,7 +373,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge, tag and publish every selected version
+      - name: Merge the promotion PRs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -377,21 +381,51 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Abort everything on the first failure: versions are released in the input order and
-          # later versions are not touched once one fails (spec decision 15).
+          # Abort everything on the first failure: versions are merged in the input order and
+          # later versions are not touched once one fails (spec decision 15). This is the step
+          # that puts the version on main; tagging and publishing happen after it, in the next
+          # step, so main is already hit by the time anything leaves the repository.
           mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
           for row in "${ROWS[@]}"; do
             IFS=$'\t' read -r MC PR VERSION <<<"$row"
-            TAG="$MC/v$VERSION"
-
-            echo "::group::Release $TAG"
             if [[ -z "$PR" || "$PR" == "null" ]]; then
               echo "::error::no promotion PR for $MC"
               exit 1
             fi
 
             gh pr merge "$PR" --repo "$REPO" --squash --delete-branch=false
+            echo "merged promotion PR #$PR: $MC v$VERSION is now on $MC/main"
+          done
+
+      - name: Publish, tag and release every merged version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PLAN: ${{ needs.prepare.outputs.plan }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
+
+          # The step above is what puts the version on main, so this is the first point where the
+          # branch and the version being released can be compared. Check every version before
+          # building anything: a mismatch must not leave a tag or a published artifact behind.
+          for row in "${ROWS[@]}"; do
+            IFS=$'\t' read -r MC PR VERSION <<<"$row"
             git fetch --force --prune --tags origin
+            DECLARED="$(git show "origin/$MC/main:build.gradle.kts" \
+              | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' | head -1)"
+            if [[ "$DECLARED" != "$VERSION" ]]; then
+              echo "::error::$MC/main declares version ${DECLARED:-none} after the promotion merge, not $VERSION; nothing was tagged or published"
+              exit 1
+            fi
+          done
+
+          for row in "${ROWS[@]}"; do
+            IFS=$'\t' read -r MC PR VERSION <<<"$row"
+            TAG="$MC/v$VERSION"
+
+            echo "::group::Release $TAG"
             git switch --force-create "release-$MC" "origin/$MC/main"
 
             # Build and publish before tagging: a failed build or a rejected upload must not
