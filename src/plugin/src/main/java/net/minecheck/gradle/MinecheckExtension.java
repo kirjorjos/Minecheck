@@ -8,8 +8,10 @@ import org.gradle.api.provider.Property;
  * <pre>
  * devHelper {
  *     loaderTask       = ":fabric-mod:runClient"        // client gradle task
- *     script           = "client-join-server.lua"          // client join/run script (no coordinator)
+ *     script           = "client-join-server.lua"          // client join/run script (used when there
+ *                                                         // is no coordinator)
  *     coordinator      = "coordinator.lua"                 // optional: multi-phase single session
+ *                                                         // (wins over script when set)
  *     serverScript     = "server-wait-stop.lua"            // optional: enables the parallel server phase
  *     serverLoaderTask = ":fabric-mod:runServer"        // server gradle task
  *     scriptsDir       = layout.projectDirectory.dir("tests/scripts").asFile

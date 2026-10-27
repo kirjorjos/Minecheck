@@ -8,6 +8,9 @@
   "entrypoints": {
     "main": [
       "net.minecheck.loader.fabric.FabricEntrypoint"
+    ],
+    "jei_mod_plugin": [
+      "net.minecheck.platform.yarn.MinecheckJeiPlugin"
     ]
   },
   "depends": {

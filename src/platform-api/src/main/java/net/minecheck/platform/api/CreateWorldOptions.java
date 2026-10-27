@@ -13,6 +13,9 @@ package net.minecheck.platform.api;
  * @param structures generate structures (default false — deterministic)
  * @param mobSpawning allow natural mob spawning (default false — deterministic)
  * @param allowCheats allow commands / cheats (default true — dev helper)
+ * @param daylightCycle allow the daylight cycle (default false — deterministic)
+ * @param weatherCycle allow the weather cycle (default false — deterministic)
+ * @param insomnia allow phantoms to spawn for sleepless players (default false — deterministic)
  */
 public record CreateWorldOptions(
     String name,
@@ -21,4 +24,7 @@ public record CreateWorldOptions(
     String difficulty,
     boolean structures,
     boolean mobSpawning,
-    boolean allowCheats) {}
+    boolean allowCheats,
+    boolean daylightCycle,
+    boolean weatherCycle,
+    boolean insomnia) {}

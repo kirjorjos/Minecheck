@@ -1,5 +1,6 @@
 import java.io.File
 import java.io.FileInputStream
+import net.minecheck.gradle.LaunchDescriptor
 
 plugins {
   id("xyz.wagyourtail.unimined")
@@ -8,11 +9,25 @@ plugins {
 
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 
+val emiVersion = "1.1.24+1.19.2+forge"
+val jeiVersion = "11.6.0.1024"
+val reiVersion = "9.2.784+forge"
+
+// REI's mods.toml makes both mandatory (`architectury` >= 5.7, `cloth_config` >= 7.0).
+val clothConfigVersion = "8.3.134+forge"
+val architecturyVersion = "6.6.92+forge"
+
 unimined.minecraft {
   version("1.19.2")
   mappings { mojmap() }
   minecraftForge { loader("43.4.0") }
+  mods { modImplementation {} }
   defaultRemapJar = false
+}
+
+repositories {
+  maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
+  maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
 }
 
 val commonOutput =
@@ -35,6 +50,15 @@ dependencies {
   implementation(project(":platform-api"))
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
+  add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
+  add("modImplementation", "mezz.jei:jei-1.19.2-forge:$jeiVersion") { isTransitive = false }
+  add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
+  add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
+    isTransitive = false
+  }
+  add("modImplementation", "maven.modrinth:architectury-api:$architecturyVersion") {
+    isTransitive = false
+  }
 }
 
 tasks.shadowJar {
@@ -44,6 +68,31 @@ tasks.shadowJar {
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
   exclude("net/minecraftforge/**")
+  exclude("dev/emi/**")
+  exclude("assets/emi/**")
+  exclude("emi.mixins.json")
+  exclude("emi-forge.mixins.json")
+  exclude("mezz/jei/**")
+  exclude("assets/jei/**")
+  exclude("jei.mixins.json")
+  exclude("jei.refmap.json")
+  exclude("META-INF/accesstransformer.cfg")
+  exclude("META-INF/services/mezz.jei.**")
+  // REI and the two mods it requires (Cloth Config, Architectury API) are dev-only dependencies.
+  exclude("me/shedaniel/**")
+  exclude("assets/roughlyenoughitems/**")
+  exclude("assets/cloth-config2/**")
+  exclude("dev/architectury/**")
+  exclude("rei.mixins.json")
+  exclude("rei.refmap.json")
+  exclude("roughlyenoughitems.accessWidener")
+  exclude("architectury-common-refmap.json")
+  exclude("architectury-common.mixins.json")
+  exclude("architectury-forge-refmap.json")
+  exclude("architectury.accessWidener")
+  exclude("architectury.mixins.json")
+  exclude("META-INF/services/dev.architectury.**")
+  exclude("META-INF/jars/**")
 }
 
 tasks.named("jar") {
@@ -109,7 +158,7 @@ private fun resolvePlaceholders(s: String, props: Map<String, () -> String>): St
 private fun javaExecFields(task: JavaExec): Map<String, String> {
   val props = (task as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.properties ?: emptyMap()
   fun join(c: List<String>): String =
-    c.joinToString("||") { resolvePlaceholders(it, props).replace("||", "\\\\||") }
+    LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
     "classpath" to task.classpath.asPath,
     "javaExecutable" to task.javaLauncher.get().executablePath.asFile.absolutePath,
@@ -123,9 +172,9 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
         }
       ),
     "environment" to
-      task.environment
-        .map { (k, v) -> "$k=${resolvePlaceholders(v?.toString() ?: "", props)}" }
-        .joinToString("\u0001"),
+      LaunchDescriptor.encodeEnvironment(
+        task.environment.mapValues { (_, v) -> resolvePlaceholders(v?.toString() ?: "", props) }
+      ),
     "workingDir" to (task.workingDir as File).absolutePath,
   )
 }

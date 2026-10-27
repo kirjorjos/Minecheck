@@ -24,6 +24,14 @@ public record RunResult(
     String failureMessage,
     List<ExpectRecord> expects) {
 
+  public RunResult {
+    // Hand-written and older result files may omit `expects`; that is 0/0, not a crash. The
+    // plugin's
+    // own mirror (RunResultDto) already guards the same way — this record must not be stricter than
+    // the file it is deserialized from.
+    expects = expects == null ? List.of() : expects;
+  }
+
   public long passed() {
     return expects.stream().filter(ExpectRecord::ok).count();
   }

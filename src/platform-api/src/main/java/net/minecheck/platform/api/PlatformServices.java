@@ -20,4 +20,38 @@ public interface PlatformServices {
 
   /** True when running on a dedicated server (no client). */
   boolean dedicatedServer();
+
+  /**
+   * The loader's Minecheck packet transport, or {@code null} when the loader wires none. Used by
+   * the {@code sendPacket}/{@code waitForPacket} script surface; scripts see an unavailable channel
+   * as a false return rather than an error.
+   */
+  default net.minecheck.platform.api.net.NetworkPlatform network() {
+    return null;
+  }
+
+  /**
+   * The recipe viewer to bridge to (EMI/JEI/...), or {@code null} when none is installed or ready.
+   * Loaders register one provider per installed viewer and resolve them via {@link
+   * RecipeViewers#active(java.util.List)}, so an absent viewer is simply unavailable.
+   */
+  default RecipeViewer recipeViewer() {
+    return null;
+  }
+
+  /**
+   * A specific installed recipe viewer by id (see {@link RecipeViewers#byId(java.util.List,
+   * String)}), or {@code null} when that viewer is not installed or ready.
+   */
+  default RecipeViewer recipeViewer(String id) {
+    return null;
+  }
+
+  /**
+   * True when the loader has the mod with the given id loaded (e.g. {@code "jei"}), on either side.
+   * Scripts branch on soft dependencies with this. Loaders override it with their own mod list.
+   */
+  default boolean isModLoaded(String modId) {
+    return false;
+  }
 }

@@ -47,11 +47,11 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
       "Boots the $loader client + dedicated server in parallel and runs the Minecheck Lua lifecycle test"
     dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
 
-    loaderTask = ":$loader:runClient"
+    loaderTask = ":$loader-mod:runClient"
     coordinator = "coordinator.lua"
     script = "coordinator.lua"
     serverScript = "server-wait-stop.lua"
-    serverLoaderTask = ":$loader:runServer"
+    serverLoaderTask = ":$loader-mod:runServer"
     scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
     runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
     serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
@@ -66,7 +66,7 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
 
     MinecheckLifecyclePlugin.wireLaunchDescriptor(
       project,
-      ":$loader:runClient",
+      ":$loader-mod:runClient",
       "devHelperClientLaunch",
       "client-launch.txt",
       clientLaunchFile,
@@ -74,7 +74,7 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
     )
     MinecheckLifecyclePlugin.wireLaunchDescriptor(
       project,
-      ":$loader:runServer",
+      ":$loader-mod:runServer",
       "devHelperServerLaunch",
       "server-launch.txt",
       serverLaunchFile,
@@ -99,10 +99,10 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
     // Same gate as the happy-path lifecycle tasks (see registerLoaderLifecycle).
     dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
 
-    loaderTask = ":$loader:runClient"
+    loaderTask = ":$loader-mod:runClient"
     script = "fail-path-client.lua"
     serverScript = "fail-path-server.lua"
-    serverLoaderTask = ":$loader:runServer"
+    serverLoaderTask = ":$loader-mod:runServer"
     scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
     runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
     serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
@@ -118,7 +118,7 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
 
     MinecheckLifecyclePlugin.wireLaunchDescriptor(
       project,
-      ":$loader:runClient",
+      ":$loader-mod:runClient",
       "devHelperClientLaunch",
       "client-launch.txt",
       clientLaunchFile,
@@ -126,7 +126,7 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
     )
     MinecheckLifecyclePlugin.wireLaunchDescriptor(
       project,
-      ":$loader:runServer",
+      ":$loader-mod:runServer",
       "devHelperServerLaunch",
       "server-launch.txt",
       serverLaunchFile,
@@ -141,6 +141,302 @@ registerFailPathLifecycle("testForgeFail", "forge")
 
 registerFailPathLifecycle("testQuiltFail", "quilt")
 
+fun registerSpawnLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client + dedicated server in parallel and runs the Lua spawn integration test (spawnEntity/spawnBlock/spawnItemDrop/spawnStructure)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "spawn-client.lua"
+    serverScript = "spawn-test.lua"
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    levelSeed = "0"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+registerSpawnLifecycle("testFabricSpawn", "fabric")
+
+registerSpawnLifecycle("testForgeSpawn", "forge")
+
+registerSpawnLifecycle("testQuiltSpawn", "quilt")
+
+fun registerQueryLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client + dedicated server in parallel and runs the Lua entity query integration test (findEntities by type/tag/position)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "query-client.lua"
+    serverScript = "query-test.lua"
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    levelSeed = "0"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+registerQueryLifecycle("testFabricQuery", "fabric")
+
+registerQueryLifecycle("testForgeQuery", "forge")
+
+registerQueryLifecycle("testQuiltQuery", "quilt")
+
+fun registerBeaconLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client + dedicated server in parallel and runs the Lua beacon GUI integration test (build pyramid, open beacon screen, read slots)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "beacon-client.lua"
+    serverScript = "beacon-test.lua"
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    levelSeed = "0"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+registerBeaconLifecycle("testFabricBeacon", "fabric")
+
+registerBeaconLifecycle("testForgeBeacon", "forge")
+
+registerBeaconLifecycle("testQuiltBeacon", "quilt")
+
+fun registerInputLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client alone and runs the Lua input test (look/break/jump/place) in a creative superflat world"
+
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "input-test.lua"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    worldName = "minecheck_world"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+  }
+}
+
+fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Generates a world in the $loader client, hands that save to a dedicated server through dh.serverSetupDir, and joins it (proves the server can run a client-generated world)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "world-handoff-client.lua"
+    worldGeneratorScript = "world-handoff-generate-client.lua"
+    serverScript = "world-handoff-server.lua"
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+registerWorldHandoffLifecycle("testFabricWorldHandoff", "fabric")
+
+registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
+
+registerWorldHandoffLifecycle("testQuiltWorldHandoff", "quilt")
+
+fun registerPacketLifecycle(
+  taskName: String,
+  loader: String,
+  scriptName: String = "packet-client.lua",
+  serverScriptName: String = "packet-test.lua",
+  taskDescription: String =
+    "Boots the $loader client + dedicated server in parallel and runs the Lua packet integration test (sendPacket/waitForPacket/onPacket/reader over the real connection)",
+) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description = taskDescription
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = scriptName
+    serverScript = serverScriptName
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    levelSeed = "0"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+registerPacketLifecycle("testFabricPacket", "fabric")
+
+registerPacketLifecycle("testForgePacket", "forge")
+
+registerPacketLifecycle("testQuiltPacket", "quilt")
+
+registerPacketLifecycle(
+  "testForgePacketTap",
+  "forge",
+  "packet-tap-client.lua",
+  "packet-tap-server.lua",
+  "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
+)
+
+registerInputLifecycle("testFabricInput", "fabric")
+
+registerInputLifecycle("testForgeInput", "forge")
+
+registerInputLifecycle("testQuiltInput", "quilt")
+
 tasks.named("test") {
   dependsOn(
     "testFabric",
@@ -149,6 +445,25 @@ tasks.named("test") {
     "testFabricFail",
     "testForgeFail",
     "testQuiltFail",
+    "testFabricInput",
+    "testForgeInput",
+    "testQuiltInput",
+    "testFabricSpawn",
+    "testForgeSpawn",
+    "testQuiltSpawn",
+    "testFabricQuery",
+    "testForgeQuery",
+    "testQuiltQuery",
+    "testFabricBeacon",
+    "testForgeBeacon",
+    "testQuiltBeacon",
+    "testFabricPacket",
+    "testForgePacket",
+    "testForgePacketTap",
+    "testQuiltPacket",
+    "testFabricWorldHandoff",
+    "testForgeWorldHandoff",
+    "testQuiltWorldHandoff",
     "spotlessCheck",
   )
 }
@@ -174,6 +489,8 @@ val pluginBuild = gradle.includedBuild("plugin")
 tasks.named("spotlessApply") { dependsOn(pluginBuild.task(":spotlessApply")) }
 
 tasks.named("spotlessCheck") { dependsOn(pluginBuild.task(":spotlessCheck")) }
+
+tasks.named("test") { dependsOn(pluginBuild.task(":test")) }
 
 val styluaVersion = "2.5.2"
 val styluaOs =
@@ -252,3 +569,39 @@ val styluaCheck =
 tasks.named("spotlessApply") { dependsOn(styluaApply) }
 
 tasks.named("spotlessCheck") { dependsOn(styluaCheck) }
+
+val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
+
+fun loaderJarDir(module: String): File =
+  project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
+
+tasks.register("buildAll") {
+  group = "minecheck"
+  description =
+    "Builds every loader's distributable jar (:fabric-mod:shadowJar, :quilt-mod:shadowJar, :forge-mod:shadowJar)"
+  dependsOn(loaderModules.map { ":$it:shadowJar" })
+}
+
+tasks.register<Copy>("collectArtifacts") {
+  group = "minecheck"
+  description = "Builds every loader jar and copies them into build/artifacts"
+  dependsOn("buildAll")
+
+  loaderModules.forEach { module ->
+    from(loaderJarDir(module)) {
+      include("*.jar")
+      exclude("*-sources.jar", "*-javadoc.jar")
+    }
+  }
+
+  val artifactsDir = layout.buildDirectory.dir("artifacts").get().asFile
+  into(artifactsDir)
+
+  doLast {
+    logger.lifecycle(
+      "Minecheck: collected {} jar(s) into {}",
+      artifactsDir.listFiles()?.size ?: 0,
+      artifactsDir,
+    )
+  }
+}

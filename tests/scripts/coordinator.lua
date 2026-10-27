@@ -4,6 +4,17 @@
 --   phase C: join the parallel dedicated server, leave it (title screen)
 --   end:     quit (the one and only process exit)
 
+-- Forge dev clients stop on FML's "mod loading warnings" screen instead of the title screen. Dismiss
+-- it before anything else: the button is `fml.button.continue.launch`. On a loader that never shows
+-- that screen this matches nothing and does nothing.
+if minecheck.clickGui("Proceed to main menu", 0, 1) then
+  minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
+end
+
+-- Third-party plugins extend the surface through minecheck.ext; the table always exists (empty when
+-- no plugin is installed on the classpath), so a script can index it without a nil guard.
+minecheck.expect(type(minecheck.ext) == "table", "minecheck.ext is a table")
+
 local function runPhase(name, fn)
   minecheck.log("phase: " .. name)
   local ok, err = pcall(fn)
@@ -11,6 +22,8 @@ local function runPhase(name, fn)
   if ok then
     local d = minecheck.disconnect(30)
     minecheck.expect(d, name .. " (back to title)")
+    minecheck.expect(minecheck.isOnTitleScreen(), name .. " (isOnTitleScreen)")
+    minecheck.expect(minecheck.isInWorld() == false, name .. " (isInWorld false)")
   else
     minecheck.log("phase failed: " .. tostring(err), "error")
     return false
@@ -29,6 +42,9 @@ runPhase("create world", function()
   if not settled then
     minecheck.fail("worldgen did not settle before leave")
   end
+
+  minecheck.expect(minecheck.isInWorld(), "isInWorld after createWorld")
+  minecheck.expect(minecheck.isOnTitleScreen() == false, "isOnTitleScreen false in a world")
 end)
 
 -- phase B: rejoin the saved world

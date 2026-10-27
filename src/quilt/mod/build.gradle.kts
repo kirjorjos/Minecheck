@@ -1,5 +1,6 @@
 import java.io.File
 import java.io.FileInputStream
+import net.minecheck.gradle.LaunchDescriptor
 
 plugins {
   id("xyz.wagyourtail.unimined")
@@ -7,6 +8,8 @@ plugins {
 }
 
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+
+val emiVersion = "1.1.24+1.19.2+fabric"
 
 unimined.minecraft {
   version("1.19.2")
@@ -16,22 +19,28 @@ unimined.minecraft {
   defaultRemapJar = false
 }
 
-val fabricOutput =
+val fabricMain =
   project(":fabric-mod")
     .extensions
     .getByType(org.gradle.api.tasks.SourceSetContainer::class.java)
     .named("main")
     .get()
-    .output
+
+val fabricClasses = fabricMain.output.classesDirs
+
+repositories {
+  maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
+}
 
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  implementation(files(fabricOutput))
+  implementation(fabricClasses)
   add(
     "modImplementation",
     "org.quiltmc.quilted-fabric-api:quilted-fabric-api:4.0.0-beta.30+0.77.0-1.19.2",
   )
+  add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
 
 tasks.shadowJar {
@@ -44,6 +53,10 @@ tasks.shadowJar {
   exclude("net/fabricmc/fabric/**")
   exclude("org/quiltmc/qsl/**")
   exclude("org/quiltmc/quilted-fabric-api/**")
+  exclude("dev/emi/**")
+  exclude("assets/emi/**")
+  exclude("emi.mixins.json")
+  exclude("emi-fabric.mixins.json")
 }
 
 tasks.named("jar") {
@@ -113,7 +126,7 @@ private fun resolvePlaceholders(s: String, props: Map<String, () -> String>): St
 private fun javaExecFields(task: JavaExec): Map<String, String> {
   val props = (task as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.properties ?: emptyMap()
   fun join(c: List<String>): String =
-    c.joinToString("||") { resolvePlaceholders(it, props).replace("||", "\\\\||") }
+    LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
     "classpath" to task.classpath.asPath,
     "javaExecutable" to task.javaLauncher.get().executablePath.asFile.absolutePath,
@@ -127,9 +140,9 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
         }
       ),
     "environment" to
-      task.environment
-        .map { (k, v) -> "$k=${resolvePlaceholders(v?.toString() ?: "", props)}" }
-        .joinToString("\u0001"),
+      LaunchDescriptor.encodeEnvironment(
+        task.environment.mapValues { (_, v) -> resolvePlaceholders(v?.toString() ?: "", props) }
+      ),
     "workingDir" to (task.workingDir as File).absolutePath,
   )
 }

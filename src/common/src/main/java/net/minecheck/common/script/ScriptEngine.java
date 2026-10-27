@@ -7,6 +7,8 @@ import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.minecheck.common.config.ConfigData;
+import net.minecheck.common.net.PacketChannel;
+import net.minecheck.common.net.PacketInbox;
 import net.minecheck.common.result.ExpectRecord;
 import net.minecheck.common.result.RunResult;
 import net.minecheck.common.result.RunResultWriter;
@@ -41,6 +43,12 @@ public final class ScriptEngine {
 
   private final LongSupplier clock;
 
+  /** The script-facing packet surface; drains the loader-fed inbox once per tick. */
+  private final PacketChannel packets;
+
+  /** Third-party actions/wait conditions exposed as {@code minecheck.ext} (empty when none). */
+  private final PluginRegistry plugins;
+
   private Globals globals;
   private LuaThread coroutine;
   private boolean finished;
@@ -49,12 +57,18 @@ public final class ScriptEngine {
   private final java.util.List<ExpectRecord> expects = new java.util.ArrayList<>();
 
   public ScriptEngine(PlatformServices services, ConfigData config, Path scriptFile) {
-    this(services, config, scriptFile, null, System::currentTimeMillis);
+    this(
+        services,
+        config,
+        scriptFile,
+        null,
+        System::currentTimeMillis,
+        new PluginRegistry(services.dedicatedServer()));
   }
 
   public ScriptEngine(
       PlatformServices services, ConfigData config, Path scriptFile, LongSupplier clock) {
-    this(services, config, scriptFile, null, clock);
+    this(services, config, scriptFile, null, clock, new PluginRegistry(services.dedicatedServer()));
   }
 
   public ScriptEngine(
@@ -63,6 +77,26 @@ public final class ScriptEngine {
       Path scriptFile,
       Path resultFile,
       LongSupplier clock) {
+    this(
+        services,
+        config,
+        scriptFile,
+        resultFile,
+        clock,
+        new PluginRegistry(services.dedicatedServer()));
+  }
+
+  /**
+   * Full constructor. {@code plugins} carries the third-party actions/wait conditions discovered by
+   * the composition root ({@code MinecheckBootstrap}); unit tests pass their own registry.
+   */
+  public ScriptEngine(
+      PlatformServices services,
+      ConfigData config,
+      Path scriptFile,
+      Path resultFile,
+      LongSupplier clock,
+      PluginRegistry plugins) {
     this.services = services;
     this.client = services.client();
     this.server = services.server();
@@ -70,11 +104,20 @@ public final class ScriptEngine {
     this.scriptFile = scriptFile;
     this.resultFile = resultFile;
     this.clock = clock;
+    this.plugins = plugins == null ? new PluginRegistry(services.dedicatedServer()) : plugins;
+    this.packets = new PacketChannel(services.network(), PacketInbox.instance(), this::failScript);
   }
 
-  /** Records one {@code minecheck.expect} result (called from the Lua action). */
+  /**
+   * Records one {@code minecheck.expect} result (called from the Lua action).
+   *
+   * <p>A {@code null} name means the script gave no usable label, and the check is numbered {@code
+   * "expect #<n>"} by position — the documented default. The numbering lives here because the count
+   * is "how many expects have been recorded", which only this class knows: two unnamed checks used
+   * to record the identical name {@code "expect"}, so the CI report could not tell them apart.
+   */
   public void recordExpect(String name, boolean ok) {
-    expects.add(new ExpectRecord(name, ok));
+    expects.add(new ExpectRecord(name != null ? name : "expect #" + (expects.size() + 1), ok));
   }
 
   /** Marks the run failed with a message (called from a Lua {@code minecheck.fail}). */
@@ -109,9 +152,27 @@ public final class ScriptEngine {
       if (coroutine == null) {
         prepare();
       }
+      // Delivered before the resume so a waiting script sees this tick's packets, and while the
+      // coroutine is parked so invoking an onPacket handler cannot race the script's own execution.
+      packets.tick();
+      if (finished) {
+        // A handler or decoder failed the run: its coroutine thread was already reaped, so
+        // resuming it would raise OrphanedThread instead of finishing cleanly.
+        return;
+      }
       Varargs out = coroutine.resume(LuaValue.NONE);
       if (!out.arg1().toboolean()) {
-        fail("Script error: " + out.arg(2).tojstring());
+        if (finished) {
+          // The run ended in this same tick (minecheck.fail): that parks the coroutine in a yield
+          // loop and the reaper interrupts it, so the interrupt surfaces here as LuaJ's "orphaned
+          // thread". Reporting that as a fresh SEVERE script error would mask the real failure
+          // message the run already recorded.
+          LOG.info(
+              String.format(
+                  "Minecheck: coroutine reaped after the run ended (%s)", out.arg(2).tojstring()));
+        } else {
+          fail("Script error: " + out.arg(2).tojstring());
+        }
       } else if ("dead".equals(coroutine.getStatus())) {
         finish(false);
       }
@@ -122,11 +183,11 @@ public final class ScriptEngine {
 
   private void prepare() throws IOException {
     globals = JsePlatform.standardGlobals();
-    new LuaMinecheck(globals, services, config, clock, this).register();
+    new LuaMinecheck(globals, services, config, clock, this, packets, plugins).register();
     String source = Files.readString(scriptFile);
     LuaValue chunk = globals.load(source, "@" + scriptFile.getFileName());
     coroutine = (LuaThread) globals.get("coroutine").get("create").call(chunk);
-    LOG.info("Minecheck script started: " + scriptFile.getFileName());
+    LOG.info(String.format("Minecheck script started: %s", scriptFile.getFileName()));
   }
 
   private void finish(boolean failed) {
@@ -136,7 +197,8 @@ public final class ScriptEngine {
     this.finished = true;
     this.failed = failed;
     LOG.info(
-        "Minecheck script " + (failed ? "failed" : "finished") + ": " + scriptFile.getFileName());
+        String.format(
+            "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));
     writeResult();
     if (failed && config.exitOnFail()) {
       if (client != null) {
@@ -181,14 +243,9 @@ public final class ScriptEngine {
     try {
       RunResultWriter.write(resultFile, result);
       LOG.info(
-          "Minecheck: wrote run result ("
-              + result.passed()
-              + "/"
-              + result.total()
-              + " expects"
-              + (failed ? ", FAILED" : "")
-              + ") to "
-              + resultFile);
+          String.format(
+              "Minecheck: wrote run result (%s/%s expects%s) to %s",
+              result.passed(), result.total(), failed ? ", FAILED" : "", resultFile));
     } catch (RuntimeException e) {
       LOG.log(Level.SEVERE, "Minecheck: failed to write run result", e);
     }

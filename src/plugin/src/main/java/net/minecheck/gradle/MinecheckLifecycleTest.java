@@ -12,18 +12,23 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
+import org.gradle.api.file.FileCollection;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.InputFiles;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.PathSensitive;
+import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 
 /**
@@ -45,8 +50,17 @@ import org.gradle.api.tasks.TaskAction;
  *       minecheck.disconnect()} returning to the title screen) or {@code script}.
  * </ul>
  *
- * Verdict: the client run is the primary pass/fail; a server run is secondary — the task fails
- * unless every relevant {@code run-result.json} is {@code finished && !failed}.
+ * Verdict: the client run is the primary pass/fail and a server run is secondary <em>in role</em>,
+ * not in whether its result is checked — a configured server script must still write a {@code
+ * run-result.json} that passes. The task fails unless every {@code run-result.json} is {@code
+ * finished && !failed} <em>and</em> every recorded {@code minecheck.expect} passed (a run that lost
+ * an expectation is not green). The decision itself lives in {@link RunVerdict}, where it is unit
+ * tested.
+ *
+ * <p><b>Up-to-date checks.</b> The launch descriptor only holds a classpath <em>string</em>: Gradle
+ * cannot see through it to the code it points at, so without {@link #getModClasspathFiles()} and
+ * {@link #getScriptFiles()} a source or script edit would leave the task UP-TO-DATE and silently
+ * skip the run (reporting a stale green). Both are declared inputs for exactly that reason.
  *
  * <p>Contract with the mod (the only coupling): a {@code minecheck/scripts/*.lua} tree, a {@code
  * config.json}, and {@code run-result.json} under each loader's {@code config/minecheck}. The
@@ -74,6 +88,22 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<String> getServerScript();
+
+  /**
+   * Optional client script that generates the world the server then runs on (the "from the client"
+   * handoff). Setting it turns the run into two phases: this script runs first, the client quits,
+   * and its save is staged into a setup dir; the server is then launched with {@code
+   * -Ddh.serverSetupDir} pointing at it, so it boots the client-generated world instead of
+   * generating one. The normal {@code script}/{@code coordinator} client phase follows and joins
+   * that server.
+   *
+   * <p>Two client processes are needed because the handoff has to happen while no client has the
+   * world open: a save copied out from under a running integrated server is a torn copy, and there
+   * is no in-process way for Lua to say "the world is closed now" (a run only reports at its end).
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getWorldGeneratorScript();
 
   /** Loader Gradle task for the dedicated server, e.g. {@code :fabric-mod:runServer}. */
   @Input
@@ -149,6 +179,83 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<String> getGradleCommand();
 
+  /**
+   * The mod code the run actually executes: every launch-classpath entry that lives inside the
+   * project (the loader's {@code build/classes} + {@code build/resources}, the {@code :common} and
+   * {@code :platform-api} jars, ...).
+   *
+   * <p>The descriptor holds that classpath as a <em>string</em>, so Gradle cannot see through it:
+   * without this input, editing the mod leaves the lifecycle task UP-TO-DATE (compiling the
+   * launcher does not invalidate this task) and it reports a stale green. Two classes of entry are
+   * skipped: those outside the project (dependency caches, which only change when the dependency
+   * does — and a dependency change rewrites the descriptor, itself an input) and anything under a
+   * {@code .gradle} directory. The latter matters: unimined regenerates its remapping jars below
+   * {@code .gradle/unimined/} on <em>every</em> build, so tracking them would leave this task
+   * permanently out of date — the opposite failure. Read at execution-dependency time, i.e. after
+   * the descriptor task has written the file.
+   */
+  @InputFiles
+  @Optional
+  @PathSensitive(PathSensitivity.RELATIVE)
+  public FileCollection getModClasspathFiles() {
+    List<File> files = new ArrayList<>();
+    files.addAll(projectClasspathEntries(getClientLaunchFile()));
+    files.addAll(projectClasspathEntries(getServerLaunchFile()));
+    return getProject().files(files);
+  }
+
+  /** True when any segment of {@code relative} is a {@code .gradle} directory. */
+  private static boolean containsGradleDir(Path relative) {
+    for (Path segment : relative) {
+      if (segment.toString().equals(".gradle")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The project-local entries of a launch descriptor's {@code classpath=} line, in order. */
+  private List<File> projectClasspathEntries(RegularFileProperty prop) {
+    Path descriptor = descriptorPath(prop);
+    if (descriptor == null || !Files.isRegularFile(descriptor)) {
+      return List.of();
+    }
+    List<File> entries = new ArrayList<>();
+    try {
+      for (String line : Files.readAllLines(descriptor)) {
+        if (!line.startsWith("classpath=")) {
+          continue;
+        }
+        for (String entry : line.substring("classpath=".length()).split(File.pathSeparator)) {
+          File file = new File(entry);
+          Path path = file.toPath().toAbsolutePath();
+          Path root = getProject().getRootProject().getProjectDir().toPath().toAbsolutePath();
+          if (path.startsWith(root)
+              && !containsGradleDir(root.relativize(path))
+              && file.exists()
+              && !entries.contains(file)) {
+            entries.add(file);
+          }
+        }
+      }
+    } catch (IOException e) {
+      throw new GradleException("could not read the launch descriptor " + descriptor, e);
+    }
+    return entries;
+  }
+
+  /**
+   * The Lua scripts that drive the run (the contents of {@link #getScriptsDir()}): their assertions
+   * are the verdict, so editing one must re-run the lifecycle test — see the class javadoc.
+   */
+  @InputFiles
+  @Optional
+  @PathSensitive(PathSensitivity.RELATIVE)
+  public FileCollection getScriptFiles() {
+    String dir = getScriptsDir().getOrNull();
+    return dir == null ? getProject().files() : getProject().fileTree(dir);
+  }
+
   private static Path descriptorPath(RegularFileProperty prop) {
     org.gradle.api.file.RegularFile rf = prop.getOrNull();
     return rf == null ? null : rf.getAsFile().toPath();
@@ -172,9 +279,16 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path configDir = runDir.resolve("config/minecheck");
 
     try {
+      deleteRecursively(runDir.resolve("saves").resolve(world()));
       stageClientOptions(runDir);
       if (getServerScript().isPresent()) {
-        runParallel(configDir);
+        Path setupDir = null;
+        if (getWorldGeneratorScript().isPresent()) {
+          stage(configDir, getWorldGeneratorScript().get(), false);
+          runClientOnce(configDir, "generate");
+          setupDir = stageGeneratedWorld(runDir);
+        }
+        runParallel(configDir, setupDir);
       } else {
         stage(configDir, entry, getCoordinator().isPresent());
         runClientOnce(configDir, "client");
@@ -210,8 +324,62 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
 
   // ------------------------------------------------------- parallel server
 
-  /** Stages the server, then launches client + server together, waits for both. */
-  private void runParallel(Path clientConfigDir) throws IOException {
+  /**
+   * Copies the world the generator client saved into a setup dir the server stages at boot.
+   *
+   * <p>{@code session.lock} is skipped: it is the integrated server's lock file, meaningless (and
+   * actively misleading) in the server's run dir. Everything else, {@code level.dat} first among
+   * them, is what makes it the same world.
+   */
+  private Path stageGeneratedWorld(Path runDir) throws IOException {
+    Path source = runDir.resolve("saves").resolve(world());
+    if (!Files.isRegularFile(source.resolve("level.dat"))) {
+      throw new GradleException(
+          "Minecheck: the world generator script ran but left no world at "
+              + source
+              + " — it must create the world named \""
+              + world()
+              + "\"");
+    }
+    Path setup =
+        getProject()
+            .getLayout()
+            .getBuildDirectory()
+            .dir("minecheck/server-world")
+            .get()
+            .getAsFile()
+            .toPath();
+    deleteRecursively(setup);
+    // A dedicated server keeps its level at `<run dir>/<level-name>`, not under `saves/` (that is
+    // the singleplayer layout), so the setup dir mirrors the server's run dir, not the client's.
+    Path target = setup.resolve(world());
+    try (var stream = Files.walk(source)) {
+      for (Iterator<Path> it = stream.iterator(); it.hasNext(); ) {
+        Path p = it.next();
+        if (p.getFileName().toString().equals("session.lock")) {
+          continue;
+        }
+        Path dest = target.resolve(source.relativize(p).toString());
+        if (Files.isDirectory(p)) {
+          Files.createDirectories(dest);
+        } else {
+          Files.createDirectories(dest.getParent());
+          Files.copy(p, dest, StandardCopyOption.REPLACE_EXISTING);
+        }
+      }
+    }
+    getLogger().lifecycle("Minecheck: staged the client-generated world {} into {}", source, setup);
+    return setup;
+  }
+
+  /**
+   * Stages the server, then launches client + server together, waits for both.
+   *
+   * <p>When {@code serverSetupDir} is set the server is launched with {@code -Ddh.serverSetupDir},
+   * so it stages that tree into its run dir before Minecheck resolves its script — i.e. it boots
+   * the client-generated world instead of generating one.
+   */
+  private void runParallel(Path clientConfigDir, Path serverSetupDir) throws IOException {
     Path serverRunDir = Path.of(getServerRunDir().get());
     Path serverResult = serverRunDir.resolve("config/minecheck/run-result.json");
     String serverScript = getServerScript().get();
@@ -228,15 +396,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
 
     getLogger()
         .lifecycle(
-            "Minecheck: [server] launching {} (script={}) with a pinned deterministic world",
+            "Minecheck: [server] launching {} (script={}) with {}",
             getServerLoaderTask().get(),
-            serverScript);
+            serverScript,
+            serverSetupDir == null
+                ? "a pinned deterministic world"
+                : "the client-generated world from " + serverSetupDir);
     Files.deleteIfExists(serverResult);
     Process server =
         start(
             launcherBuilder(
                 getServerLoaderTask().get(),
-                List.of(),
+                serverSetupDir == null
+                    ? List.of()
+                    : List.of("-Ddh.serverSetupDir=" + serverSetupDir),
                 descriptorPath(getServerLaunchFile()),
                 false),
             "server");
@@ -270,11 +443,11 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     requireCleanExit(clientExit, "client");
     requireCleanExit(serverExit, "server");
     requirePassed(clientVerdict, "client");
-    if (serverVerdict != null) {
-      requirePassed(serverVerdict, "server-script");
-    } else {
-      getLogger().warn("Minecheck: server wrote no run-result.json; ignoring (secondary run).");
-    }
+    // A configured server script's verdict is required, not optional: "secondary" describes its
+    // role in the pairing, not whether its result is checked. A server that exits without writing
+    // one has proved nothing, and skipping it here is exactly how a run goes green while half of it
+    // was never verified.
+    requirePassed(serverVerdict, "server-script");
   }
 
   /**
@@ -300,7 +473,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
             "Minecheck: pinned client options.txt render/simulation distance to 10 in {}", runDir);
   }
 
-  /** Builds the {@code server.properties} the plugin hands the server. */
+  /**
+   * Builds the {@code server.properties} the plugin hands the server.
+   *
+   * <p>{@code spawn-animals} / {@code spawn-monsters} are deliberately NOT set to false here:
+   * vanilla 1.19.2's {@code ServerWorld.shouldCancelSpawn} DISCARDS any animal/monster that
+   * entity-ticks while they're false — including entities a server script spawns in the ticking
+   * area around the joined player (they'd vanish within a second). Determinism is instead provided
+   * by the loader's {@code doMobSpawning=false} gamerule (no dynamic spawns after worldgen) and the
+   * pinned {@code level-seed}; worldgen still bakes animals into chunks either way, so scripts must
+   * already target spawned entities by id/tag rather than whole-world counts.
+   */
   private String serverProperties() {
     StringBuilder sb = new StringBuilder();
     sb.append("level-name=").append(world()).append('\n');
@@ -322,40 +505,12 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    * path). In both modes a missing verdict (crashed process) is always a task failure.
    */
   private void requirePassed(RunResultDto result, String what) {
-    if (result == null) {
+    RunVerdict verdict = RunVerdict.of(result, getExpectFailure().getOrElse(false));
+    if (verdict.isFailure()) {
       throw new GradleException(
-          "Minecheck lifecycle test FAILED: " + what + " wrote no run-result.json");
+          "Minecheck lifecycle test FAILED (" + what + "): " + verdict.detail());
     }
-    boolean expectFailure = getExpectFailure().getOrElse(false);
-    boolean runFailed = !result.finished() || result.failed();
-    if (runFailed == expectFailure) {
-      if (expectFailure) {
-        getLogger()
-            .lifecycle(
-                "Minecheck: {} FAILED AS EXPECTED ({} expects passed / {} total): {}",
-                what,
-                result.passed(),
-                result.total(),
-                result.failureMessage());
-      } else {
-        getLogger()
-            .lifecycle(
-                "Minecheck: {} PASSED ({} expects passed / {} total)",
-                what,
-                result.passed(),
-                result.total());
-      }
-      return;
-    }
-    String detail =
-        expectFailure
-            ? "expected the run to fail but it passed ("
-                + result.passed()
-                + "/"
-                + result.total()
-                + " expects)"
-            : result.failureMessage();
-    throw new GradleException("Minecheck lifecycle test FAILED (" + what + "): " + detail);
+    getLogger().lifecycle("Minecheck: {} {}", what, verdict.summary());
   }
 
   /** A game process that didn't exit 0 hung (or crashed) after writing its verdict. */
@@ -504,14 +659,14 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     for (String p : systemProps) {
       cmd.add(p);
     }
-    for (String p : splitList(d.get("jvmArgs"))) {
+    for (String p : LaunchDescriptor.splitList(d.get("jvmArgs"))) {
       cmd.add(p);
     }
-    for (String s : decodeProps(splitList(d.get("systemProperties")))) {
+    for (String s : LaunchDescriptor.splitList(d.get("systemProperties"))) {
       cmd.add("-D" + s);
     }
     cmd.add(mainClass);
-    cmd.addAll(splitList(d.get("args")));
+    cmd.addAll(LaunchDescriptor.splitList(d.get("args")));
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
     String wd = d.get("workingDir");
@@ -519,15 +674,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       pb.directory(new File(wd));
     }
 
-    String env = d.get("environment");
-    if (env != null && !env.isBlank()) {
-      for (String entry : env.split("\\u0001")) {
-        int eq = entry.indexOf('=');
-        if (eq > 0) {
-          pb.environment().put(entry.substring(0, eq), entry.substring(eq + 1));
-        }
-      }
-    }
+    pb.environment().putAll(LaunchDescriptor.parseEnvironment(d.get("environment")));
     return pb;
   }
 
@@ -589,23 +736,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     } catch (IOException e) {
       throw new GradleException("Minecheck: could not read launch descriptor " + f, e);
     }
-  }
-
-  /** Splits the descriptor's {@code ||}-joined list back into entries. */
-  private static List<String> splitList(String s) {
-    if (s == null || s.isBlank()) {
-      return List.of();
-    }
-    List<String> out = new ArrayList<>();
-    for (String part : s.split("\\|\\|")) {
-      out.add(part.replace("\\||", "||"));
-    }
-    return out;
-  }
-
-  /** Turns {@code k=v} entries into {@code k=v} (just validates/splits on first {@code =}). */
-  private static List<String> decodeProps(List<String> kv) {
-    return kv; // already k=v from the descriptor
   }
 
   private Process start(ProcessBuilder pb, String label) throws IOException {
