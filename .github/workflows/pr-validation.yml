@@ -20,12 +20,17 @@ jobs:
   rules:
     name: Validate PR rules
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     outputs:
       valid: ${{ steps.rules.outputs.valid }}
       target_type: ${{ steps.rules.outputs.target_type }}
       target_version: ${{ steps.rules.outputs.target_version }}
       source_issue: ${{ steps.rules.outputs.source_issue }}
       tasks: ${{ steps.scope.outputs.tasks }}
+      run_ci: ${{ steps.scope.outputs.run_ci }}
     steps:
       - name: Validate branch rules
         id: rules
@@ -35,156 +40,85 @@ jobs:
           SOURCE: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
 
-          # --- parse the target branch ----------------------------------------
+          # Branch grammar (.notes/branching-versioning-migration-spec.md §4.1):
+          #   <version>/main | <version>/development | <version>/development-issue-<n>
+          # <version> admits two-part MC versions (1.8, 1.19, 26.1) and three-part ones (1.19.2).
+          VALID="true"
+          REASON=""
           TARGET_TYPE=""
           TARGET_VERSION=""
-          if [[ "$TARGET" =~ ^development/([^/]+)/issue-[0-9]+$ ]]; then
-            TARGET_TYPE="issue"
-            TARGET_VERSION="${BASH_REMATCH[1]}"
-          elif [[ "$TARGET" =~ ^development/([^/]+)/main$ ]]; then
-            TARGET_TYPE="dev-main"
-            TARGET_VERSION="${BASH_REMATCH[1]}"
-          elif [[ "$TARGET" =~ ^release/([^/]+)$ ]]; then
-            TARGET_TYPE="release"
-            TARGET_VERSION="${BASH_REMATCH[1]}"
-          fi
-
-          # --- parse the source branch ----------------------------------------
           SOURCE_KIND=""
           SOURCE_VERSION=""
           SOURCE_ISSUE=""
-          if [[ "$SOURCE" =~ ^development/([^/]+)/issue-([0-9]+)$ ]]; then
+
+          if [[ "$TARGET" =~ ^([0-9]+(\.[0-9]+){1,2})/development-issue-[0-9]+$ ]]; then
+            TARGET_TYPE="issue"
+            TARGET_VERSION="${BASH_REMATCH[1]}"
+          elif [[ "$TARGET" =~ ^([0-9]+(\.[0-9]+){1,2})/development$ ]]; then
+            TARGET_TYPE="development"
+            TARGET_VERSION="${BASH_REMATCH[1]}"
+          elif [[ "$TARGET" =~ ^([0-9]+(\.[0-9]+){1,2})/main$ ]]; then
+            TARGET_TYPE="main"
+            TARGET_VERSION="${BASH_REMATCH[1]}"
+          fi
+
+          if [[ "$SOURCE" =~ ^([0-9]+(\.[0-9]+){1,2})/development-issue-([0-9]+)$ ]]; then
             SOURCE_KIND="issue"
             SOURCE_VERSION="${BASH_REMATCH[1]}"
-            SOURCE_ISSUE="${BASH_REMATCH[2]}"
-          elif [[ "$SOURCE" =~ ^development/([^/]+)/main$ ]]; then
-            SOURCE_KIND="dev-main"
-            SOURCE_VERSION="${BASH_REMATCH[1]}"
-          elif [[ "$SOURCE" =~ ^release/([^/]+)$ ]]; then
-            SOURCE_KIND="release"
+            SOURCE_ISSUE="${BASH_REMATCH[3]}"
+          elif [[ "$SOURCE" =~ ^([0-9]+(\.[0-9]+){1,2})/development$ ]]; then
+            SOURCE_KIND="development"
             SOURCE_VERSION="${BASH_REMATCH[1]}"
           fi
 
-          # --- enforce the rules per target type ------------------------------
-          VALID="true"
-          REASON=""
-          case "$TARGET_TYPE" in
-            issue)
-              # Only gate for issue-branch PRs: relevant tests pass (ci job).
-              ;;
-            dev-main)
-              if [[ "$SOURCE_KIND" != "issue" ]]; then
+          if [[ "$ACTION" != "closed" ]]; then
+            case "$TARGET_TYPE" in
+              issue)
+                # Anything may open a PR into an issue branch.
+                ;;
+              development)
+                if [[ "$SOURCE_KIND" != "issue" ]]; then
+                  VALID="false"
+                  REASON="Source branch \`$SOURCE\` is not \`<version>/development-issue-{issue}\`."
+                elif [[ "$SOURCE_VERSION" != "$TARGET_VERSION" ]]; then
+                  VALID="false"
+                  REASON="Source version \`$SOURCE_VERSION\` does not match target version \`$TARGET_VERSION\`."
+                fi
+                ;;
+              main)
+                # main is release-only: bot-authored, same repository, from that version's development line.
+                if [[ "$AUTHOR" != "github-actions[bot]" ]]; then
+                  VALID="false"
+                  REASON="\`<version>/main\` only accepts pull requests opened by the release workflow (author \`github-actions[bot]\`), not by \`$AUTHOR\`."
+                elif [[ "$HEAD_REPO" != "$BASE_REPO" ]]; then
+                  VALID="false"
+                  REASON="\`<version>/main\` only accepts releases from \`$BASE_REPO\`; PRs from \`$HEAD_REPO\` are rejected."
+                elif [[ "$SOURCE_KIND" != "development" ]]; then
+                  VALID="false"
+                  REASON="Source branch \`$SOURCE\` is not \`<version>/development\`."
+                elif [[ "$SOURCE_VERSION" != "$TARGET_VERSION" ]]; then
+                  VALID="false"
+                  REASON="Source version \`$SOURCE_VERSION\` does not match target version \`$TARGET_VERSION\`."
+                fi
+                ;;
+              *)
                 VALID="false"
-                REASON="Source branch \`$SOURCE\` is not a \`development/{version}/issue-{issue}\` branch."
-              elif [[ "$SOURCE_VERSION" != "$TARGET_VERSION" ]]; then
-                VALID="false"
-                REASON="Source branch version \`$SOURCE_VERSION\` does not match target branch version \`$TARGET_VERSION\`."
-              fi
-              ;;
-            release)
-              if [[ "$HEAD_REPO" != "$BASE_REPO" ]]; then
-                VALID="false"
-                REASON="Release PRs must come from this repository (\`$BASE_REPO\`), not a fork."
-              elif [[ "$SOURCE_KIND" != "dev-main" ]]; then
-                VALID="false"
-                REASON="Source branch \`$SOURCE\` is not \`development/{version}/main\`."
-              elif [[ "$SOURCE_VERSION" != "$TARGET_VERSION" ]]; then
-                VALID="false"
-                REASON="Source branch version \`$SOURCE_VERSION\` does not match target branch version \`$TARGET_VERSION\`."
-              fi
-              ;;
-            *)
-              VALID="false"
-              REASON="Target branch \`$TARGET\` is not a supported branch type (expected \`development/{version}/issue-{issue}\`, \`development/{version}/main\`, or \`release/{version}\`)."
-              ;;
-          esac
-
-          if [[ "$ACTION" == "closed" ]]; then
-            VALID="true"
+                REASON="Target branch \`$TARGET\` is not a supported branch (expected \`<version>/main\`, \`<version>/development\`, or \`<version>/development-issue-{issue}\`)."
+                ;;
+            esac
           fi
 
           {
             echo "valid=$VALID"
+            echo "reason=$REASON"
             echo "target_type=$TARGET_TYPE"
             echo "target_version=$TARGET_VERSION"
             echo "source_issue=$SOURCE_ISSUE"
-            echo "reason=$REASON"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Comment and close invalid PR
-        if: steps.rules.outputs.valid == 'false' && github.event.action != 'closed'
-        env:
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET: ${{ github.event.pull_request.base.ref }}
-          REASON: ${{ steps.rules.outputs.reason }}
-        run: |
-          set -euo pipefail
-          BODY="$(jq -nr --arg reason "$REASON" '
-            "**This pull request was automatically closed by CI validation.**\n\n" +
-            "**Reason:** \($reason)\n\n" +
-            "Supported branch types:\n" +
-            "- `development/{version}/issue-{issue}` — any source branch; relevant tests must pass\n" +
-            "- `development/{version}/main` — source: `development/{version}/issue-{issue}` (same version); relevant tests must pass\n" +
-            "- `release/{version}` — source: `development/{version}/main` (same version), from this repository; full tests must pass\n\n" +
-            "Please re-open with a correctly named source branch if this was a mistake."
-          ')"
-          jq -n --arg body "$BODY" '{body: $body}' \
-            | gh api "repos/$REPO/issues/$PR_NUMBER/comments" --input -
-          gh api "repos/$REPO/pulls/$PR_NUMBER" -X PATCH -f state=closed
-          exit 1
-
-      - name: Mark issue fixed when merged
-        if: github.event.action == 'closed' && github.event.pull_request.merged == true && steps.rules.outputs.valid == 'true'
-        env:
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_TYPE: ${{ steps.rules.outputs.target_type }}
-          TARGET_VERSION: ${{ steps.rules.outputs.target_version }}
-          SOURCE_ISSUE: ${{ steps.rules.outputs.source_issue }}
-        run: |
-          set -euo pipefail
-          if [[ "$TARGET_TYPE" != "dev-main" || -z "$SOURCE_ISSUE" ]]; then
-            exit 0
-          fi
-
-          MARKER="minecheck-fixed-in:$TARGET_VERSION"
-
-          gh api "repos/$REPO/issues/$SOURCE_ISSUE/comments" --paginate --jq '.[].body' > /tmp/issue-comments.txt
-
-          if ! grep -F "$MARKER" /tmp/issue-comments.txt >/dev/null; then
-            BODY="$(jq -nr --arg version "$TARGET_VERSION" --arg pr "$PR_NUMBER" '
-              "Fixed in **\($version)** via PR #\($pr). <!-- minecheck-fixed-in:\($version) -->"
-            ')"
-            jq -n --arg body "$BODY" '{body: $body}' \
-              | gh api "repos/$REPO/issues/$SOURCE_ISSUE/comments" --input -
-            printf '%s\n' "$BODY" >> /tmp/issue-comments.txt
-          fi
-
-          gh api "repos/$REPO/branches" --paginate --jq '.[].name' \
-            | sed -n 's/^release\/\([^/]*\)$/\1/p' | sort -u > /tmp/supported-versions.txt
-
-          grep -o 'minecheck-fixed-in:[^ ]*' /tmp/issue-comments.txt \
-            | sed 's/^minecheck-fixed-in://' | sort -u > /tmp/fixed-versions.txt || true
-
-          if [[ ! -s /tmp/supported-versions.txt ]]; then
-            echo "::notice::Issue #$SOURCE_ISSUE left open: no supported versions (no release/* branches)."
-            exit 0
-          fi
-          while IFS= read -r version; do
-            if ! grep -Fxq "$version" /tmp/fixed-versions.txt; then
-              echo "::notice::Issue #$SOURCE_ISSUE left open: no fix comment yet for supported version $version."
-              exit 0
-            fi
-          done < /tmp/supported-versions.txt
-
-          jq -n --arg body "Closing automatically: every supported version has a fix comment." \
-            '{body: $body}' \
-            | gh api "repos/$REPO/issues/$SOURCE_ISSUE/comments" --input -
-          gh api "repos/$REPO/issues/$SOURCE_ISSUE" -X PATCH -f state=closed
 
       - name: Determine test scope
         id: scope
@@ -196,23 +130,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$TARGET_TYPE" == "release" ]]; then
+          if [[ "$TARGET_TYPE" == "main" ]]; then
+            # Promotion PRs skip the suite: the development branch already passed the full gate.
+            # main's ruleset therefore must not require this workflow's check (see the spec).
+            echo "run_ci=false" >> "$GITHUB_OUTPUT"
+            echo "tasks=" >> "$GITHUB_OUTPUT"
+            echo "Promotion PR: development already passed the full gate, skipping tests." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "run_ci=true" >> "$GITHUB_OUTPUT"
+
+          if [[ "$TARGET_TYPE" == "development" ]]; then
             echo "tasks=test" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # Issue branch: test only what the diff touches, failing safe to the full chain.
           LOADERS=""
           FULL=false
           gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > /tmp/changed-files.txt
           if [[ ! -s /tmp/changed-files.txt ]]; then
-            FULL=true   # no changed files: nothing to classify => full chain
+            FULL=true
           fi
           while IFS= read -r file; do
             case "$file" in
               src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail" ;;
-              src/forge/*)  LOADERS="$LOADERS testForge testForgeFail" ;;
-              src/quilt/*)  LOADERS="$LOADERS testQuilt testQuiltFail" ;;
-              *)            FULL=true ;;
+              src/forge/*) LOADERS="$LOADERS testForge testForgeFail" ;;
+              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail" ;;
+              *) FULL=true ;;
             esac
           done < /tmp/changed-files.txt
 
@@ -222,17 +168,81 @@ jobs:
             read -r -a LOADER_TASKS <<< "$LOADERS"
             TASKS="$(printf '%s\n' "${LOADER_TASKS[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
             if [[ -z "$TASKS" ]]; then
-              TASKS="test"   # fail-safe: never skip testing
+              # Fail safe: a diff that touches no known source path still gets the full chain.
+              TASKS="test"
             else
-              TASKS="spotlessCheck $TASKS"   # format gate first, then the loader's own tests
+              TASKS="spotlessCheck $TASKS"
             fi
             echo "tasks=$TASKS" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment and close invalid PR
+        if: steps.rules.outputs.valid == 'false' && github.event.action != 'closed'
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASON: ${{ steps.rules.outputs.reason }}
+        run: |
+          set -euo pipefail
+          BODY="$(jq -nr --arg reason "$REASON" '
+            "**This pull request was automatically closed by CI validation.**\n\n" +
+            "**Reason:** \($reason)\n\n" +
+            "Branch model:\n" +
+            "- `<version>/development-issue-<n>` — work branch; any source, relevant tests must pass\n" +
+            "- `<version>/development` — source: `<version>/development-issue-<n>` of the same version; full test suite\n" +
+            "- `<version>/main` — release workflow only (bot-authored, same repository, from `<version>/development`)\n\n" +
+            "See `.notes/branching-versioning-migration-spec.md` for the full model.\n"
+          ')"
+          jq -n --arg body "$BODY" '{body: $body}' \
+            | gh api "repos/$REPO/issues/$PR_NUMBER/comments" --input -
+          gh api "repos/$REPO/pulls/$PR_NUMBER" -X PATCH -f state=closed
+          exit 1
+
+      - name: Mark fixed in development
+        if: >-
+          github.event.action == 'closed' &&
+          github.event.pull_request.merged == true &&
+          steps.rules.outputs.target_type == 'development'
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERSION: ${{ steps.rules.outputs.target_version }}
+          SOURCE_ISSUE: ${{ steps.rules.outputs.source_issue }}
+          SOURCE: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$SOURCE_ISSUE" ]]; then
+            MARKER="minecheck-fixed-in:$VERSION"
+            gh api "repos/$REPO/issues/$SOURCE_ISSUE/comments" --paginate --jq '.[].body' > /tmp/issue-comments.txt
+            if ! grep -F "$MARKER" /tmp/issue-comments.txt >/dev/null; then
+              BODY="$(jq -nr --arg version "$VERSION" --arg pr "$PR_NUMBER" '
+                "Fixed in **\($version)** via PR #\($pr). <!-- minecheck-fixed-in:\($version) -->"
+              ')"
+              jq -n --arg body "$BODY" '{body: $body}' \
+                | gh api "repos/$REPO/issues/$SOURCE_ISSUE/comments" --input -
+            else
+              echo "Issue #$SOURCE_ISSUE already records $MARKER"
+            fi
+            echo "Issue #$SOURCE_ISSUE will close when every affected version is released."
+          fi
+
+          # Defensive head-branch cleanup; the repository setting also deletes merged heads.
+          if [[ "$HEAD_REPO" == "$BASE_REPO" ]]; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$SOURCE" 2>/dev/null \
+              && echo "Deleted merged head branch $SOURCE" \
+              || echo "::notice::head branch $SOURCE was already deleted"
           fi
 
   ci:
     name: Build + tests
     needs: rules
-    if: needs.rules.outputs.valid == 'true' && github.event.action != 'closed'
+    if: >-
+      needs.rules.outputs.valid == 'true' &&
+      needs.rules.outputs.run_ci == 'true' &&
+      github.event.action != 'closed'
     uses: ./.github/workflows/ci.yml
     with:
       gradle_tasks: ${{ needs.rules.outputs.tasks }}

@@ -1,3 +1,7 @@
+---
+title: Lua API Reference
+---
+
 # Minecheck — Lua API Reference
 
 All script actions live on the global `minecheck` table. Functions that need to wait (joining a world, waiting for a player) **suspend the Lua coroutine** each engine tick until the condition is met or the timeout expires — the script never blocks the game's tick loop.

@@ -9,10 +9,14 @@ plugins {
 
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 
+// One branch per Minecraft version; the version comes from gradle.properties (overridable with
+// -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
+val mcVersion = property("minecraft_version") as String
+
 val emiVersion = "1.1.24+1.19.2+fabric"
 
 unimined.minecraft {
-  version("1.19.2")
+  version(mcVersion)
   mappings { yarn(11) }
   quilt { loader("0.20.2") }
   mods { modImplementation {} }

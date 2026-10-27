@@ -4,6 +4,12 @@ import java.util.zip.ZipInputStream
 import net.minecheck.gradle.MinecheckLifecyclePlugin
 import net.minecheck.gradle.MinecheckLifecycleTest
 import org.gradle.api.Project
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.bundling.Jar
+import org.gradle.api.tasks.javadoc.Javadoc
+import org.gradle.external.javadoc.StandardJavadocDocletOptions
 
 plugins {
   java
@@ -590,7 +596,9 @@ tasks.register<Copy>("collectArtifacts") {
   loaderModules.forEach { module ->
     from(loaderJarDir(module)) {
       include("*.jar")
-      exclude("*-sources.jar", "*-javadoc.jar")
+      // Sources/javadoc ship to Maven, not to the GitHub Release; the Forge reobf jar is never
+      // distributed at all (spec decision 25).
+      exclude("*-sources.jar", "*-javadoc.jar", "*-production.jar")
     }
   }
 
@@ -603,5 +611,70 @@ tasks.register<Copy>("collectArtifacts") {
       artifactsDir.listFiles()?.size ?: 0,
       artifactsDir,
     )
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Publishing (spec §8): MineCheck-<loader>-<mc>-<project version>.jar, published to GitHub
+// Packages as net.minecheck:minecheck-<loader>-<mc>:<project version>. Driven by
+// `./gradlew publish` (GitHub Actions supplies GITHUB_ACTOR/GITHUB_TOKEN).
+// ---------------------------------------------------------------------------------------------
+
+val mcVersion: String = property("minecraft_version") as String
+
+val loaderArtifactNames =
+  mapOf("fabric-mod" to "fabric", "quilt-mod" to "quilt", "forge-mod" to "forge")
+
+subprojects {
+  val loader = loaderArtifactNames[name] ?: return@subprojects
+
+  apply(plugin = "maven-publish")
+
+  extensions.configure<JavaPluginExtension> {
+    withSourcesJar()
+    withJavadocJar()
+  }
+
+  // Applies to shadowJar, sourcesJar, javadocJar and the (disabled) plain jar, so the file name
+  // and the Maven coordinate always agree.
+  tasks.withType<Jar>().configureEach {
+    archiveBaseName.set("MineCheck-$loader")
+    archiveVersion.set("$mcVersion-${project.version}")
+  }
+
+  // Minecraft classes leak into the mod sources; doclint would otherwise fail the build on them.
+  tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
+    isFailOnError = false
+  }
+
+  afterEvaluate {
+    extensions.configure<PublishingExtension> {
+      publications {
+        create<MavenPublication>("minecheck") {
+          groupId = "net.minecheck"
+          artifactId = "minecheck-$loader-$mcVersion"
+          version = project.version.toString()
+          // The shadow jar is the mod; the plain jar is empty and the reobf jar never ships.
+          artifact(tasks.named("shadowJar")) { classifier = "" }
+          artifact(tasks.named("sourcesJar")) { classifier = "sources" }
+          artifact(tasks.named("javadocJar")) { classifier = "javadoc" }
+          pom {
+            name.set("MineCheck $loader for Minecraft $mcVersion")
+            description.set("Minecheck: scripted Minecraft testing harness (Lua-driven)")
+          }
+        }
+      }
+      repositories {
+        maven {
+          name = "GitHubPackages"
+          url = uri("https://maven.pkg.github.com/kirjorjos/Minecheck")
+          credentials {
+            username = System.getenv("GITHUB_ACTOR") ?: "github-actions"
+            password = System.getenv("GITHUB_TOKEN")
+          }
+        }
+      }
+    }
   }
 }

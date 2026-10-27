@@ -1,0 +1,186 @@
+name: Issue version check
+
+on:
+  issues:
+    types: [opened, reopened, edited]
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: issue-version-check-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate affected versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the affected-version field
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          REPO = os.environ["REPO"]
+          ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
+          VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
+          FIELD = "Affected Minecraft versions"
+
+
+          def run(cmd, check=True):
+              return subprocess.run(cmd, text=True, capture_output=True, check=check)
+
+
+          def gh(*args, check=True):
+              return run(["gh", *args], check=check)
+
+
+          def gh_json(*args, check=True):
+              return json.loads(gh(*args, check=check).stdout)
+
+
+          def fail(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          def field_value(body):
+              lines = (body or "").splitlines()
+              start = None
+              for index, line in enumerate(lines):
+                  if line.strip().lower() == f"### {FIELD}".lower():
+                      start = index
+                      break
+              if start is None:
+                  return None
+              values = []
+              for line in lines[start + 1 :]:
+                  if line.startswith("### "):
+                      break
+                  values.append(line)
+              return "\n".join(values).strip()
+
+
+          def version_key(version):
+              return tuple(int(part) for part in version.split("."))
+
+
+          def existing_versions():
+              result = gh("api", f"repos/{REPO}/branches?per_page=100", "--paginate", "--jq", ".[].name", check=False)
+              if result.returncode == 0:
+                  names = set(result.stdout.split())
+                  return {name.split("/", 1)[0] for name in names if name.endswith("/development")}
+
+              # Fall back to the migration checklist if the branch API is unavailable.
+              repo_info = gh("api", f"repos/{REPO}", check=False)
+              if repo_info.returncode != 0:
+                  fail(f"could not list branches or read the repository: {result.stderr.strip()}")
+              default = json.loads(repo_info.stdout).get("default_branch") or "1.19.2/main"
+              checklist = gh(
+                  "api",
+                  f"repos/{REPO}/contents/.notes/remaining-versions.json?ref={default}",
+                  check=False,
+              )
+              if checklist.returncode != 0:
+                  fail(
+                      "could not list branches and .notes/remaining-versions.json is missing "
+                      f"on {default}; refusing to guess the supported versions"
+                  )
+              import base64
+
+              try:
+                  content = base64.b64decode(json.loads(checklist.stdout)["content"]).decode("utf-8")
+                  data = json.loads(content)
+              except (KeyError, ValueError, json.JSONDecodeError) as exc:
+                  fail(f"could not parse the remaining-versions fallback: {exc}")
+              return set(data.get("ported", [])) | set(data.get("remaining", []))
+
+
+          def main():
+              issue = gh_json("api", f"repos/{REPO}/issues/{ISSUE_NUMBER}")
+              if issue.get("pull_request"):
+                  return 0
+              if issue.get("state") == "closed":
+                  return 0
+
+              value = field_value(issue.get("body"))
+              known = existing_versions()
+              valid_list = ", ".join(sorted(known, key=version_key))
+
+              problem = None
+              requested = []
+              if value is None or not value:
+                  problem = f"The issue has no **{FIELD}** field."
+              else:
+                  requested = [token.strip() for token in value.split(",") if token.strip()]
+                  if not requested:
+                      problem = f"The **{FIELD}** field is empty."
+                  else:
+                      bad_shape = [token for token in requested if not VERSION_RE.fullmatch(token)]
+                      if bad_shape:
+                          problem = (
+                              "Not a valid Minecraft version list: "
+                              + ", ".join(f"`{token}`" for token in bad_shape)
+                              + ". Use comma-separated versions like `1.19.2, 1.20.1`."
+                          )
+                      else:
+                          requested = list(dict.fromkeys(requested))
+                          unknown = [token for token in requested if token not in known]
+                          if unknown:
+                              problem = (
+                                  "No `<version>/development` branch exists for: "
+                                  + ", ".join(f"`{token}`" for token in unknown)
+                                  + ". Port the version first, or list only supported versions."
+                              )
+
+              if problem:
+                  body = (
+                      "**This issue was closed by the version check.**\n\n"
+                      f"**Reason:** {problem}\n\n"
+                      f"Supported versions: {valid_list}\n\n"
+                      f"Edit the **{FIELD}** field to only list versions that have a "
+                      "`<version>/development` branch, then reopen the issue."
+                  )
+                  gh("api", f"repos/{REPO}/issues/{ISSUE_NUMBER}/comments", "-f", f"body={body}")
+                  gh("issue", "close", ISSUE_NUMBER, "--repo", REPO, "--reason", "not planned")
+                  print(f"closed #{ISSUE_NUMBER}: {problem}")
+                  return 0
+
+              for version in requested:
+                  gh(
+                      "label",
+                      "create",
+                      f"versions/{version}",
+                      "--repo",
+                      REPO,
+                      "--color",
+                      "1D76DB",
+                      "--description",
+                      f"Affects Minecraft {version}",
+                      check=False,
+                  )
+                  gh(
+                      "issue",
+                      "edit",
+                      ISSUE_NUMBER,
+                      "--repo",
+                      REPO,
+                      "--add-label",
+                      f"versions/{version}",
+                  )
+              print(f"#{ISSUE_NUMBER} affects {', '.join(requested)}")
+              return 0
+
+
+          sys.exit(main())
+          PY
