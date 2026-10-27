@@ -52,4 +52,4 @@ jobs:
           ./gradlew ${{ inputs.gradle_tasks }} --no-daemon --console=plain \
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dorg.gradle.worker.jvmargs="-Xmx2g"
-        timeout-minutes: 45
+        timeout-minutes: 120

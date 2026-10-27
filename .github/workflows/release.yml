@@ -232,13 +232,6 @@ jobs:
                   if not version:
                       errors.append(f"{dev}: could not read the root project version")
 
-                  if version and main_exists:
-                      main_version = project_version(main)
-                      if main_version and main_version != version:
-                          errors.append(
-                              f"{main}: root version {main_version} differs from {version} on {dev}"
-                          )
-
                   notes = changelog_notes(dev) if version else None
                   if not notes:
                       errors.append(f"{dev}: CHANGELOG.md has no pending release notes")
@@ -259,6 +252,17 @@ jobs:
                   errors.append(f"docs/lua-api.md differs across versions ({detail}); refusing to release")
               elif not documented:
                   errors.append("docs/lua-api.md is missing on the selected branches")
+
+              # `main` is deliberately absent from this comparison: the version reaches main
+              # from the promotion PR this job opens, so it can only be checked after the merge.
+              # The release step does that before it builds, tags or publishes anything.
+              declared = {row["mc"]: row["version"] for row in rows if row["version"]}
+              if len(set(declared.values())) > 1:
+                  detail = ", ".join(f"{mc}={version}" for mc, version in declared.items())
+                  errors.append(
+                      "root project version differs across the branches being released "
+                      f"({detail}); refusing to release"
+                  )
 
               for row in rows:
                   if not row["version"]:
@@ -369,7 +373,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge, tag and publish every selected version
+      - name: Merge the promotion PRs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -377,21 +381,51 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Abort everything on the first failure: versions are released in the input order and
-          # later versions are not touched once one fails (spec decision 15).
+          # Abort everything on the first failure: versions are merged in the input order and
+          # later versions are not touched once one fails (spec decision 15). This is the step
+          # that puts the version on main; tagging and publishing happen after it, in the next
+          # step, so main is already hit by the time anything leaves the repository.
           mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
           for row in "${ROWS[@]}"; do
             IFS=$'\t' read -r MC PR VERSION <<<"$row"
-            TAG="$MC/v$VERSION"
-
-            echo "::group::Release $TAG"
             if [[ -z "$PR" || "$PR" == "null" ]]; then
               echo "::error::no promotion PR for $MC"
               exit 1
             fi
 
             gh pr merge "$PR" --repo "$REPO" --squash --delete-branch=false
+            echo "merged promotion PR #$PR: $MC v$VERSION is now on $MC/main"
+          done
+
+      - name: Publish, tag and release every merged version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PLAN: ${{ needs.prepare.outputs.plan }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
+
+          # The step above is what puts the version on main, so this is the first point where the
+          # branch and the version being released can be compared. Check every version before
+          # building anything: a mismatch must not leave a tag or a published artifact behind.
+          for row in "${ROWS[@]}"; do
+            IFS=$'\t' read -r MC PR VERSION <<<"$row"
             git fetch --force --prune --tags origin
+            DECLARED="$(git show "origin/$MC/main:build.gradle.kts" \
+              | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' | head -1)"
+            if [[ "$DECLARED" != "$VERSION" ]]; then
+              echo "::error::$MC/main declares version ${DECLARED:-none} after the promotion merge, not $VERSION; nothing was tagged or published"
+              exit 1
+            fi
+          done
+
+          for row in "${ROWS[@]}"; do
+            IFS=$'\t' read -r MC PR VERSION <<<"$row"
+            TAG="$MC/v$VERSION"
+
+            echo "::group::Release $TAG"
             git switch --force-create "release-$MC" "origin/$MC/main"
 
             # Build and publish before tagging: a failed build or a rejected upload must not
@@ -561,4 +595,96 @@ jobs:
                   gh("api", f"repos/{REPO}/issues/{number}/comments", "-f", f"body={message}")
                   gh("api", f"repos/{REPO}/issues/{number}", "-X", "PATCH", "-f", "state=closed")
                   print(f"closed #{number}")
+          PY
+
+      # Both release branches are PR-only, so resetting the scratchpad needs a token that can
+      # bypass the `Version development` ruleset: the CI App is a bypass actor there. The reset
+      # lands on development, so main keeps the released notes until the next promotion PR
+      # replaces them, and the next release starts from a clean scratchpad.
+      - name: Mint app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+
+      - name: Clear the pending release notes
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PLAN: ${{ needs.prepare.outputs.plan }}
+        run: |
+          set -euo pipefail
+          PLAN="$PLAN" python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          from urllib.parse import quote
+
+          REPO = os.environ["REPO"]
+          plan = json.loads(os.environ["PLAN"])
+
+
+          def gh(*args):
+              return subprocess.run(
+                  ["gh", *args], text=True, capture_output=True, check=True
+              ).stdout
+
+
+          def header_only(text):
+              # Same rule as the preflight: the title and leading HTML comments are the header,
+              # everything after them is the pending note text.
+              out = []
+              in_comment = False
+              for line in text.splitlines():
+                  stripped = line.strip()
+                  if in_comment:
+                      out.append(line)
+                      if "-->" in stripped:
+                          in_comment = False
+                      continue
+                  if stripped.startswith("<!--"):
+                      out.append(line)
+                      in_comment = "-->" not in stripped
+                      continue
+                  if not stripped or stripped.startswith("# "):
+                      out.append(line)
+                      continue
+                  break
+              return "\n".join(out).rstrip() + "\n"
+
+
+          for item in plan:
+              mc, version = item["mc"], item["version"]
+              branch = f"{mc}/development"
+              current = json.loads(
+                  gh("api", f"repos/{REPO}/contents/CHANGELOG.md?ref={quote(branch, safe='')}")
+              )
+              text = base64.b64decode(current["content"]).decode("utf-8")
+              cleared = header_only(text)
+              if text.rstrip() == cleared.rstrip():
+                  print(f"{branch}: changelog already clear")
+                  continue
+              with open("/tmp/changelog-reset.json", "w", encoding="utf-8") as handle:
+                  json.dump(
+                      {
+                          "message": f"Clear the release notes after {branch.replace('/development', '')}/v{version}",
+                          "content": base64.b64encode(cleared.encode("utf-8")).decode(),
+                          "sha": current["sha"],
+                          "branch": branch,
+                      },
+                      handle,
+                  )
+              gh(
+                  "api",
+                  "-X",
+                  "PUT",
+                  f"repos/{REPO}/contents/CHANGELOG.md",
+                  "--input",
+                  "/tmp/changelog-reset.json",
+              )
+              print(f"{branch}: release notes cleared after v{version}")
           PY
