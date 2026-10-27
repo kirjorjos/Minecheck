@@ -562,3 +562,95 @@ jobs:
                   gh("api", f"repos/{REPO}/issues/{number}", "-X", "PATCH", "-f", "state=closed")
                   print(f"closed #{number}")
           PY
+
+      # Both release branches are PR-only, so resetting the scratchpad needs a token that can
+      # bypass the `Version development` ruleset: the CI App is a bypass actor there. The reset
+      # lands on development, so main keeps the released notes until the next promotion PR
+      # replaces them, and the next release starts from a clean scratchpad.
+      - name: Mint app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+
+      - name: Clear the pending release notes
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PLAN: ${{ needs.prepare.outputs.plan }}
+        run: |
+          set -euo pipefail
+          PLAN="$PLAN" python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          from urllib.parse import quote
+
+          REPO = os.environ["REPO"]
+          plan = json.loads(os.environ["PLAN"])
+
+
+          def gh(*args):
+              return subprocess.run(
+                  ["gh", *args], text=True, capture_output=True, check=True
+              ).stdout
+
+
+          def header_only(text):
+              # Same rule as the preflight: the title and leading HTML comments are the header,
+              # everything after them is the pending note text.
+              out = []
+              in_comment = False
+              for line in text.splitlines():
+                  stripped = line.strip()
+                  if in_comment:
+                      out.append(line)
+                      if "-->" in stripped:
+                          in_comment = False
+                      continue
+                  if stripped.startswith("<!--"):
+                      out.append(line)
+                      in_comment = "-->" not in stripped
+                      continue
+                  if not stripped or stripped.startswith("# "):
+                      out.append(line)
+                      continue
+                  break
+              return "\n".join(out).rstrip() + "\n"
+
+
+          for item in plan:
+              mc, version = item["mc"], item["version"]
+              branch = f"{mc}/development"
+              current = json.loads(
+                  gh("api", f"repos/{REPO}/contents/CHANGELOG.md?ref={quote(branch, safe='')}")
+              )
+              text = base64.b64decode(current["content"]).decode("utf-8")
+              cleared = header_only(text)
+              if text.rstrip() == cleared.rstrip():
+                  print(f"{branch}: changelog already clear")
+                  continue
+              with open("/tmp/changelog-reset.json", "w", encoding="utf-8") as handle:
+                  json.dump(
+                      {
+                          "message": f"Clear the release notes after {branch.replace('/development', '')}/v{version}",
+                          "content": base64.b64encode(cleared.encode("utf-8")).decode(),
+                          "sha": current["sha"],
+                          "branch": branch,
+                      },
+                      handle,
+                  )
+              gh(
+                  "api",
+                  "-X",
+                  "PUT",
+                  f"repos/{REPO}/contents/CHANGELOG.md",
+                  "--input",
+                  "/tmp/changelog-reset.json",
+              )
+              print(f"{branch}: release notes cleared after v{version}")
+          PY
