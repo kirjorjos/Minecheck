@@ -145,18 +145,18 @@ public final class ScreenshotRequest {
   }
 
   /**
-   * Whether the platform has already done the one-tick work a capture needs before it reads.
+   * Whether the platform has done the work a capture needs before it reads the framebuffer.
    *
-   * <p>The framebuffer a capture reads was drawn by the frame before the action ran, so anything
-   * that has to be true <em>of the picture</em> — chat cleared out of the HUD, for example — has to
-   * happen one frame ahead of the read. The platform prepares on the first pass and reads on the
-   * next.
+   * <p>The frame a capture reads was drawn before the action ran, so a change that has to be true
+   * <em>of the picture</em> — chat emptied out of the HUD, for example — has to reach the screen
+   * before the read does. The platform prepares on the first pass and reads once a frame drawn
+   * after the preparation exists; {@link #prepared()} is how it remembers that between passes.
    */
   public boolean prepared() {
     return prepared;
   }
 
-  /** Records that the platform has prepared the frame the next read will pick up. */
+  /** Records that the platform has prepared the frame this capture reads. */
   public void markPrepared() {
     prepared = true;
   }

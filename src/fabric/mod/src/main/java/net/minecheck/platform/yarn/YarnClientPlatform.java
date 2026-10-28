@@ -127,25 +127,62 @@ public class YarnClientPlatform implements ClientPlatform {
   }
 
   /**
-   * One attempt at a capture, on the client (render) thread. Reads the framebuffer into a {@link
-   * net.minecraft.client.texture.NativeImage}, then hands the pixels to the writer thread; the
-   * script keeps ticking meanwhile.
+   * Frames the client has finished drawing, counted by the loader's per-frame hook.
+   *
+   * <p>A capture needs a frame count and not a delay: the read must pick up a frame drawn
+   * <em>after</em> the chat was cleared, and one tick is not one frame. When the client falls
+   * behind it catches up with several ticks in a single frame, so "clear on one tick, read on the
+   * next" can still be the same picture — which is how a capture once came back with the command
+   * feedback it had just cleared.
+   */
+  private static final java.util.concurrent.atomic.AtomicLong DRAWN_FRAMES =
+      new java.util.concurrent.atomic.AtomicLong();
+
+  /**
+   * Records that the client finished drawing a frame. Called by the loader entrypoint's per-frame
+   * hook, which fires once per frame after the HUD — chat included — has been laid out.
+   */
+  public static void notifyFrameDrawn() {
+    DRAWN_FRAMES.incrementAndGet();
+  }
+
+  /**
+   * The frame at which the pending capture cleared the chat, in {@link #DRAWN_FRAMES} terms. One
+   * capture is pending at a time — the script action blocks until its capture is done — so a field
+   * is enough.
+   */
+  private long chatClearedAtFrame;
+
+  /**
+   * One attempt at a capture, on the client (render) thread: empties the chat, waits for a frame
+   * drawn without it, then reads the framebuffer into a {@link
+   * net.minecraft.client.texture.NativeImage} and hands the pixels to the writer thread; the script
+   * keeps ticking meanwhile.
+   *
+   * <p>Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
+   * it arrives, and command feedback from the scene setup arrives in the middle of the run), so a
+   * capture without chat empties the HUD. It is emptied here rather than by hiding chat in the
+   * options, because the server refuses every command from a client whose chat visibility is hidden
+   * ({@code chat.disabled.options}) — and a run that cannot run commands cannot set up a scene.
+   *
+   * <p>The clear only shows up in the next frame that is drawn, and the read otherwise returns the
+   * frame drawn <em>before</em> it, chat included. So the clear is followed by a wait for the frame
+   * counter to move, not by a read on the next tick.
    */
   private void captureScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     MinecraftClient mc = mc();
-    if (!request.prepared()) {
-      // Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
-      // it arrives), so a capture without chat clears them. Clearing here rather than switching
-      // chat off in the options keeps client commands working: the server rejects every command
-      // sent while chat visibility is hidden. The read is a tick later, because the frame the read
-      // picks up is drawn after this runs.
-      if (!request.chatVisible()) {
-        mc.inGameHud.getChatHud().clear(true);
-        request.markPrepared();
-        request.retry("clearing chat before the capture");
-        return;
-      }
+    // Outside a world the HUD is not drawn, so there is no chat to take out of the picture.
+    boolean clearChat = !request.chatVisible() && mc.world != null;
+    if (clearChat && !request.prepared()) {
+      mc.inGameHud.getChatHud().clear(true);
+      chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
+      request.retry("clearing chat before the capture");
+      return;
+    }
+    if (clearChat && DRAWN_FRAMES.get() == chatClearedAtFrame) {
+      request.retry("waiting for the first frame drawn after the chat was cleared");
+      return;
     }
     net.minecraft.client.gl.Framebuffer framebuffer = mc.getFramebuffer();
     if (framebuffer == null) {

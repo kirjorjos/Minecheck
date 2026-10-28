@@ -145,6 +145,18 @@ public class ForgeEntrypoint {
     }
   }
 
+  /**
+   * Per-frame hook for the screenshot suite: a capture must read a frame drawn after it cleared the
+   * chat, and a render tick is the only thing that says "a frame was drawn" (a client tick is not —
+   * the client can tick several times between two frames).
+   */
+  @SubscribeEvent
+  public void onRenderTick(TickEvent.RenderTickEvent event) {
+    if (event.phase == TickEvent.Phase.END && client != null) {
+      ForgeClientPlatform.notifyFrameDrawn();
+    }
+  }
+
   @SubscribeEvent
   public void onClientTick(TickEvent.ClientTickEvent event) {
     if (event.phase != TickEvent.Phase.END || client == null) {

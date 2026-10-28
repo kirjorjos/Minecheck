@@ -5,7 +5,8 @@
 -- command (noon or midnight — the two times where the sky light the lightmap derives is on a flat
 -- part of its curve, so a capture a frame later is the same picture), the camera is set and then a
 -- few ticks pass so its tick-to-tick interpolation has arrived, and the chat lines are cleared by
--- the capture itself (see `captureScreenshot` in docs/lua-api.md).
+-- the capture itself, which reads the first frame drawn after that (see `captureScreenshot` in
+-- docs/lua-api.md).
 
 -- Forge dev clients stop on FML's "mod loading warnings" screen instead of the title screen.
 -- On a loader that never shows that screen this matches nothing and does nothing.

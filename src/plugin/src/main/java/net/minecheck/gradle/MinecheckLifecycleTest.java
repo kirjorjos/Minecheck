@@ -546,9 +546,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       options.append("reducedDebugInfo:false\n");
       options.append("pauseOnLostFocus:false\n");
       // Chat stays *enabled* here even when captures must not contain it: the server refuses every
-      // client command while chat visibility is hidden ("chat.disabled.options" — see
-      // `runCommand`), and a run that cannot run commands cannot set up a scene. The capture clears
-      // the chat lines itself instead, right before it reads the frame.
+      // command from a client whose chat visibility is hidden ("chat.disabled.options"), and a run
+      // that cannot run commands cannot set up a scene. The capture empties the chat lines itself
+      // and reads the first frame drawn afterwards.
       options.append("chatVisibility:0\n");
       // Tutorial toasts and the multiplayer warning are timing-dependent overlays.
       options.append("tutorialStep:none\n");

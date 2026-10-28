@@ -600,7 +600,7 @@ Minecheck pins the settings that decide what a frame looks like, so the same scr
 | Window size | `854 × 480` | `screenshotWidth` / `screenshotHeight` |
 | GUI scale | `2` (never auto) | `screenshotGuiScale` |
 | Encode downscale | `1.0` (full size) | `screenshotScale` |
-| Chat in captures | cleared before the read | `screenshotChatVisible` |
+| Chat in captures | cleared one frame before the read | `screenshotChatVisible` |
 | Graphics mode / AO / entity shadows / biome blend | fancy / on / on / `0` | — |
 | FOV, FOV effects, screen effects, view bobbing | `70`, `0`, `0`, off | — |
 | Particles / clouds | minimal / off | — |
@@ -609,7 +609,7 @@ Minecheck pins the settings that decide what a frame looks like, so the same scr
 | Language, subtitles, F3 overlay, tutorial toasts | `en_us`, off, off, off | — |
 | Render / simulation distance | `10` | — |
 
-Chat is the one HUD element a script can make nondeterministic (a line of text whose arrival depends on timing), so a capture without chat **clears the chat lines** on the frame it reads. It does that by emptying the HUD rather than by switching chat off in the options: the server refuses every client command while chat visibility is hidden, and a suite that cannot run commands cannot set up a scene. `screenshotChatVisible: true` leaves the lines in — the resulting captures are then only as stable as the chat.
+Chat is the one HUD element a script can make nondeterministic (a line of text whose arrival depends on timing, command feedback from the scene setup among them), so a capture without chat **empties the chat lines and reads the first frame drawn after that**. It does that by emptying the HUD rather than by switching chat off in the options: the server refuses every client command while chat visibility is hidden (`chat.disabled.options`), and a suite that cannot run commands cannot set up a scene. `screenshotChatVisible: true` leaves the lines in — the resulting captures are then only as stable as the chat.
 
 Two things are deliberately **not** part of the profile: time of day and weather. They belong to the world the script creates (`createWorld` already pins the seed and disables the daylight/weather cycle), because a profile that changed the world at capture time would make a baseline depend on capture order.
 

@@ -327,7 +327,9 @@ public interface ClientPlatform {
    *
    * <p>Never blocks and never captures on the calling thread: this is called once per tick by the
    * {@code captureScreenshot} action while it yields, so a platform that needs another tick (for
-   * example to let a window resize apply) simply leaves the request queued and is asked again.
+   * example to let a window resize apply) simply leaves the request queued and is asked again. A
+   * change that has to be in the picture — chat emptied out of the HUD — needs a rendered frame
+   * rather than a tick, since the client ticks more than once per frame when it falls behind.
    *
    * <p>The default fails the request rather than doing nothing, so a platform without a screenshot
    * implementation surfaces as a clear Lua error instead of a file that never appears.
