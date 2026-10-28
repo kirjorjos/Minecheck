@@ -86,8 +86,19 @@ expect(jumped ~= nil and jumped.pressed, "space jump")
 expect(jumped ~= nil and jumped.released == "cond", "jump observed clearing the placement space")
 
 -- Right-click while the crosshair still targets the hole floor BELOW the player, so the placed
--- block lands under the feet instead of into the player's own space.
-expect(minecheck.mousePress(1), "right-click placed the block")
+-- block lands under the feet instead of into the player's own space. The click is *held* until the
+-- block is there, not tapped: a tap is a single attempt on the tick after the clearance was
+-- observed, and the server refuses a block that lands in the player's own space — while its copy of
+-- the player is a tick behind the client's, that attempt can be refused and nothing retries it, so
+-- the player lands back in the hole (observed as `got -61` on a loaded CI runner). Holding spans
+-- the whole airborne window: an attempt rejected early is simply retried, and the release is the
+-- observation that the block landed.
+local placed = minecheck.mouse(1, 5, function()
+  local p = minecheck.getPlayer()
+  local target = p ~= nil and minecheck.getTargetBlock(p) or nil
+  return target ~= nil and target.y == lowerY
+end)
+expect(type(placed) == "table" and placed.released == "cond", "right-click placed the block")
 
 -- The proof the place worked is where the player comes to rest. A bare height check would be
 -- satisfied mid-jump (the arc rises past the start y), so wait until the position repeats across
