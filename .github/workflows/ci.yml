@@ -80,10 +80,17 @@ jobs:
       - name: Build + run tests
         id: build
         run: |
+          set -euo pipefail
+          # An event without inputs (a push, for example) leaves the task list empty, and an empty
+          # Gradle task list is a green build that ran nothing.
+          TASKS="${{ inputs.gradle_tasks }}"
+          if [ -z "$TASKS" ]; then
+            TASKS=test
+          fi
           # --continue so one failing lifecycle suite does not stop the others: the screenshot
           # suites write a missing baseline before they fail, and a bootstrapping run has to reach
           # all three of them. The step still fails on the first non-zero task result.
-          ./gradlew ${{ inputs.gradle_tasks }} --continue --no-daemon --console=plain \
+          ./gradlew $TASKS --continue --no-daemon --console=plain \
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dorg.gradle.worker.jvmargs="-Xmx2g"
         timeout-minutes: 120
