@@ -16,6 +16,7 @@ All script actions live on the global `minecheck` table. Functions that need to 
 > [Utilities](#utilities) ·
 > [Input (client)](#input-client) ·
 > [World / entity queries (client)](#world--entity-queries-client) ·
+> [Screenshots (client)](#screenshots-client) ·
 > [Packets (both sides)](#packets-both-sides) ·
 > [Run result JSON](#run-result-json) ·
 > [Coordinators](#coordinators) ·
@@ -104,6 +105,11 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `script` | string | `""` | Single-phase entry script (used when `coordinator` is absent). |
 | `failMode` | string | `"exit"` | `"exit"`: quit/stop on script failure. `"continue"`: log and keep going. |
 | `defaultTimeout` | int | `30` | Default timeout in seconds for all wait actions (joins, waits, sleeps). |
+| `screenshotWidth` | int | `854` | Captured frame width in pixels (the window the client is pinned to), 320–7680. |
+| `screenshotHeight` | int | `480` | Captured frame height in pixels, 240–4320. |
+| `screenshotGuiScale` | int | `2` | GUI scale the HUD is laid out at, 1–4. Pinned rather than auto, so HUD geometry does not depend on the window. |
+| `screenshotScale` | number | `1.0` | Encode-time downscale for smaller artifacts, `0.25`–`1.0`. Part of a baseline's identity. |
+| `screenshotChatVisible` | boolean | `false` | Whether chat may appear in a capture. See [the capture profile](#the-capture-profile-why-a-shot-is-reproducible). |
 
 The mod also accepts a JVM system property `-Dminecheck.script=<name>` to override the entry script at launch time. It wins over whatever the file names — `script` or `coordinator` — and it works on a config that names neither, so a one-off run needs no edit to `config.json`. The name is resolved against the same `minecheck/scripts` directory; a name with no matching file starts nothing.
 
@@ -547,6 +553,116 @@ minecheck.reloadResources(30)
 ```
 
 Client-only; calling it from a server script raises `"client-only function called on dedicated server"`.
+
+---
+
+## Screenshots (client)
+
+### `minecheck.captureScreenshot(name[, options][, timeout]) → table`
+
+Writes the frame the client is showing to a PNG and returns what was written. The capture is taken on the client's **next rendered frame** — the action yields once per tick while it waits, so the game keeps ticking — and the PNG is encoded and written off the render thread.
+
+```lua
+local shot = minecheck.captureScreenshot("world-settled")
+minecheck.log(shot.path .. " " .. shot.width .. "x" .. shot.height)
+
+-- Top-left 200×60 GUI pixels (a HUD corner), cropped out of the frame:
+local hud = minecheck.captureScreenshot("hud", {
+  region = { x = 0, y = 0, w = 200, h = 60, unit = "gui" },
+})
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Capture name, and the file name: `"world-settled"` writes `screenshots/world-settled.png`. A trailing `.png` is stripped rather than doubled. May not be empty or contain `/`, `\`, `..` or control characters. A leading `_` marks an **ad-hoc** capture (written, uploaded, never baselined). |
+| `options` | table | Optional; unknown keys raise, so a typo cannot silently capture the whole frame. |
+| `options.region` | table | Optional crop: `{ x, y, w, h, unit? }`. All four numbers are required and `w`/`h` must be positive. `unit` is `"framebuffer"` (default, real pixels) or `"gui"` (GUI pixels, multiplied by the pinned GUI scale). The region is clamped to the frame; a region with no overlap raises. |
+| `timeout` | number | Max seconds to wait for the frame to be written (default: `config.defaultTimeout`). |
+
+**Returns:**
+
+```lua
+{ path   = "/…/client/screenshots/world-settled.png",  -- absolute
+  width  = 854,                                        -- of the written PNG
+  height = 480,
+  bytes  = 412933,
+  sha256 = "9f2c…" }                                   -- of the written PNG
+```
+
+The digest is returned because a capture is judged by its pixels: when a baseline comparison fails, the same `sha256` in the log and in `run-result.json` is what makes the failure diagnosable without downloading images.
+
+#### The capture profile (why a shot is reproducible)
+
+Minecheck pins the settings that decide what a frame looks like, so the same script on the same machine produces the **same picture** every run. The Gradle plugin writes them into the run's `options.txt`, and `config.json` can override the four starred ones for the run:
+
+| Setting | Pinned value | `config.json` field |
+|---------|--------------|---------------------|
+| Window size | `854 × 480` | `screenshotWidth` / `screenshotHeight` |
+| GUI scale | `2` (never auto) | `screenshotGuiScale` |
+| Encode downscale | `1.0` (full size) | `screenshotScale` |
+| Chat in captures | cleared before the read | `screenshotChatVisible` |
+| Graphics mode / AO / entity shadows / biome blend | fancy / on / on / `0` | — |
+| FOV, FOV effects, screen effects, view bobbing | `70`, `0`, `0`, off | — |
+| Particles / clouds | minimal / off | — |
+| VSync / FPS cap | off / `120` | — |
+| Gamma / fullscreen | `0.5` / windowed | — |
+| Language, subtitles, F3 overlay, tutorial toasts | `en_us`, off, off, off | — |
+| Render / simulation distance | `10` | — |
+
+Chat is the one HUD element a script can make nondeterministic (a line of text whose arrival depends on timing), so a capture without chat **clears the chat lines** on the frame it reads. It does that by emptying the HUD rather than by switching chat off in the options: the server refuses every client command while chat visibility is hidden, and a suite that cannot run commands cannot set up a scene. `screenshotChatVisible: true` leaves the lines in — the resulting captures are then only as stable as the chat.
+
+Two things are deliberately **not** part of the profile: time of day and weather. They belong to the world the script creates (`createWorld` already pins the seed and disables the daylight/weather cycle), because a profile that changed the world at capture time would make a baseline depend on capture order.
+
+The **sky is the one thing a script should keep out of a baseline**, and Minecheck does not fully remove it for you: the client's clock is re-synced to the server's every tick, but the client also draws each frame at a *partial* tick, and that fraction moves the sun angle, the sky gradient and the lightmap that modulates every lit surface by a step. Two frames of an
+identical scene therefore differ by a level on a few percent of their pixels — a couple of block edges can move further. That is why the shipped suite looks straight down (ground fills the frame) for its world capture, pins the time of day with `/time set` (noon and midnight, where the sky-light curve is flat), and why the baselines are compared with a small tolerance rather than byte for byte. The title screen is avoided for the same reason: its background panorama rotates with every rendered frame.
+
+A capture also pins nothing about the **camera** for you. The view is part of the picture, so a deterministic scene sets it explicitly — a fresh world spawns the player at a random spot near the world spawn, and two runs standing a block apart see different terrain:
+
+```lua
+minecheck.runCommand("tp @s 0.5 -60 0.5 0 90")  -- position and rotation (yaw 0, pitch 90 = down)
+```
+
+What the profile does **not** do is wait for the scene to settle. The action captures the frame that is there; a script that wants a stable picture must already be there —
+
+```lua
+minecheck.createWorld({ name = "minecheck_world", seed = 0 })
+minecheck.waitFor(minecheck.worldGenSettled, 120)
+minecheck.runCommand("time set 6000")
+minecheck.runCommand("tp @s 0.5 -60 0.5 0 90")
+minecheck.wait(0.5)
+minecheck.captureScreenshot("world-settled")
+```
+
+#### Errors
+
+Every failure is a Lua error naming the action:
+
+| Situation | Message |
+|-----------|---------|
+| A dedicated server calls it | `client-only function called on dedicated server` |
+| No framebuffer | `captureScreenshot: no client framebuffer — is the client in a world?` |
+| Duplicate name in one run | `captureScreenshot: "world-settled" was already captured in this run` |
+| Bad name | `captureScreenshot: invalid capture name "a/b"` |
+| Bad region | `captureScreenshot: region needs numeric x, y, w, h` / `… has no overlap with the 854x480 frame` |
+| Unknown option or region field | `captureScreenshot: unknown option "hideHud"` |
+| Readback/encode failure | `captureScreenshot: framebuffer read failed: <cause>` |
+| Timeout (never yielded a frame) | `captureScreenshot: timed out after 30s waiting for the frame` |
+
+Two names can never be used twice in a run: a second capture would either overwrite a baseline's proof or hide which call produced the file.
+
+#### Where captures go, and the baselines that check them
+
+Captures land in the run directory: `src/<loader>/mod/run/client/screenshots/<name>.png`. The suite's committed baselines live in `tests/baselines/<loader>/<name>.png` and are compared by the loader's `test<Loader>Shots` Gradle task after `run<Loader>Shots` produced them. Local runs compare against `tests/local-baselines/<loader>/` (git-ignored) instead, because a picture rendered by a different GPU than CI's says nothing about the code:
+
+The comparison is **byte-identical when it can be, and tolerant when it cannot**: a capture passes when every colour channel of every pixel is within 8 levels of its baseline (of 255), allowing at most 64 pixels of a 854×480 frame to exceed that. The tolerance is there because the client's partial tick shifts the lighting by a level between any two frames; it is not a licence to move the picture — a shifted pixel, a missing HUD element or a different GUI is thousands of pixels away from its baseline. Every tolerated capture is logged with the drift it needed, so a baseline that is slowly rotting is visible before it fails.
+
+```bash
+./gradlew testFabricShots                                  # capture + compare (local baseline tree)
+./gradlew testFabricShots -Pminecheck.screenshots.update=true   # re-baseline into the active tree
+./gradlew testFabricShots -Pminecheck.baselines=ci         # compare against the committed tree
+```
+
+A missing baseline is written and **fails** the task (review it, then commit it). A baseline whose capture no longer runs is a warning, not a failure. The captures, the run's `run-result.json` and the baseline trees are uploaded as the `screenshots` artifact on every CI run, so a red build comes with the picture that broke it.
 
 ---
 

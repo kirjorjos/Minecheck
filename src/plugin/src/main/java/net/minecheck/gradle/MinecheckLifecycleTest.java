@@ -148,6 +148,52 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getXvfbRun();
 
   /**
+   * When true, the run boots with the deterministic screenshot profile: a pinned window size and
+   * GUI scale, no VSync/frame pacing, no clouds, minimal particles, fixed FOV, chat and subtitles
+   * off (unless {@link #getScreenshotChatVisible()}), and the tutorial disabled.
+   *
+   * <p>Off by default: the other lifecycle suites were written against vanilla defaults, and
+   * silently changing what a click test sees would be exactly the kind of drift that makes a suite
+   * lie.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getScreenshotProfile();
+
+  /** Captured frame width the profile pins the window to (default {@code 854}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotWidth();
+
+  /** Captured frame height the profile pins the window to (default {@code 480}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotHeight();
+
+  /** GUI scale the profile pins the HUD to (default {@code 2}, never auto). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotGuiScale();
+
+  /** Encode-time downscale the captures use (default {@code 1.0}). */
+  @Input
+  @Optional
+  public abstract Property<Double> getScreenshotScale();
+
+  /** Whether chat may appear in a capture (default {@code false}); the profile's escape hatch. */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getScreenshotChatVisible();
+
+  /**
+   * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
+   * deleted from the script cannot linger and be compared against a stale baseline.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getCleanScreenshots();
+
+  /**
    * When true, a run verdict that FAILS ({@code finished && failed}) counts as a PASS, and a
    * passing verdict fails the task — for negative tests of the fail path itself. The game processes
    * must STILL exit cleanly (code 0) and write a verdict; a crash or a hung JVM always fails the
@@ -280,6 +326,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
 
     try {
       deleteRecursively(runDir.resolve("saves").resolve(world()));
+      if (getCleanScreenshots().getOrElse(false)) {
+        deleteRecursively(runDir.resolve("screenshots"));
+      }
       stageClientOptions(runDir);
       if (getServerScript().isPresent()) {
         Path setupDir = null;
@@ -467,10 +516,87 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    */
   private void stageClientOptions(Path runDir) throws IOException {
     Files.createDirectories(runDir);
-    Files.writeString(runDir.resolve("options.txt"), "renderDistance:10\nsimulationDistance:10\n");
+    StringBuilder options = new StringBuilder();
+    options.append("renderDistance:10\n").append("simulationDistance:10\n");
+    if (screenshotProfile()) {
+      // The deterministic capture profile. Everything here either changes what is drawn (graphics,
+      // FOV, particles, clouds, GUI scale, window size) or when it is drawn (VSync, FPS cap), and
+      // every one of those would make the same script produce a different PNG on a different run.
+      // Authored settings that cannot be expressed here (time of day, weather, the world's seed)
+      // belong to the script that created the world.
+      options.append("overrideWidth:").append(screenshotWidth()).append('\n');
+      options.append("overrideHeight:").append(screenshotHeight()).append('\n');
+      options.append("guiScale:").append(screenshotGuiScale()).append('\n');
+      options.append("forceUnicodeFont:false\n");
+      options.append("graphicsMode:1\n"); // fancy, never fabulous
+      options.append("ao:true\n");
+      options.append("entityShadows:true\n");
+      options.append("biomeBlendRadius:0\n");
+      options.append("renderClouds:false\n");
+      options.append("particles:2\n"); // minimal
+      options.append("fov:70\n");
+      options.append("fovEffectScale:0.0\n");
+      options.append("screenEffectScale:0.0\n");
+      options.append("bobView:false\n");
+      options.append("gamma:0.5\n");
+      options.append("enableVsync:false\n");
+      options.append("maxFps:120\n");
+      options.append("fullscreen:false\n");
+      options.append("showSubtitles:false\n");
+      options.append("reducedDebugInfo:false\n");
+      options.append("pauseOnLostFocus:false\n");
+      // Chat stays *enabled* here even when captures must not contain it: the server refuses every
+      // client command while chat visibility is hidden ("chat.disabled.options" — see
+      // `runCommand`), and a run that cannot run commands cannot set up a scene. The capture clears
+      // the chat lines itself instead, right before it reads the frame.
+      options.append("chatVisibility:0\n");
+      // Tutorial toasts and the multiplayer warning are timing-dependent overlays.
+      options.append("tutorialStep:none\n");
+      options.append("hideBundleTutorial:true\n");
+      options.append("skipMultiplayerWarning:true\n");
+      options.append("joinedFirstServer:true\n");
+      // The system locale would otherwise pick the UI language.
+      options.append("lang:en_us\n");
+    }
+    Files.writeString(runDir.resolve("options.txt"), options.toString());
     getLogger()
         .lifecycle(
-            "Minecheck: pinned client options.txt render/simulation distance to 10 in {}", runDir);
+            "Minecheck: pinned client options.txt (render/simulation distance 10{}) in {}",
+            screenshotProfile()
+                ? ", screenshot profile "
+                    + screenshotWidth()
+                    + "x"
+                    + screenshotHeight()
+                    + " guiScale "
+                    + screenshotGuiScale()
+                : "",
+            runDir);
+  }
+
+  // ---------------------------------------------------------------- screenshot profile
+
+  private boolean screenshotProfile() {
+    return getScreenshotProfile().getOrElse(false);
+  }
+
+  private int screenshotWidth() {
+    return getScreenshotWidth().getOrElse(854);
+  }
+
+  private int screenshotHeight() {
+    return getScreenshotHeight().getOrElse(480);
+  }
+
+  private int screenshotGuiScale() {
+    return getScreenshotGuiScale().getOrElse(2);
+  }
+
+  private double screenshotScale() {
+    return getScreenshotScale().getOrElse(1.0);
+  }
+
+  private boolean screenshotChatVisible() {
+    return getScreenshotChatVisible().getOrElse(false);
   }
 
   /**
@@ -593,13 +719,21 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
               });
     }
 
-    Files.writeString(
-        configDir.resolve("config.json"),
-        "{ "
-            + (coordinator ? "\"coordinator\"" : "\"script\"")
-            + ": \""
-            + scriptName
-            + "\", \"failMode\": \"exit\", \"defaultTimeout\": 60 }\n");
+    Map<String, Object> config = new LinkedHashMap<>();
+    config.put(coordinator ? "coordinator" : "script", scriptName);
+    config.put("failMode", "exit");
+    config.put("defaultTimeout", 60);
+    if (screenshotProfile()) {
+      // The same profile the options.txt above pins, told to the mod: it needs these for the
+      // capture itself (which frame size to expect, the GUI scale for `unit = "gui"` regions) and
+      // writes them into profile.json so a baseline records the settings that produced it.
+      config.put("screenshotWidth", screenshotWidth());
+      config.put("screenshotHeight", screenshotHeight());
+      config.put("screenshotGuiScale", screenshotGuiScale());
+      config.put("screenshotScale", screenshotScale());
+      config.put("screenshotChatVisible", screenshotChatVisible());
+    }
+    Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
     getLogger()
         .lifecycle(
             "Minecheck: staged config.json ({}={}) into {}",

@@ -155,9 +155,11 @@ jobs:
           fi
           while IFS= read -r file; do
             case "$file" in
-              src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail" ;;
-              src/forge/*) LOADERS="$LOADERS testForge testForgeFail" ;;
-              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail" ;;
+              src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail testFabricShots" ;;
+              src/forge/*) LOADERS="$LOADERS testForge testForgeFail testForgeShots" ;;
+              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail testQuiltShots" ;;
+              tests/baselines/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots" ;;
+              tests/scripts/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots" ;;
               *) FULL=true ;;
             esac
           done < /tmp/changed-files.txt
@@ -247,3 +249,4 @@ jobs:
     with:
       gradle_tasks: ${{ needs.rules.outputs.tasks }}
       checkout_ref: refs/pull/${{ github.event.pull_request.number }}/head
+      compare_baselines: ${{ github.event.pull_request.base.ref }}

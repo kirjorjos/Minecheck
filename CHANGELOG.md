@@ -19,3 +19,6 @@ Suggested shape, delete what you do not use:
 ## Fixed
 -
 -->
+
+## Added
+- `minecheck.captureScreenshot(name[, options][, timeout])`: PNG captures of the client frame (full frame or a framebuffer/GUI-unit region), written with a deterministic capture profile and verified against committed baselines by the new `test<Loader>Shots` lifecycle suites.

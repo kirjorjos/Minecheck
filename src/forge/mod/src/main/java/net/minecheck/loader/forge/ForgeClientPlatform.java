@@ -69,6 +69,250 @@ public class ForgeClientPlatform implements ClientPlatform {
     return !reloadRequested || (reload != null && reload.isDone());
   }
 
+  // ------------------------------------------------------------ screenshots
+
+  /**
+   * Encode/write thread for captures: the GL readback stays on the render thread, but the crop, the
+   * PNG encode and the file write do not. One daemon thread is enough — captures are sequential in
+   * a script and the client must never wait on it.
+   */
+  private static final java.util.concurrent.ExecutorService SCREENSHOT_WRITER =
+      java.util.concurrent.Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "Minecheck-screenshot");
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** GL_RENDERER of the client, recorded in profile.json so renderer drift is diagnosable. */
+  private static volatile String screenshotRenderer;
+
+  /**
+   * Points the client's clock back at the integrated server's. See {@link
+   * net.minecheck.platform.api.ClientPlatform#pinClientClock()} for why the drift is invisible live
+   * but not in a capture.
+   *
+   * <p>Called every client tick from {@code ForgeEntrypoint}, after the level tick (where {@code
+   * ClientLevel.tickTime} advanced the day time) and before that frame is rendered. A mismatch is
+   * corrected in place; when the two already agree nothing is written, so a world the script froze
+   * is not touched.
+   */
+  @Override
+  public void pinClientClock() {
+    net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+    net.minecraft.client.multiplayer.ClientLevel level = minecraft.level;
+    if (level == null) {
+      return;
+    }
+    net.minecraft.server.MinecraftServer server = minecraft.getSingleplayerServer();
+    if (server == null) {
+      // Remote server: no authoritative value in this process (see pinClientClock's contract).
+      return;
+    }
+    net.minecraft.server.level.ServerLevel overworld = server.overworld();
+    if (overworld == null) {
+      return;
+    }
+    long serverTime = overworld.getDayTime();
+    if (level.getDayTime() != serverTime) {
+      level.setDayTime(serverTime);
+    }
+  }
+
+  @Override
+  public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    onClientThread(() -> captureScreenshot(request));
+  }
+
+  /**
+   * One attempt at a capture, on the client (render) thread. Reads the main render target into a
+   * {@link com.mojang.blaze3d.platform.NativeImage}, then hands the pixels to the writer thread;
+   * the script keeps ticking meanwhile.
+   */
+  private void captureScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    Minecraft mc = mc();
+    if (!request.prepared()) {
+      // Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
+      // it arrives), so a capture without chat clears them. Clearing here rather than switching
+      // chat off in the options keeps client commands working: the server rejects every command
+      // sent while chat visibility is hidden. The read is a tick later, because the frame the read
+      // picks up is drawn after this runs.
+      if (!request.chatVisible()) {
+        mc.gui.getChat().clearMessages(true);
+        request.markPrepared();
+        request.retry("clearing chat before the capture");
+        return;
+      }
+      request.markPrepared();
+    }
+    com.mojang.blaze3d.pipeline.RenderTarget target = mc.getMainRenderTarget();
+    if (target == null) {
+      request.fail("no client framebuffer — is the client in a world?");
+      return;
+    }
+    com.mojang.blaze3d.platform.Window window = mc.getWindow();
+    if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
+      window.setWindowed(request.frameWidth(), request.frameHeight());
+      request.retry(
+          "the client window is "
+              + window.getWidth()
+              + "x"
+              + window.getHeight()
+              + ", not the "
+              + request.frameWidth()
+              + "x"
+              + request.frameHeight()
+              + " the screenshot profile pins it to");
+      return;
+    }
+
+    int frameWidth = window.getWidth();
+    int frameHeight = window.getHeight();
+    int guiScale = guiScale(window);
+    int x = 0;
+    int y = 0;
+    int cropWidth = frameWidth;
+    int cropHeight = frameHeight;
+    if (request.hasRegion()) {
+      long unit =
+          request.unit().equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_GUI)
+              ? guiScale
+              : 1;
+      long left = (long) request.x() * unit;
+      long top = (long) request.y() * unit;
+      long right = left + (long) request.width() * unit;
+      long bottom = top + (long) request.height() * unit;
+      long fromX = Math.max(0, left);
+      long fromY = Math.max(0, top);
+      long toX = Math.min(frameWidth, right);
+      long toY = Math.min(frameHeight, bottom);
+      if (toX <= fromX || toY <= fromY) {
+        request.fail(
+            "region "
+                + request.width()
+                + "x"
+                + request.height()
+                + " at ("
+                + request.x()
+                + ", "
+                + request.y()
+                + ") "
+                + request.unit()
+                + " has no overlap with the "
+                + frameWidth
+                + "x"
+                + frameHeight
+                + " frame");
+        return;
+      }
+      x = (int) fromX;
+      y = (int) fromY;
+      cropWidth = (int) (toX - fromX);
+      cropHeight = (int) (toY - fromY);
+    }
+
+    com.mojang.blaze3d.platform.NativeImage image;
+    try {
+      image = net.minecraft.client.Screenshot.takeScreenshot(target);
+    } catch (RuntimeException e) {
+      request.fail("framebuffer read failed: " + e.getMessage());
+      return;
+    }
+    if (screenshotRenderer == null) {
+      screenshotRenderer = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
+    }
+    java.nio.file.Path targetPath =
+        new java.io.File(mc.gameDirectory, "screenshots")
+            .toPath()
+            .resolve(request.name() + ".png")
+            .toAbsolutePath();
+    request.running();
+    writeScreenshot(
+        request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, targetPath);
+  }
+
+  /**
+   * The effective GUI scale: framebuffer pixels per GUI pixel, taken from the window the client
+   * laid its HUD out with (so {@code unit = "gui"} regions line up with what a script sees).
+   */
+  private static int guiScale(com.mojang.blaze3d.platform.Window window) {
+    int scaledWidth = window.getGuiScaledWidth();
+    if (scaledWidth <= 0) {
+      return 1;
+    }
+    int scale = Math.round((float) window.getWidth() / scaledWidth);
+    return Math.max(1, scale);
+  }
+
+  /** Crops, downscales, PNG-encodes and writes the capture — all off the render thread. */
+  private static void writeScreenshot(
+      net.minecheck.platform.api.ScreenshotRequest request,
+      com.mojang.blaze3d.platform.NativeImage source,
+      int x,
+      int y,
+      int cropWidth,
+      int cropHeight,
+      int frameWidth,
+      int frameHeight,
+      int guiScale,
+      java.nio.file.Path target) {
+    SCREENSHOT_WRITER.execute(
+        () -> {
+          com.mojang.blaze3d.platform.NativeImage out = null;
+          try {
+            int outWidth = Math.max(1, (int) Math.round(cropWidth * request.scale()));
+            int outHeight = Math.max(1, (int) Math.round(cropHeight * request.scale()));
+            out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
+            for (int dy = 0; dy < outHeight; dy++) {
+              int sy = y + (int) ((long) dy * cropHeight / outHeight);
+              for (int dx = 0; dx < outWidth; dx++) {
+                int sx = x + (int) ((long) dx * cropWidth / outWidth);
+                out.setPixelRGBA(dx, dy, source.getPixelRGBA(sx, sy));
+              }
+            }
+            java.nio.file.Path directory = target.getParent();
+            java.nio.file.Files.createDirectories(directory);
+            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
+            out.writeToFile(tmp);
+            java.nio.file.Files.move(
+                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            byte[] bytes = java.nio.file.Files.readAllBytes(target);
+            net.minecheck.common.screenshot.ScreenshotProfile.write(
+                directory,
+                frameWidth,
+                frameHeight,
+                guiScale,
+                request.scale(),
+                request.chatVisible(),
+                screenshotRenderer);
+            request.succeed(target, outWidth, outHeight, bytes.length, sha256(bytes));
+          } catch (Exception e) {
+            request.fail(
+                "framebuffer read failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          } finally {
+            if (out != null) {
+              out.close();
+            }
+            source.close();
+          }
+        });
+  }
+
+  /** Lower-case hex SHA-256, the digest a baseline comparison reports. */
+  private static String sha256(byte[] bytes) {
+    try {
+      byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+      StringBuilder hex = new StringBuilder(digest.length * 2);
+      for (byte b : digest) {
+        hex.append(String.format("%02x", b));
+      }
+      return hex.toString();
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the Java platform", e);
+    }
+  }
+
   @Override
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");

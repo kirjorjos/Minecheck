@@ -3,6 +3,7 @@ import java.net.URI
 import java.util.zip.ZipInputStream
 import net.minecheck.gradle.MinecheckLifecyclePlugin
 import net.minecheck.gradle.MinecheckLifecycleTest
+import net.minecheck.gradle.MinecheckScreenshotBaselines
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
@@ -443,6 +444,89 @@ registerInputLifecycle("testForgeInput", "forge")
 
 registerInputLifecycle("testQuiltInput", "quilt")
 
+val ciBaselines =
+  providers
+    .gradleProperty("minecheck.baselines")
+    .map { it.trim().equals("ci", ignoreCase = true) }
+    .orElse(providers.environmentVariable("CI").map { it.trim().toBoolean() })
+    .orElse(false)
+
+val updateScreenshotBaselines =
+  providers
+    .gradleProperty("minecheck.screenshots.update")
+    .map { it.trim().toBoolean() }
+    .orElse(false)
+
+val profileWidth =
+  providers.gradleProperty("minecheck.screenshot.width").map(String::toInt).orElse(854)
+val profileHeight =
+  providers.gradleProperty("minecheck.screenshot.height").map(String::toInt).orElse(480)
+val profileGuiScale =
+  providers.gradleProperty("minecheck.screenshot.guiScale").map(String::toInt).orElse(2)
+val profileScale =
+  providers.gradleProperty("minecheck.screenshot.scale").map(String::toDouble).orElse(1.0)
+val profileChat =
+  providers.gradleProperty("minecheck.screenshot.chat").map(String::toBoolean).orElse(false)
+
+fun registerScreenshotsLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  val runTask = "run${taskName.removePrefix("test")}"
+
+  tasks.register<MinecheckLifecycleTest>(runTask) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client alone and runs the Lua screenshot script (writes PNG captures into the run directory)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "screenshots-client.lua"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    worldName = "minecheck_world"
+    xvfbRun = true
+    cleanScreenshots = true
+    screenshotProfile = true
+    screenshotWidth.set(profileWidth)
+    screenshotHeight.set(profileHeight)
+    screenshotGuiScale.set(profileGuiScale)
+    screenshotScale.set(profileScale)
+    screenshotChatVisible.set(profileChat)
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+  }
+
+  tasks.register<MinecheckScreenshotBaselines>(taskName) {
+    group = "minecheck"
+    description =
+      "Compares the $loader screenshot captures against the $loader baseline tree, byte for byte"
+    dependsOn(runTask)
+
+    getLoader().set(loader)
+    capturesDir.set(layout.projectDirectory.dir("$runRoot/run/client/screenshots"))
+    baselinesDir.set(layout.projectDirectory.dir("tests/baselines"))
+    localBaselinesDir.set(layout.projectDirectory.dir("tests/local-baselines"))
+    ciMode.set(ciBaselines)
+    update.set(updateScreenshotBaselines)
+  }
+}
+
+registerScreenshotsLifecycle("testFabricShots", "fabric")
+
+registerScreenshotsLifecycle("testForgeShots", "forge")
+
+registerScreenshotsLifecycle("testQuiltShots", "quilt")
+
 tasks.named("test") {
   dependsOn(
     "testFabric",
@@ -470,6 +554,9 @@ tasks.named("test") {
     "testFabricWorldHandoff",
     "testForgeWorldHandoff",
     "testQuiltWorldHandoff",
+    "testFabricShots",
+    "testForgeShots",
+    "testQuiltShots",
     "spotlessCheck",
   )
 }

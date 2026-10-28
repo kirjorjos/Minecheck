@@ -103,6 +103,7 @@ public class QuiltEntrypoint implements ModInitializer {
           if (client != null) {
             ClientTickEvents.END_CLIENT_TICK.register(
                 c -> {
+                  client.pinClientClock();
                   if (!engine.isFinished() && client.isBootComplete()) {
                     engine.tick();
                   }
