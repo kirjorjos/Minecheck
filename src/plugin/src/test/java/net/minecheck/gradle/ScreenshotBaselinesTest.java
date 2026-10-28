@@ -96,6 +96,26 @@ class ScreenshotBaselinesTest {
   }
 
   @Test
+  void theMeasuredCiDriftPassesButALitFrameShiftDoesNot() throws Exception {
+    // Between two CI client processes the whole frame sits a level or two brighter or darker, with
+    // a 99.9th percentile of 10 levels: the drift the tolerance is sized for.
+    capture("drift", png(16, shade -> Math.min(255, shade + 10)));
+    baseline("drift", png(16, shade -> shade));
+    assertFalse(compare(false).failed(), "the measured CI drift must not fail a build");
+
+    // One level past the tolerance on the whole frame is a different picture, not noise.
+    capture(
+        "lit-shift",
+        png(16, shade -> Math.min(255, shade + ScreenshotBaselines.CHANNEL_TOLERANCE + 1)));
+    baseline("lit-shift", png(16, shade -> shade));
+
+    ScreenshotBaselines.Result result = compare(false);
+
+    assertTrue(result.failed(), "a frame this far off is a change, not drift");
+    assertTrue(result.failures().get(0).contains("lit-shift"), result.failures().get(0));
+  }
+
+  @Test
   void aDifferentPictureFailsAndNamesBothFiles() throws Exception {
     capture("title", png(16, 200));
     baseline("title", png(16, 60));
