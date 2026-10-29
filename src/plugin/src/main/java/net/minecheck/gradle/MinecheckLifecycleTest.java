@@ -69,6 +69,10 @@ import org.gradle.api.tasks.TaskAction;
  */
 public abstract class MinecheckLifecycleTest extends DefaultTask {
 
+  /** The listener's own log line: the documented way a program finds an ephemeral live port. */
+  private static final java.util.regex.Pattern LIVE_LISTEN =
+      java.util.regex.Pattern.compile("live listening on ([0-9a-fA-F.:\\[\\]]+):(\\d+)");
+
   private static final Gson GSON = new Gson();
 
   /** Loader Gradle task for the client, e.g. {@code :fabric-mod:runClient}. */
@@ -202,6 +206,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getExpectFailure();
+
+  /**
+   * A live-session driver file (see {@code tests/scripts/live-driver.txt}): {@code
+   * <chunk>|<expected reply>} per line, sent to the running script's live listener over TCP while
+   * the client is up.
+   *
+   * <p>Present means the run is expected to serve: the task finds the listener by the {@code live
+   * listening on host:port} line in the client's output, connects, sends the chunks, compares the
+   * replies, and disconnects so the script can continue. The script asserts the effects itself —
+   * the driver only proves the channel works.
+   */
+  @InputFile
+  @Optional
+  public abstract RegularFileProperty getLiveDriverFile();
 
   /**
    * Client launch descriptor: a {@code key=value} file written by the loader's {@code
@@ -354,6 +372,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path resultFile = getResultFile().get().getAsFile().toPath();
     Files.deleteIfExists(resultFile);
 
+    Path logFile = runLog(getRunDir().get(), "client-" + phase);
     getLogger().lifecycle("Minecheck: [{}] launching client {}", phase, getLoaderTask().get());
     Process p =
         start(
@@ -362,13 +381,134 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 List.of(),
                 descriptorPath(getClientLaunchFile()),
                 getXvfbRun().getOrElse(true)),
-            "client-" + phase);
+            "client-" + phase,
+            logFile);
+
+    // Before the verdict: a serving script is parked until the driver disconnects, so waiting for
+    // the verdict first would deadlock the pair.
+    List<String> liveProblems =
+        getLiveDriverFile().isPresent()
+            ? driveLive(getLiveDriverFile().get().getAsFile().toPath(), logFile, p)
+            : List.of();
+
     RunResultDto result = awaitVerdict(resultFile, Duration.ofMinutes(20), p);
     int exit = waitExit(p, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [{}] client exited (code {})", phase, exit);
 
     requireCleanExit(exit, "client " + phase);
     requirePassed(result, "client " + phase);
+    if (!liveProblems.isEmpty()) {
+      throw new GradleException("Minecheck live driver FAILED: " + String.join("; ", liveProblems));
+    }
+  }
+
+  /**
+   * Drives the script's live listener: finds it in the client's own log output, attaches, sends the
+   * driver file's chunks in order and compares each reply.
+   *
+   * <p>Discovery is by the {@code live listening on host:port} line, which is the documented way a
+   * program finds an ephemeral listener — the test exercises the same path a person's shell does.
+   * Returns the problems it found instead of throwing, so a mismatch cannot leave the game process
+   * running: the caller waits for the verdict and the process exit first, then fails the task.
+   */
+  private List<String> driveLive(Path driverFile, Path logFile, Process client) {
+    List<String> problems = new ArrayList<>();
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(driverFile, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      problems.add("cannot read the live driver file " + driverFile + ": " + e.getMessage());
+      return problems;
+    }
+
+    List<String[]> commands = new ArrayList<>();
+    for (String line : lines) {
+      String trimmed = line.trim();
+      if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+        continue;
+      }
+      int sep = trimmed.indexOf('|');
+      if (sep <= 0) {
+        problems.add("live driver line has no `chunk|expected` separator: " + trimmed);
+        continue;
+      }
+      commands.add(new String[] {trimmed.substring(0, sep), trimmed.substring(sep + 1)});
+    }
+    if (!problems.isEmpty()) {
+      return problems;
+    }
+    if (commands.isEmpty()) {
+      problems.add("the live driver file has no commands: " + driverFile);
+      return problems;
+    }
+
+    String host = null;
+    int port = -1;
+    long deadline = System.currentTimeMillis() + Duration.ofMinutes(5).toMillis();
+    while (System.currentTimeMillis() < deadline) {
+      java.util.regex.Matcher m = LIVE_LISTEN.matcher(readLog(logFile));
+      if (m.find()) {
+        host = m.group(1);
+        port = Integer.parseInt(m.group(2));
+        break;
+      }
+      if (client != null && !client.isAlive()) {
+        break;
+      }
+      sleep(500);
+    }
+    if (port <= 0) {
+      problems.add(
+          "the script never logged a live listener in "
+              + logFile
+              + " (expected a `live listening on host:port` line)");
+      return problems;
+    }
+
+    getLogger().lifecycle("Minecheck: [live] attaching to {}:{} ({}) ", host, port, driverFile);
+    try (java.net.Socket socket = new java.net.Socket()) {
+      socket.connect(new java.net.InetSocketAddress(host, port), 10_000);
+      // A served chunk may block (sleep, waitFor, joinServer) and the script keeps ticking until it
+      // finishes, so the read timeout is generous rather than tight.
+      socket.setSoTimeout(120_000);
+      java.io.PrintWriter out =
+          new java.io.PrintWriter(
+              new java.io.OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8),
+              true);
+      java.io.BufferedReader in =
+          new java.io.BufferedReader(
+              new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+
+      for (String[] command : commands) {
+        String chunk = command[0];
+        String expected = command[1];
+        out.print(chunk);
+        out.print('\n');
+        out.flush();
+        String reply = in.readLine();
+        if (reply == null) {
+          problems.add("the client closed the live session before replying to `" + chunk + "`");
+          break;
+        }
+        getLogger().lifecycle("Minecheck: [live] {} -> {}", chunk, reply);
+        if (!reply.equals(expected)) {
+          problems.add(
+              "live chunk `" + chunk + "` replied `" + reply + "`, expected `" + expected + "`");
+        }
+      }
+      // Closing the socket is the detach signal: the script's liveAttach returns its served count.
+    } catch (IOException e) {
+      problems.add("the live driver could not talk to the client: " + e.getMessage());
+    }
+    return problems;
+  }
+
+  private static String readLog(Path logFile) {
+    try {
+      return Files.isRegularFile(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+    } catch (IOException e) {
+      return "";
+    }
   }
 
   // ------------------------------------------------------- parallel server
@@ -873,12 +1013,27 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   }
 
   private Process start(ProcessBuilder pb, String label) throws IOException {
+    return start(pb, label, null);
+  }
+
+  /**
+   * Starts a process, forwarding its output to the build log — and, when {@code logFile} is given,
+   * to that file as well. The copy on disk is what the live driver reads to find the listener's
+   * port, and what is left behind to read after a failed run.
+   */
+  private Process start(ProcessBuilder pb, String label, Path logFile) throws IOException {
     if (pb.directory() == null) {
       pb.directory(getProject().getRootDir());
     }
     pb.redirectErrorStream(true);
     Process p = pb.start();
     String lp = label == null ? "" : label;
+    java.io.OutputStream fileOut = null;
+    if (logFile != null) {
+      Files.createDirectories(logFile.getParent());
+      fileOut = Files.newOutputStream(logFile);
+    }
+    final java.io.OutputStream sink = fileOut;
     new Thread(
             () -> {
               try {
@@ -887,12 +1042,27 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 int n;
                 while ((n = in.read(buf)) != -1) {
                   System.out.write(buf, 0, n);
+                  if (sink != null) {
+                    sink.write(buf, 0, n);
+                    sink.flush();
+                  }
                 }
-              } catch (IOException ignored) { }
+              } catch (IOException ignored) { } finally {
+                if (sink != null) {
+                  try {
+                    sink.close();
+                  } catch (IOException ignored) { }
+                }
+              }
             },
             "dh-forward-" + lp)
         .start();
     return p;
+  }
+
+  /** The per-phase log file under the run dir ({@code logs/<label>.log}). */
+  private Path runLog(String runDir, String label) {
+    return Path.of(runDir).resolve("logs").resolve(label + ".log");
   }
 
   /** Recursively deletes a directory tree (no-op if absent). */

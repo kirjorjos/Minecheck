@@ -797,6 +797,77 @@ local rest = r.bytes()
 
 ---
 
+## Live session (both sides)
+
+A script can open a TCP listener on the loopback interface and serve a program on the same machine — a shell, an editor plugin, another agent — while the game keeps running. This is how you drive a run interactively instead of editing a script and relaunching.
+
+The listener belongs to the script: nothing listens unless the script asks, the port is logged when it binds (the only way to find an ephemeral one), and every handle still open when the script finishes or fails is closed by the engine. All waiting calls yield per tick like every other action, so an idle listener costs one poll per tick and never stalls the game.
+
+### `minecheck.listen([port][, host]) → listener`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `port` | number \| nil | Port to bind; `0` (default) asks the OS for an ephemeral one. |
+| `host` | string \| nil | Interface to bind; defaults to `127.0.0.1`. |
+
+Binds and logs `Minecheck: live listening on <host>:<port>` at INFO. Raises a Lua error when the address cannot be bound (port already in use).
+
+**Listener methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `listener:port()` | number | The bound port (the real one, for `listen(0)`). |
+| `listener:accept([timeout])` | connection \| nil | Waits for a client (`timeout` = `config.defaultTimeout`); nil on timeout. |
+| `listener:isOpen()` | boolean | False once closed. |
+| `listener:close()` | nil | Stops listening; idempotent. |
+
+**Connection methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `conn:recv([timeout])` | string \| nil | One line, without its `\n` (or `\r\n`); nil on timeout **or** when the peer closed — `conn:isOpen()` tells them apart. |
+| `conn:send(text)` | boolean | Writes `text` plus a newline; false when the peer is gone. |
+| `conn:peer()` | string | The peer's `host:port`. |
+| `conn:isOpen()` | boolean | True until the peer closes or you close it. |
+| `conn:close()` | nil | Closes the connection; idempotent. |
+
+Frames are UTF-8 lines, capped at 1 MiB: a peer that never sends a newline raises instead of growing the buffer. The protocol on top is the script's own — the socket only carries lines.
+
+```lua
+local live = minecheck.listen(0) -- logs the port it got
+local conn = live:accept(60)
+if conn then
+  local line = conn:recv(60)
+  conn:send("received: " .. tostring(line))
+  conn:close()
+end
+live:close()
+```
+
+### `minecheck.liveAttach([port][, timeout]) → number | nil`
+
+The builtin served breakpoint, on top of the two calls above: listen, log the port, accept one client and serve it until it disconnects, then return the number of chunks served (nil when nobody attached in time).
+
+Each line the client sends is a **Lua chunk evaluated in the running script's globals**, so a chunk can read the script's own state and call any `minecheck` action; the reply is one line, `ok <value>` or `err <message>`. Because the script is parked inside this call, a chunk that blocks (`sleep`, `waitFor`, `joinServer`) suspends the script again and resumes when its condition holds — the game ticks on, and the client waits for that chunk's reply.
+
+```lua
+minecheck.log("paused for live input")
+local served = minecheck.liveAttach(0, 120) -- port in the log; 120 s to attach
+minecheck.log("served " .. tostring(served) .. " chunk(s)")
+```
+
+Then, from a shell:
+
+```console
+$ nc 127.0.0.1 43521
+return minecheck.getPlayer().pos.y
+ok 64.0
+minecheck.captureScreenshot("from-live")
+ok
+```
+
+---
+
 ## Assertions and result reporting
 
 ### `minecheck.expect(cond[, name]) → boolean`

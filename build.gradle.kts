@@ -326,6 +326,38 @@ fun registerInputLifecycle(taskName: String, loader: String) {
   }
 }
 
+fun registerLiveLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client, serves a live Lua session over loopback TCP from the script, and drives it from this task's own client (tests/scripts/live-driver.txt)"
+
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    script = "live-test.lua"
+    liveDriverFile.set(layout.projectDirectory.file("tests/scripts/live-driver.txt"))
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    worldName = "minecheck_world"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+  }
+}
+
 fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
   tasks.register<MinecheckLifecycleTest>(taskName) {
@@ -444,6 +476,12 @@ registerInputLifecycle("testForgeInput", "forge")
 
 registerInputLifecycle("testQuiltInput", "quilt")
 
+registerLiveLifecycle("testFabricLive", "fabric")
+
+registerLiveLifecycle("testForgeLive", "forge")
+
+registerLiveLifecycle("testQuiltLive", "quilt")
+
 val ciBaselines =
   providers
     .gradleProperty("minecheck.baselines")
@@ -538,6 +576,9 @@ tasks.named("test") {
     "testFabricInput",
     "testForgeInput",
     "testQuiltInput",
+    "testFabricLive",
+    "testForgeLive",
+    "testQuiltLive",
     "testFabricSpawn",
     "testForgeSpawn",
     "testQuiltSpawn",

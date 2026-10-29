@@ -3,6 +3,9 @@ package net.minecheck.common.script;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 import net.minecheck.common.config.ConfigData;
+import net.minecheck.common.live.LiveConnection;
+import net.minecheck.common.live.LiveException;
+import net.minecheck.common.live.LiveListener;
 import net.minecheck.common.net.PacketChannel;
 import net.minecheck.common.net.PacketValues;
 import net.minecheck.platform.api.ClientPlatform;
@@ -156,6 +159,10 @@ public final class LuaMinecheck {
     minecheck.set("bytes", new Bytes());
     minecheck.set("int64", new Int64());
     minecheck.set("reader", new Reader());
+
+    // Live session: a script-owned loopback socket, plus the builtin served breakpoint on top.
+    minecheck.set("listen", new Listen());
+    minecheck.set("liveAttach", new LiveAttach());
 
     // Third-party plugins (registered last so their names can be checked against every built-in):
     // flat minecheck.<name> plus the minecheck.ext[<plugin>][<name>] index.
@@ -2840,5 +2847,233 @@ public final class LuaMinecheck {
       }
       return out;
     }
+  }
+
+  // ------------------------------------------------------------ live session
+
+  /**
+   * minecheck.listen([port][, host]) -> listener
+   *
+   * <p>A TCP listener on the loopback interface that the script owns: it exists because the script
+   * asked for it, it closes when the script ends, and nothing listens otherwise. {@code port} 0
+   * (the default) asks the OS for an ephemeral one; the bound port is logged at INFO, which is how
+   * a program on the same machine finds an ephemeral listener.
+   */
+  private final class Listen extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int port = args.arg(1).optint(0);
+      String host = args.arg(2).optjstring(null);
+      try {
+        LiveListener listener = LiveListener.open(host, port);
+        engine.registerLive(listener);
+        return listenerTable(listener);
+      } catch (LiveException e) {
+        throw wrap("listen", e);
+      }
+    }
+  }
+
+  /**
+   * Method on a listener handle; {@code handle:accept()} passes the handle, so it is ignored.
+   *
+   * <p>{@code op} runs inside the poll loop for the ones that wait; the loop is the same
+   * cooperative shape every other wait uses: check once, then yield to the next client tick.
+   */
+  @FunctionalInterface
+  private interface LiveOp {
+    LuaValue run(Varargs args);
+  }
+
+  private final class LiveMethod extends VarArgFunction {
+    private final String name;
+    private final LiveOp op;
+
+    LiveMethod(String name, LiveOp op) {
+      this.name = name;
+      this.op = op;
+    }
+
+    @Override
+    public Varargs invoke(Varargs args) {
+      // `handle:method(...)` passes the handle as the first argument; the methods that take
+      // arguments must not see it. (`handle.method(...)` does not pass it, so keep the args as they
+      // are when the first one is not a table.)
+      Varargs rest = args.arg(1).istable() ? args.subargs(2) : args;
+      try {
+        return op.run(rest);
+      } catch (LuaError e) {
+        throw e;
+      } catch (LiveException e) {
+        throw wrap(name, e);
+      }
+    }
+  }
+
+  private LuaTable listenerTable(LiveListener listener) {
+    LuaTable t = new LuaTable();
+    t.set("port", new LiveMethod("port", args -> LuaValue.valueOf(listener.port())));
+    t.set("isOpen", new LiveMethod("isOpen", args -> LuaValue.valueOf(listener.isOpen())));
+    t.set(
+        "close",
+        new LiveMethod(
+            "close",
+            args -> {
+              listener.close();
+              return LuaValue.NIL;
+            }));
+    t.set("accept", new LiveMethod("accept", args -> acceptLoop(listener, args)));
+    return t;
+  }
+
+  private LuaValue acceptLoop(LiveListener listener, Varargs args) {
+    long deadline = deadline(args, 1);
+    while (true) {
+      LiveConnection conn = listener.poll();
+      if (conn != null) {
+        engine.registerLive(conn);
+        return connectionTable(conn);
+      }
+      if (clock.getAsLong() > deadline) {
+        return LuaValue.NIL;
+      }
+      globals.yield(LuaValue.NIL);
+    }
+  }
+
+  private LuaTable connectionTable(LiveConnection conn) {
+    LuaTable t = new LuaTable();
+    t.set("recv", new LiveMethod("recv", args -> recvLoop(conn, args)));
+    t.set(
+        "send", new LiveMethod("send", args -> LuaValue.valueOf(conn.send(args.checkjstring(1)))));
+    t.set("peer", new LiveMethod("peer", args -> LuaValue.valueOf(conn.peer())));
+    t.set("isOpen", new LiveMethod("isOpen", args -> LuaValue.valueOf(conn.isOpen())));
+    t.set(
+        "close",
+        new LiveMethod(
+            "close",
+            args -> {
+              conn.close();
+              return LuaValue.NIL;
+            }));
+    return t;
+  }
+
+  private LuaValue recvLoop(LiveConnection conn, Varargs args) {
+    long deadline = deadline(args, 1);
+    while (true) {
+      String line = conn.pollLine();
+      if (line != null) {
+        return LuaValue.valueOf(line);
+      }
+      if (!conn.isOpen() || clock.getAsLong() > deadline) {
+        return LuaValue.NIL;
+      }
+      globals.yield(LuaValue.NIL);
+    }
+  }
+
+  /**
+   * minecheck.liveAttach([port][, timeout]) -> int | nil
+   *
+   * <p>The builtin served breakpoint: listen, report the port, accept one client and serve it until
+   * it disconnects, then return the number of chunks served ({@code nil} when no client attached
+   * before the timeout). Every line the client sends is a Lua chunk evaluated in the running
+   * script's globals, so a served chunk can read script state and call any {@code minecheck}
+   * action; the reply is one line, {@code ok <value>} or {@code err <message>}.
+   *
+   * <p>Because the script is parked inside this call, a chunk that blocks (a {@code sleep}, a
+   * {@code waitFor}, a {@code joinServer}) simply suspends the script again and resumes when its
+   * condition holds — the game keeps ticking, and the client waits for the chunk to finish before
+   * its reply.
+   */
+  private final class LiveAttach extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int port = args.arg(1).optint(0);
+      double timeoutSeconds = args.arg(2).optdouble(config.defaultTimeout());
+
+      LiveListener listener;
+      try {
+        listener = LiveListener.open(null, port);
+      } catch (LiveException e) {
+        throw wrap("liveAttach", e);
+      }
+      engine.registerLive(listener);
+      try {
+        long deadline = clock.getAsLong() + (long) (timeoutSeconds * 1000);
+        LiveConnection conn = null;
+        while (conn == null) {
+          conn = listener.poll();
+          if (conn != null) {
+            break;
+          }
+          if (clock.getAsLong() > deadline) {
+            return LuaValue.NIL;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+        engine.registerLive(conn);
+        LOG.info(String.format("Minecheck: live client attached (%s)", conn.peer()));
+
+        int served = 0;
+        while (true) {
+          long lineDeadline = clock.getAsLong() + (long) (timeoutSeconds * 1000);
+          String line;
+          while (true) {
+            try {
+              line = conn.pollLine();
+            } catch (LiveException e) {
+              // A line over the cap is the client's error, not the run's: answer it and move on so
+              // the session stays usable.
+              conn.send("err " + oneLine(e.getMessage()));
+              line = null;
+              lineDeadline = clock.getAsLong();
+              break;
+            }
+            if (line != null || !conn.isOpen() || clock.getAsLong() > lineDeadline) {
+              break;
+            }
+            globals.yield(LuaValue.NIL);
+          }
+          if (line == null) {
+            break;
+          }
+          served++;
+          if (!conn.send(evaluate(line))) {
+            break;
+          }
+        }
+        LOG.info(String.format("Minecheck: live client detached after %d chunk(s)", served));
+        conn.close();
+        return LuaValue.valueOf(served);
+      } catch (LiveException e) {
+        throw wrap("liveAttach", e);
+      } finally {
+        listener.close();
+      }
+    }
+  }
+
+  /** Runs one served chunk against the script's globals and formats the one-line reply. */
+  private String evaluate(String source) {
+    try {
+      LuaValue chunk = globals.load(source, "@live");
+      Varargs out = chunk.invoke(LuaValue.NONE);
+      if (out.narg() == 0 || out.arg(1).isnil()) {
+        return "ok";
+      }
+      return "ok " + oneLine(out.arg(1).tojstring());
+    } catch (LuaError e) {
+      return "err " + oneLine(String.valueOf(e.getMessage()));
+    } catch (RuntimeException e) {
+      String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+      return "err " + oneLine(msg);
+    }
+  }
+
+  /** One reply is one line: a chunk's message must not smuggle a second frame in. */
+  private static String oneLine(String text) {
+    return text == null ? "" : text.replace("\r", " ").replace("\n", " ");
   }
 }

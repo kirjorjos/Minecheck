@@ -155,11 +155,11 @@ jobs:
           fi
           while IFS= read -r file; do
             case "$file" in
-              src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail testFabricShots" ;;
-              src/forge/*) LOADERS="$LOADERS testForge testForgeFail testForgeShots" ;;
-              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail testQuiltShots" ;;
+              src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail testFabricShots testFabricLive" ;;
+              src/forge/*) LOADERS="$LOADERS testForge testForgeFail testForgeShots testForgeLive" ;;
+              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail testQuiltShots testQuiltLive" ;;
               tests/baselines/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots" ;;
-              tests/scripts/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots" ;;
+              tests/scripts/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots testFabricLive testForgeLive testQuiltLive" ;;
               *) FULL=true ;;
             esac
           done < /tmp/changed-files.txt
