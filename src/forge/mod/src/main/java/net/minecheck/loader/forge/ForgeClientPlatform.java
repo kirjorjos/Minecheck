@@ -11,13 +11,21 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.KeyboardHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.screens.BackupConfirmScreen;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.chat.CommonComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.TranslatableComponent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
@@ -25,9 +33,13 @@ import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
-import net.minecraft.world.level.levelgen.presets.WorldPreset;
-import net.minecraft.world.level.levelgen.presets.WorldPresets;
+import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
+import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -69,6 +81,287 @@ public class ForgeClientPlatform implements ClientPlatform {
     return !reloadRequested || (reload != null && reload.isDone());
   }
 
+  // ------------------------------------------------------------ screenshots
+
+  /**
+   * Encode/write thread for captures: the GL readback stays on the render thread, but the crop, the
+   * PNG encode and the file write do not. One daemon thread is enough — captures are sequential in
+   * a script and the client must never wait on it.
+   */
+  private static final java.util.concurrent.ExecutorService SCREENSHOT_WRITER =
+      java.util.concurrent.Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "Minecheck-screenshot");
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** GL_RENDERER of the client, recorded in profile.json so renderer drift is diagnosable. */
+  private static volatile String screenshotRenderer;
+
+  /**
+   * Points the client's clock back at the integrated server's. See {@link
+   * net.minecheck.platform.api.ClientPlatform#pinClientClock()} for why the drift is invisible live
+   * but not in a capture.
+   *
+   * <p>Called every client tick from {@code ForgeEntrypoint}, after the level tick (where {@code
+   * ClientLevel.tickTime} advanced the day time) and before that frame is rendered. A mismatch is
+   * corrected in place; when the two already agree nothing is written, so a world the script froze
+   * is not touched.
+   */
+  @Override
+  public void pinClientClock() {
+    net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+    net.minecraft.client.multiplayer.ClientLevel level = minecraft.level;
+    if (level == null) {
+      return;
+    }
+    net.minecraft.server.MinecraftServer server = minecraft.getSingleplayerServer();
+    if (server == null) {
+      // Remote server: no authoritative value in this process (see pinClientClock's contract).
+      return;
+    }
+    net.minecraft.server.level.ServerLevel overworld = server.overworld();
+    if (overworld == null) {
+      return;
+    }
+    long serverTime = overworld.getDayTime();
+    if (level.getDayTime() != serverTime) {
+      level.setDayTime(serverTime);
+    }
+  }
+
+  @Override
+  public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    onClientThread(() -> captureScreenshot(request));
+  }
+
+  /**
+   * Frames the client has finished drawing, counted by the loader's per-frame hook.
+   *
+   * <p>A capture needs a frame count and not a delay: the read must pick up a frame drawn
+   * <em>after</em> the chat was cleared, and one tick is not one frame. When the client falls
+   * behind it catches up with several ticks in a single frame, so "clear on one tick, read on the
+   * next" can still be the same picture — which is how a capture once came back with the command
+   * feedback it had just cleared.
+   */
+  private static final java.util.concurrent.atomic.AtomicLong DRAWN_FRAMES =
+      new java.util.concurrent.atomic.AtomicLong();
+
+  /**
+   * Records that the client finished drawing a frame. Called by the entrypoint's render tick hook,
+   * which fires once per frame.
+   */
+  public static void notifyFrameDrawn() {
+    DRAWN_FRAMES.incrementAndGet();
+  }
+
+  /**
+   * The frame at which the pending capture cleared the chat, in {@link #DRAWN_FRAMES} terms. One
+   * capture is pending at a time — the script action blocks until its capture is done — so a field
+   * is enough.
+   */
+  private long chatClearedAtFrame;
+
+  /**
+   * One attempt at a capture, on the client (render) thread: empties the chat, waits for a frame
+   * drawn without it, then reads the main render target into a {@link
+   * com.mojang.blaze3d.platform.NativeImage} and hands the pixels to the writer thread; the script
+   * keeps ticking meanwhile.
+   *
+   * <p>Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
+   * it arrives, and command feedback from the scene setup arrives in the middle of the run), so a
+   * capture without chat empties the HUD. It is emptied here rather than by hiding chat in the
+   * options, because the server refuses every command from a client whose chat visibility is hidden
+   * ({@code chat.disabled.options}) — and a run that cannot run commands cannot set up a scene.
+   *
+   * <p>The clear only shows up in the next frame that is drawn, and the read otherwise returns the
+   * frame drawn <em>before</em> it, chat included. So the clear is followed by a wait for the frame
+   * counter to move, not by a read on the next tick.
+   */
+  private void captureScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    Minecraft mc = mc();
+    // Outside a world the HUD is not drawn, so there is no chat to take out of the picture.
+    boolean clearChat = !request.chatVisible() && mc.level != null;
+    if (clearChat && !request.prepared()) {
+      mc.gui.getChat().clearMessages(true);
+      chatClearedAtFrame = DRAWN_FRAMES.get();
+      request.markPrepared();
+      request.retry("clearing chat before the capture");
+      return;
+    }
+    if (clearChat && DRAWN_FRAMES.get() == chatClearedAtFrame) {
+      request.retry("waiting for the first frame drawn after the chat was cleared");
+      return;
+    }
+    com.mojang.blaze3d.pipeline.RenderTarget target = mc.getMainRenderTarget();
+    if (target == null) {
+      request.fail("no client framebuffer — is the client in a world?");
+      return;
+    }
+    com.mojang.blaze3d.platform.Window window = mc.getWindow();
+    if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
+      window.setWindowed(request.frameWidth(), request.frameHeight());
+      request.retry(
+          "the client window is "
+              + window.getWidth()
+              + "x"
+              + window.getHeight()
+              + ", not the "
+              + request.frameWidth()
+              + "x"
+              + request.frameHeight()
+              + " the screenshot profile pins it to");
+      return;
+    }
+
+    int frameWidth = window.getWidth();
+    int frameHeight = window.getHeight();
+    int guiScale = guiScale(window);
+    int x = 0;
+    int y = 0;
+    int cropWidth = frameWidth;
+    int cropHeight = frameHeight;
+    if (request.hasRegion()) {
+      long unit =
+          request.unit().equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_GUI)
+              ? guiScale
+              : 1;
+      long left = (long) request.x() * unit;
+      long top = (long) request.y() * unit;
+      long right = left + (long) request.width() * unit;
+      long bottom = top + (long) request.height() * unit;
+      long fromX = Math.max(0, left);
+      long fromY = Math.max(0, top);
+      long toX = Math.min(frameWidth, right);
+      long toY = Math.min(frameHeight, bottom);
+      if (toX <= fromX || toY <= fromY) {
+        request.fail(
+            "region "
+                + request.width()
+                + "x"
+                + request.height()
+                + " at ("
+                + request.x()
+                + ", "
+                + request.y()
+                + ") "
+                + request.unit()
+                + " has no overlap with the "
+                + frameWidth
+                + "x"
+                + frameHeight
+                + " frame");
+        return;
+      }
+      x = (int) fromX;
+      y = (int) fromY;
+      cropWidth = (int) (toX - fromX);
+      cropHeight = (int) (toY - fromY);
+    }
+
+    com.mojang.blaze3d.platform.NativeImage image;
+    try {
+      image = net.minecraft.client.Screenshot.takeScreenshot(target);
+    } catch (RuntimeException e) {
+      request.fail("framebuffer read failed: " + e.getMessage());
+      return;
+    }
+    if (screenshotRenderer == null) {
+      screenshotRenderer = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
+    }
+    java.nio.file.Path targetPath =
+        new java.io.File(mc.gameDirectory, "screenshots")
+            .toPath()
+            .resolve(request.name() + ".png")
+            .toAbsolutePath();
+    request.running();
+    writeScreenshot(
+        request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, targetPath);
+  }
+
+  /**
+   * The effective GUI scale: framebuffer pixels per GUI pixel, taken from the window the client
+   * laid its HUD out with (so {@code unit = "gui"} regions line up with what a script sees).
+   */
+  private static int guiScale(com.mojang.blaze3d.platform.Window window) {
+    int scaledWidth = window.getGuiScaledWidth();
+    if (scaledWidth <= 0) {
+      return 1;
+    }
+    int scale = Math.round((float) window.getWidth() / scaledWidth);
+    return Math.max(1, scale);
+  }
+
+  /** Crops, downscales, PNG-encodes and writes the capture — all off the render thread. */
+  private static void writeScreenshot(
+      net.minecheck.platform.api.ScreenshotRequest request,
+      com.mojang.blaze3d.platform.NativeImage source,
+      int x,
+      int y,
+      int cropWidth,
+      int cropHeight,
+      int frameWidth,
+      int frameHeight,
+      int guiScale,
+      java.nio.file.Path target) {
+    SCREENSHOT_WRITER.execute(
+        () -> {
+          com.mojang.blaze3d.platform.NativeImage out = null;
+          try {
+            int outWidth = Math.max(1, (int) Math.round(cropWidth * request.scale()));
+            int outHeight = Math.max(1, (int) Math.round(cropHeight * request.scale()));
+            out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
+            for (int dy = 0; dy < outHeight; dy++) {
+              int sy = y + (int) ((long) dy * cropHeight / outHeight);
+              for (int dx = 0; dx < outWidth; dx++) {
+                int sx = x + (int) ((long) dx * cropWidth / outWidth);
+                out.setPixelRGBA(dx, dy, source.getPixelRGBA(sx, sy));
+              }
+            }
+            java.nio.file.Path directory = target.getParent();
+            java.nio.file.Files.createDirectories(directory);
+            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
+            out.writeToFile(tmp);
+            java.nio.file.Files.move(
+                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            byte[] bytes = java.nio.file.Files.readAllBytes(target);
+            net.minecheck.common.screenshot.ScreenshotProfile.write(
+                directory,
+                frameWidth,
+                frameHeight,
+                guiScale,
+                request.scale(),
+                request.chatVisible(),
+                screenshotRenderer);
+            request.succeed(target, outWidth, outHeight, bytes.length, sha256(bytes));
+          } catch (Exception e) {
+            request.fail(
+                "framebuffer read failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          } finally {
+            if (out != null) {
+              out.close();
+            }
+            source.close();
+          }
+        });
+  }
+
+  /** Lower-case hex SHA-256, the digest a baseline comparison reports. */
+  private static String sha256(byte[] bytes) {
+    try {
+      byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+      StringBuilder hex = new StringBuilder(digest.length * 2);
+      for (byte b : digest) {
+        hex.append(String.format("%02x", b));
+      }
+      return hex.toString();
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the Java platform", e);
+    }
+  }
+
   @Override
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");
@@ -84,45 +377,61 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.createWorldOpenFlows().loadLevel(mc.screen, worldName);
-          proceedPastExperimentalWarning(mc);
+          mc.loadLevel(worldName);
+          answerWorldLoadPrompt(mc);
         });
   }
 
   /**
-   * Accepts the "this world has experimental settings" question Forge puts in the way of a local
-   * world load.
+   * Answers the "this world has experimental settings" question 1.18.2 puts in the way of a world
+   * load.
    *
-   * <p>{@code WorldOpenFlows.loadLevel} is a <em>player</em> flow: it stops on a confirmation
-   * whenever the world's settings are not lifecycle stable, which is the case for the worlds saved
-   * by this dev client — Forge enables every mod's datapack in the saved {@code DataPacks} list
-   * ({@code mod:emi}, {@code mod:jei}, …), so those worlds are not the builtin registries alone.
-   * The screen is set synchronously by the join itself, so a script that called {@code
+   * <p>1.18.2 stops a load on a confirmation screen whenever the world's settings are not lifecycle
+   * stable, which is the case both for a world this harness generates — a flat overworld is not the
+   * noise generator {@code LevelStem.stable} looks for — and for the worlds this dev client saves,
+   * because Forge writes every mod's datapack into the saved {@code DataPacks} list ({@code
+   * mod:emi}, {@code mod:jei}, …), so they are not the builtin registries alone. The screen is set
+   * synchronously by the load itself, so a script that called {@code createWorld} or {@code
    * joinLocalWorld} would otherwise sit on it until its timeout, with no world, no error and no way
    * to answer it: {@code isOnTitleScreen} is false, {@code isWorldReady} is false, and nothing is
    * connecting.
    *
-   * <p>The join request <em>is</em> the confirmation, so press {@code Proceed} — the same answer
+   * <p>The load request <em>is</em> the confirmation, so press {@code Proceed} — the same answer
    * the screen's own yes-button gives, which re-runs the load with the warning marked as confirmed.
-   * Matched on the button label rather than the screen class: {@code BackupConfirmScreen} is also a
-   * {@code ConfirmScreen} (the "back up this world first" question for old customized worlds) and
-   * that one has no {@code Proceed}, so it is left for a human to answer.
+   * On the form that offers to back the world up first, press {@code Load world anyway}: a backup
+   * exists to protect a human's save, and a harness world is created and thrown away by the run.
+   * Both are matched on their own labels, so any other confirmation — a datapack failure, say — is
+   * left alone and still fails the run.
    */
-  private static void proceedPastExperimentalWarning(Minecraft mc) {
-    if (!(mc.screen instanceof net.minecraft.client.gui.screens.ConfirmScreen confirm)) {
-      return;
+  private static void answerWorldLoadPrompt(Minecraft mc) {
+    Screen screen = mc.screen;
+    if (screen instanceof BackupConfirmScreen) {
+      pressLabelled(screen, new TranslatableComponent("selectWorld.backupJoinSkipButton"));
+    } else if (screen instanceof ConfirmScreen
+        && new TranslatableComponent("selectWorld.backupQuestion.experimental")
+            .getString()
+            .equals(screen.getTitle().getString())) {
+      pressLabelled(screen, CommonComponents.GUI_PROCEED);
     }
-    net.minecraft.network.chat.Component proceed =
-        net.minecraft.network.chat.CommonComponents.GUI_PROCEED;
-    for (net.minecraft.client.gui.components.events.GuiEventListener element : confirm.children()) {
-      if (element instanceof net.minecraft.client.gui.components.AbstractWidget widget
-          && proceed.equals(widget.getMessage())) {
-        LOG.info("joinLocalWorld: confirming the world's experimental settings (Proceed)");
-        widget.mouseClicked(
-            widget.x + widget.getWidth() / 2.0, widget.y + widget.getHeight() / 2.0, 0);
+  }
+
+  /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
+  private static void pressLabelled(Screen screen, Component label) {
+    for (GuiEventListener child : screen.children()) {
+      if (child instanceof Button button
+          && label.getString().equals(button.getMessage().getString())) {
+        LOG.info(
+            String.format(
+                "world load: answered the \"%s\" prompt with \"%s\"",
+                screen.getTitle().getString(), label.getString()));
+        button.onPress();
         return;
       }
     }
+    LOG.warning(
+        String.format(
+            "world load: \"%s\" is up but has no \"%s\" button",
+            screen.getTitle().getString(), label.getString()));
   }
 
   @Override
@@ -153,14 +462,23 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
-          WorldPreset flat =
-              registryAccess
-                  .registryOrThrow(Registry.WORLD_PRESET_REGISTRY)
-                  .getOrThrow(WorldPresets.FLAT);
+          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
+          // have built, dropped into the default dimension set in place of the noise overworld.
+          Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
+          Registry<StructureSet> structureSets =
+              registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
+          FlatLevelSource flat =
+              new FlatLevelSource(
+                  structureSets, FlatLevelGeneratorSettings.getDefault(biomes, structureSets));
+          Registry<DimensionType> dimensionTypes =
+              registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
+          Registry<LevelStem> dimensions =
+              WorldGenSettings.withOverworld(
+                  dimensionTypes, WorldGenSettings.makeDefault(registryAccess).dimensions(), flat);
           WorldGenSettings generatorOptions =
-              flat.createWorldGenSettings(options.seed(), options.structures(), false);
-          mc.createWorldOpenFlows()
-              .createFreshLevel(options.name(), levelSettings, registryAccess, generatorOptions);
+              new WorldGenSettings(options.seed(), options.structures(), false, dimensions);
+          mc.createLevel(options.name(), levelSettings, registryAccess, generatorOptions);
+          answerWorldLoadPrompt(mc);
         });
   }
 
@@ -476,6 +794,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
       mc.gameMode.useItemOn(
           mc.player,
+          mc.level,
           net.minecraft.world.InteractionHand.MAIN_HAND,
           (net.minecraft.world.phys.BlockHitResult) hit);
     }
@@ -568,7 +887,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.commandUnsigned(command);
+    // 1.18.2 has no command-only send: the client routes a leading "/" itself.
+    mc.player.chat(command.startsWith("/") ? command : "/" + command);
   }
 
   @Override

@@ -1,0 +1,9 @@
+# Chunks the lifecycle task's live driver sends to a serving script, one per line, with the reply it
+# must get back: <chunk>|<expected reply>. The script (live-test.lua) serves them with
+# minecheck.liveAttach, so each line is evaluated in that script's globals.
+#
+# The chunks do the two things a debugging session needs: call the API and read game state, then
+# leave state behind for the script to assert on after the session ends.
+return 1 + 1|ok 2
+_G.driverSawSide = minecheck.side(); _G.driverSawPlayer = minecheck.getPlayer().name; return _G.driverSawPlayer|ok Dev
+_G.driverTouched = true; return "touched"|ok touched

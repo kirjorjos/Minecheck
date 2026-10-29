@@ -1,22 +1,21 @@
 package net.minecheck.platform.yarn;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import mezz.jei.api.gui.IRecipeLayoutDrawable;
 import mezz.jei.api.gui.ingredient.IRecipeSlotView;
 import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
-import mezz.jei.api.recipe.IFocusGroup;
 import mezz.jei.api.recipe.IRecipeManager;
 import mezz.jei.api.recipe.RecipeIngredientRole;
-import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.recipe.category.IRecipeCategory;
 import mezz.jei.api.recipe.transfer.IRecipeTransferHandler;
-import mezz.jei.api.recipe.transfer.IRecipeTransferManager;
 import mezz.jei.api.runtime.IJeiRuntime;
+import mezz.jei.common.gui.recipes.layout.IRecipeLayoutInternal;
+import mezz.jei.common.recipes.RecipeTransferManager;
 import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.MinecraftClient;
@@ -31,6 +30,12 @@ import net.minecraft.util.registry.Registry;
  * <p>JEI is a soft dependency: this class is only instantiated when the mod is loaded, and every
  * JEI type it touches is used inside method bodies, so an absent JEI is never resolved. The runtime
  * is handed over by {@link MinecheckJeiPlugin}, which JEI itself instantiates.
+ *
+ * <p>Two things JEI exposes on 1.18.2 only through internals are reached deliberately and in one
+ * place: the slot views of a laid-out recipe, and the transfer manager that owns the per-screen
+ * transfer handlers (JEI 11 promoted it to the API as {@code IRecipeTransferManager}). Both reads
+ * happen inside try/catch so a JEI build that moves them degrades to "no ghost slots" / "fill
+ * refused" instead of breaking the script.
  */
 public final class JeiRecipeViewer implements RecipeViewer {
 
@@ -38,6 +43,9 @@ public final class JeiRecipeViewer implements RecipeViewer {
 
   /** JEI's runtime, or {@code null} while JEI is absent or has not started. */
   private static volatile IJeiRuntime runtime;
+
+  /** Cached private field on JEI's recipes screen; {@code null} until first looked up. */
+  private static volatile Field transferManagerField;
 
   static void setRuntime(IJeiRuntime value) {
     runtime = value;
@@ -98,12 +106,14 @@ public final class JeiRecipeViewer implements RecipeViewer {
       if (slots == null) {
         return false;
       }
-      IRecipeTransferManager transfers = runtime.getRecipeTransferManager();
+      RecipeTransferManager transfers = transferManager();
       if (transfers == null) {
         return false;
       }
-      IRecipeTransferHandler handler =
-          transfers.getRecipeTransferHandler(menu, match.category()).orElse(null);
+      @SuppressWarnings("unchecked")
+      IRecipeTransferHandler<ScreenHandler, Object> handler =
+          (IRecipeTransferHandler<ScreenHandler, Object>)
+              transfers.getRecipeTransferHandler(menu, (IRecipeCategory<Object>) match.category());
       if (handler == null) {
         return false;
       }
@@ -119,6 +129,9 @@ public final class JeiRecipeViewer implements RecipeViewer {
   /** One recipe JEI knows: the category that owns it and the recipe object itself. */
   private record RecipeMatch(IRecipeCategory<?> category, Object recipe) {}
 
+  /** A laid-out recipe: its slot views plus the drawable JEI handed us (needed for transfer). */
+  private record Layout(IRecipeSlotsView slots, IRecipeLayoutDrawable drawable) {}
+
   private static volatile boolean probed;
 
   /**
@@ -133,11 +146,10 @@ public final class JeiRecipeViewer implements RecipeViewer {
       return;
     }
     probed = true;
-    int crafting =
-        manager
-            .getRecipeType(new Identifier("minecraft", "crafting"))
-            .map(type -> countFor(manager, type))
-            .orElse(-1);
+    IRecipeCategory<?> crafting =
+        manager.getRecipeCategory(new Identifier("minecraft", "crafting"), false);
+    int craftingRecipes =
+        crafting == null ? -1 : manager.getRecipes(crafting, List.of(), true).size();
     LOG.info(
         String.format(
             "JEI index: %s categories, %s recipes, sample recipe ids %s | ingredients: %s | crafting recipes: %s",
@@ -145,7 +157,7 @@ public final class JeiRecipeViewer implements RecipeViewer {
             recipes,
             sample,
             rt.getIngredientManager().getAllItemStacks().size(),
-            crafting));
+            craftingRecipes));
   }
 
   /**
@@ -189,36 +201,56 @@ public final class JeiRecipeViewer implements RecipeViewer {
     return null;
   }
 
-  /** Diagnostic helper: how many recipes JEI holds for a given recipe type. */
+  /**
+   * Lays the recipe out the way JEI would draw it. JEI 10's drawable carries no slot views, so they
+   * come off the internal layout that backs it.
+   */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  private static int countFor(IRecipeManager manager, RecipeType<?> type) {
-    int n = 0;
-    Iterator<?> it = manager.createRecipeLookup((RecipeType) type).includeHidden().get().iterator();
-    while (it.hasNext()) {
-      it.next();
-      n++;
-    }
-    return n;
-  }
-
-  /** The laid-out slot views of a recipe, as JEI would draw them for that recipe. */
-  private static IRecipeSlotsView slotsView(RecipeMatch match) {
+  private static Layout layout(RecipeMatch match) {
     IJeiRuntime rt = runtime;
     if (rt == null) {
       return null;
     }
-    IFocusGroup focus = rt.getJeiHelpers().getFocusFactory().getEmptyFocusGroup();
-    return layout(rt.getRecipeManager(), match, focus)
-        .map(IRecipeLayoutDrawable::getRecipeSlotsView)
-        .orElse(null);
+    IRecipeLayoutDrawable drawable =
+        rt.getRecipeManager()
+            .createRecipeLayoutDrawable((IRecipeCategory) match.category(), match.recipe(), null);
+    if (!(drawable instanceof IRecipeLayoutInternal<?> internal)) {
+      return null;
+    }
+    return new Layout(internal.getRecipeSlots().getView(), drawable);
   }
 
-  @SuppressWarnings({"rawtypes", "unchecked"})
-  private static Optional<IRecipeLayoutDrawable<Object>> layout(
-      IRecipeManager manager, RecipeMatch match, IFocusGroup focus) {
-    return (Optional)
-        manager.createRecipeLayoutDrawable(
-            (IRecipeCategory) match.category(), match.recipe(), focus);
+  private static IRecipeSlotsView slotsView(RecipeMatch match) {
+    Layout layout = layout(match);
+    return layout == null ? null : layout.slots();
+  }
+
+  /**
+   * JEI 10 builds its transfer manager but never hands it out: the only reachable instance is the
+   * one {@code IJeiRuntime#getRecipesGui()} holds. Read once and cached; a JEI that renames the
+   * field yields {@code null} and fill is simply refused.
+   */
+  private static RecipeTransferManager transferManager() {
+    IJeiRuntime rt = runtime;
+    if (rt == null) {
+      return null;
+    }
+    Object gui = rt.getRecipesGui();
+    if (gui == null) {
+      return null;
+    }
+    try {
+      Field field = transferManagerField;
+      if (field == null || !field.getDeclaringClass().isInstance(gui)) {
+        field = gui.getClass().getDeclaredField("recipeTransferManager");
+        field.setAccessible(true);
+        transferManagerField = field;
+      }
+      return (RecipeTransferManager) field.get(gui);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.log(Level.FINE, "JEI 10: recipe transfer manager is not reachable", e);
+      return null;
+    }
   }
 
   /** The item ids a ghost slot accepts, tags already expanded to their members by JEI. */

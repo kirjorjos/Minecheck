@@ -5,7 +5,11 @@ if minecheck.clickGui("Proceed to main menu", 0, 1) then
   minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
 end
 
-local joined = minecheck.joinServer("localhost:25565", 120)
+-- 300 s, not 120: the join budget starts when this script does, while the dedicated server is
+-- still booting in parallel — a loaded CI runner took 143 s from server launch to `Done`, all of it
+-- after the port was already accepting connections (so every attempt in that window is dropped).
+-- 120 s ran out before the server was up and the client gave up one retry short of joining.
+local joined = minecheck.joinServer("localhost:25565", 300)
 if not minecheck.expect(joined, "joined beacon-test server") then
   minecheck.fail("joinServer failed")
 end
@@ -166,12 +170,20 @@ end
 -- its checks always run. JEI in this harness starts before the dedicated server's recipe sync and
 -- can stay empty for the whole session, so its content is probed *after* the reload at the end of
 -- the script (see there) — a viewer that indexes too early is exactly what the reload is for.
+-- Which viewer wins the priority order is a property of what is installed, not of the harness:
+-- EMI ships no Forge build for 1.18.2, so the priority there is JEI. The assertions name whichever
+-- one this loader actually has.
+local emiInstalled = minecheck.isModLoaded("emi")
+local priorityId = emiInstalled and "emi" or "jei"
 local viewer = minecheck.recipeViewer()
 check(viewer ~= nil, "priority recipe viewer bridged")
-check(viewer.id == "emi", "priority recipe viewer is emi (got " .. tostring(viewer.id) .. ")")
-checkViewer(nil, "priority (EMI)")
-check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
+check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
 check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
+
+if emiInstalled then
+  checkViewer(nil, "priority (EMI)")
+  check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
+end
 
 local jeiInstalled = minecheck.isModLoaded("jei")
 if jeiInstalled then
@@ -211,25 +223,59 @@ end
 local inv2 = minecheck.openScreen("inventory", nil, 10)
 check(inv2, "inventory reopened")
 check(minecheck.slotCount("inventory") > 0, "inventory has slots")
-local s36 = minecheck.getSlot(36, "inventory")
-check(s36.empty, "emerald no longer in hotbar slot 36 (moved to beacon)")
-local sword = minecheck.getSlot(37, "inventory")
-check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in slot 37")
+-- The hotbar's first slot is not a constant: the survival handler puts it at 36, while the creative
+-- inventory puts the item-list tabs at 0..44 and the hotbar at 45..53 (slotCount 54). A read at 36
+-- on the creative screen returns a tab item and says nothing about the player's hotbar.
+local function hotbarStart()
+  return minecheck.slotCount("inventory") > 46 and 45 or 36
+end
+
+-- Closing the beacon screen hands the payment slot's stack back to the player (vanilla returns it
+-- on close; only activating an effect consumes it), so the emerald is expected back in the
+-- inventory, anywhere — the beacon screen already showed the move itself (payment slot full, the
+-- main slot it came from empty). What must hold after the round trip is that there is exactly one:
+-- the move through the beacon neither duplicated nor lost it.
+local function emeraldCount()
+  local total = 0
+  for i = 0, minecheck.slotCount("inventory") - 1 do
+    local s = minecheck.getSlot(i, "inventory")
+    if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
+      total = total + s.count
+    end
+  end
+  return total
+end
+
+local emeraldBack = minecheck.waitFor(function()
+  return emeraldCount() == 1
+end, 10)
+if not emeraldBack then
+  for i = 0, minecheck.slotCount("inventory") - 1 do
+    local s = minecheck.getSlot(i, "inventory")
+    if s ~= nil and not s.empty then
+      minecheck.log("beacon test: slot " .. i .. " = " .. tostring(s.id) .. " x" .. tostring(s.count))
+    end
+  end
+end
+check(emeraldBack, "the emerald came back from the beacon screen once (got " .. emeraldCount() .. ")")
+
+local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
+check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
 check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
 local redstoneReady = minecheck.waitFor(function()
-  local s = minecheck.getSlot(38, "inventory")
+  local s = minecheck.getSlot(hotbarStart() + 2, "inventory")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8
 end, 30)
-check(redstoneReady, "server gave the 8-redstone stack (hotbar slot 38)")
-local partial = minecheck.moveItem(38, 10, 3, "inventory")
+check(redstoneReady, "server gave the 8-redstone stack (third hotbar slot)")
+local partial = minecheck.moveItem(hotbarStart() + 2, 10, 3, "inventory")
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
   local s = minecheck.getSlot(10, "inventory")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 3
 end, 10)
 check(moved3, "destination holds exactly 3 redstone")
-local leftOver = minecheck.getSlot(38, "inventory")
+local leftOver = minecheck.getSlot(hotbarStart() + 2, "inventory")
 check(leftOver.id == "minecraft:redstone" and leftOver.count == 5, "source keeps the remaining 5 redstone")
 
 local typed = minecheck.typeText("give @s minecraft:diamond 2", "command")
@@ -246,7 +292,7 @@ check(chatClosed, "chat screen closed after submitting the typed command")
 local inv3 = minecheck.openScreen("inventory", nil, 10)
 check(inv3, "inventory reopened for the typeText check")
 local gotDiamonds = minecheck.waitFor(function()
-  for i = 36, 44 do
+  for i = hotbarStart(), hotbarStart() + 8 do
     local s = minecheck.getSlot(i, "inventory")
     if s ~= nil and not s.empty and s.id == "minecraft:diamond" and s.count == 2 then
       return true
@@ -300,6 +346,22 @@ check(
   "server gave 4 oak planks"
 )
 
+-- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
+-- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
+-- background thread and is still filling it when the script gets here (see the note at the top of
+-- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
+-- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
+-- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
+local indexed = minecheck.waitFor(function()
+  return #minecheck.getRecipeSlots("minecraft:stick") > 0
+end, 30)
+if not indexed then
+  minecheck.runCommand("reload")
+  minecheck.waitFor(function()
+    return #minecheck.getRecipeSlots("minecraft:stick") > 0
+  end, 30)
+end
+
 local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
 check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
 check(
@@ -309,7 +371,7 @@ check(
 if plankGhost ~= nil then
   local source = slotHolding("minecraft:oak_planks")
   local dest = nil
-  for i = 36, 44 do
+  for i = hotbarStart(), hotbarStart() + 8 do
     local s = minecheck.getSlot(i, "inventory")
     if s ~= nil and s.empty and i ~= source then
       dest = i
@@ -341,16 +403,30 @@ end
 -- purpose: a reload re-syncs client state, which would perturb the inventory reads above.)
 check(minecheck.reloadResources(30), "client resource reload finished mid-session")
 
+-- `checkViewer` asserts that a fill is refused when no container is open, and the ghost-slot moves
+-- above left the inventory open: close it with the same key that opened it before probing JEI.
+if minecheck.isScreenOpen() then
+  minecheck.keyPress("key.inventory")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+end
+
 -- JEI is probed only now, with the client's recipes long since synced and a reload behind it: an
 -- index that is still empty here is empty for the session, not just early. The provider logs what
 -- JEI holds on this read. If JEI started before the server's recipe sync (which is what happens on
 -- a dedicated-server client) its index was built from an empty recipe manager; a server-side
 -- datapack reload re-sends the sync, which is the event JEI's rebuild path waits for.
 if jeiInstalled then
-  minecheck.runCommand("reload")
   local indexed = minecheck.waitFor(function()
     return #minecheck.getRecipeSlots("minecraft:stick", "jei") > 0
-  end, 40)
+  end, 20)
+  if not indexed then
+    minecheck.runCommand("reload")
+    indexed = minecheck.waitFor(function()
+      return #minecheck.getRecipeSlots("minecraft:stick", "jei") > 0
+    end, 30)
+  end
   if indexed then
     checkViewer("jei", "JEI")
   else

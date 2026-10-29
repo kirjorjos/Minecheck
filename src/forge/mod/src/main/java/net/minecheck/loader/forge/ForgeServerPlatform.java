@@ -20,9 +20,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureManager;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
-import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 
 public class ForgeServerPlatform implements ServerPlatform {
 
@@ -85,7 +85,8 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          return s.getCommands().performPrefixedCommand(s.createCommandSourceStack(), command);
+          String line = command.startsWith("/") ? command.substring(1) : command;
+          return s.getCommands().performCommand(s.createCommandSourceStack(), line);
         });
   }
 
@@ -269,7 +270,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       throw new IllegalArgumentException("invalid structure id: " + id);
     }
     ServerLevel level = overworld();
-    StructureTemplateManager manager = level.getStructureManager();
+    StructureManager manager = level.getStructureManager();
     StructureTemplate template =
         manager
             .get(location)

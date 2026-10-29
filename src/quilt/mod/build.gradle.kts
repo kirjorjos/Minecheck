@@ -13,11 +13,11 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
-val emiVersion = "1.1.24+1.19.2+fabric"
+val emiVersion = "0.7.3+1.18.2"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(11) }
+  mappings { yarn(4) }
   quilt { loader("0.20.2") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -36,13 +36,21 @@ repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
 }
 
+tasks.processResources {
+  inputs.property("minecraftVersion", mcVersion)
+  filesMatching("quilt.mod.json") { expand("minecraft_version" to mcVersion) }
+}
+
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
   implementation(fabricClasses)
+  // QFAPI, not plain Fabric API: the entrypoint implements QSL's ModInitializer, and QSL is only
+  // published bundled inside QFAPI (there is no standalone QSL artifact for 1.18.2). 1.0.0-beta.28
+  // is the last build for this version.
   add(
     "modImplementation",
-    "org.quiltmc.quilted-fabric-api:quilted-fabric-api:4.0.0-beta.30+0.77.0-1.19.2",
+    "org.quiltmc.quilted-fabric-api:quilted-fabric-api:1.0.0-beta.28+0.67.0-1.18.2",
   )
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
@@ -75,6 +83,14 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
+
+// QFAPI 1.0.0-beta.28 bundles Fabric API 0.67, whose fabric-rendering-fluids-v1 module carries a
+// `quilt_loader.recommends` key that Quilt Loader 0.20.2 rejects as invalid metadata — the client
+// does not start at all without this. It is the workaround the loader itself suggests in that
+// error, and it only relaxes how strictly mod metadata is parsed.
+tasks.withType<JavaExec>().configureEach {
+  jvmArgs("-Dloader.workaround.disable_strict_parsing=true")
+}
 
 tasks.register("printServerClasspath") {
   doLast { println(configurations.runtimeClasspath.get().asPath) }

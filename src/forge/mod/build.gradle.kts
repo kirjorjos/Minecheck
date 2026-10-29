@@ -13,18 +13,27 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
-val emiVersion = "1.1.24+1.19.2+forge"
-val jeiVersion = "11.6.0.1024"
-val reiVersion = "9.2.784+forge"
+// The compatible range `mods.toml` declares, from the same single source of truth: "1.18.2"
+// accepts 1.18.x, "26.1" accepts 26.1.x.
+val mcNext =
+  mcVersion.split('.').let { parts ->
+    if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
+  }
 
-// REI's mods.toml makes both mandatory (`architectury` >= 5.7, `cloth_config` >= 7.0).
-val clothConfigVersion = "8.3.134+forge"
-val architecturyVersion = "6.6.92+forge"
+val jeiVersion = "10.2.1.1002"
+val reiVersion = "8.4.778+forge"
+
+// REI's mods.toml makes both mandatory (`architectury`, `cloth_config`), left implicit on 1.18.2.
+// Both are taken from their authors' own mavens rather than Modrinth: a Modrinth version there
+// carries a Fabric and a Forge file, and the primary file — the one a bare coordinate resolves to —
+// is the Fabric jar, which FML then rejects as "cloth_config not installed".
+val clothConfigVersion = "6.5.102"
+val architecturyVersion = "4.12.94"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("43.4.0") }
+  minecraftForge { loader("40.3.12") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -32,6 +41,15 @@ unimined.minecraft {
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
+  maven("https://maven.shedaniel.me/") { content { includeGroup("me.shedaniel.cloth") } }
+  maven("https://maven.architectury.dev/") { content { includeGroup("dev.architectury") } }
+}
+
+tasks.processResources {
+  inputs.property("minecraftVersion", mcVersion)
+  filesMatching("META-INF/mods.toml") {
+    expand("minecraft_version" to mcVersion, "minecraft_next" to mcNext)
+  }
 }
 
 val commonOutput =
@@ -54,13 +72,14 @@ dependencies {
   implementation(project(":platform-api"))
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
-  add("modImplementation", "mezz.jei:jei-1.19.2-forge:$jeiVersion") { isTransitive = false }
+  // EMI has no Forge artifact on 1.18.2 (Modrinth lists it for fabric/quilt only), so the Forge
+  // module is bridged against JEI/REI alone.
+  add("modImplementation", "mezz.jei:jei-1.18.2-forge:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
+  add("modImplementation", "me.shedaniel.cloth:cloth-config-forge:$clothConfigVersion") {
     isTransitive = false
   }
-  add("modImplementation", "maven.modrinth:architectury-api:$architecturyVersion") {
+  add("modImplementation", "dev.architectury:architectury-forge:$architecturyVersion") {
     isTransitive = false
   }
 }

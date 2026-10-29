@@ -14,18 +14,25 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
-val jeiVersion = "11.6.0.1024"
-val emiVersion = "1.1.24+1.19.2+fabric"
-val reiVersion = "9.2.784+fabric"
+// The compatible range the mod metadata declares, from the same single source of truth: "1.18.2"
+// accepts 1.18.x, "26.1" accepts 26.1.x.
+val mcNext =
+  mcVersion.split('.').let { parts ->
+    if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
+  }
 
-// REI 9.x does not declare these in its fabric.mod.json, but its own bytecode references them
+val jeiVersion = "10.2.1.1002"
+val emiVersion = "0.7.3+1.18.2"
+val reiVersion = "8.4.778+fabric"
+
+// REI does not declare these in its fabric.mod.json, but its own bytecode references them
 // (`dev/architectury/**`, `me/shedaniel/clothconfig2/**`), so they must be loaded at runtime.
-val clothConfigVersion = "8.3.134+fabric"
-val architecturyVersion = "6.6.92+fabric"
+val clothConfigVersion = "6.5.102"
+val architecturyVersion = "4.12.94+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(11) }
+  mappings { yarn(4) }
   fabric { loader("0.15.11") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -33,6 +40,13 @@ unimined.minecraft {
 
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
+}
+
+tasks.processResources {
+  inputs.property("minecraftVersion", mcVersion)
+  filesMatching("fabric.mod.json") {
+    expand("minecraft_version" to mcVersion, "minecraft_next" to mcNext)
+  }
 }
 
 // Cloth Config for Fabric ships its `me.shedaniel.math` library as a nested jar, and a Fabric
@@ -68,7 +82,7 @@ val extractBasicMath =
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.77.0+1.19.2")
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.77.0+1.18.2")
   add("modImplementation", "maven.modrinth:jei:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }

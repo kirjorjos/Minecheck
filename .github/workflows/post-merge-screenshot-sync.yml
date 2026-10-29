@@ -1,0 +1,130 @@
+name: Post-merge screenshot baselines
+
+on:
+  push:
+    branches: ["*/development"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+concurrency:
+  group: screenshot-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Regenerate the changed baselines
+    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle.kts', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Resolve the merged pull request and the baselines it changed
+        id: plan
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.after }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            echo "loaders=fabric forge quilt" >> "$GITHUB_OUTPUT"
+            echo "tasks=testFabricShots testForgeShots testQuiltShots" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            --jq 'map(select(.merged_at != null)) | .[0].number // empty')
+          if [[ -z "$pr" ]]; then
+            echo "No merged pull request is associated with $SHA - nothing to do."
+            echo "loaders=" >> "$GITHUB_OUTPUT"
+            echo "tasks=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          marker='<!-- screenshots-baselines:changed -->'
+          gh api "repos/$REPO/issues/$pr/comments" --paginate > "$RUNNER_TEMP/comments.json"
+          body=$(jq -r --arg marker "$marker" \
+            '[.[] | select(.body | contains($marker)) | .body] | .[0] // empty' \
+            "$RUNNER_TEMP/comments.json")
+          if [[ -z "$body" ]]; then
+            echo "PR #$pr did not report changed baselines - nothing to regenerate."
+            echo "loaders=" >> "$GITHUB_OUTPUT"
+            echo "tasks=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          loaders=$(grep -oE 'tests/baselines/[a-z]+/' <<<"$body" | cut -d/ -f3 | sort -u | tr '\n' ' ')
+          tasks=""
+          for loader in $loaders; do
+            case "$loader" in
+              fabric) tasks="$tasks testFabricShots" ;;
+              forge) tasks="$tasks testForgeShots" ;;
+              quilt) tasks="$tasks testQuiltShots" ;;
+              *) echo "::warning::Ignoring unexpected baseline path for loader '$loader'" ;;
+            esac
+          done
+          echo "PR #$pr changed baselines for: ${loaders:-none}"
+          echo "loaders=$loaders" >> "$GITHUB_OUTPUT"
+          echo "tasks=$(sed 's/^ *//' <<<"$tasks")" >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate the baselines
+        if: steps.plan.outputs.tasks != ''
+        run: |
+          ./gradlew ${{ steps.plan.outputs.tasks }} --no-daemon --console=plain \
+            -Pminecheck.screenshots.update=true -Pminecheck.baselines=ci \
+            -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.worker.jvmargs="-Xmx2g"
+        timeout-minutes: 90
+
+      - name: Commit the regenerated baselines
+        if: steps.plan.outputs.tasks != ''
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- tests/baselines \
+            && [[ -z "$(git ls-files --others --exclude-standard tests/baselines)" ]]; then
+            echo "The CI image produced exactly the committed pictures - nothing to commit."
+            exit 0
+          fi
+          git status --porcelain -- tests/baselines
+          git add -- tests/baselines
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore: regenerate screenshot baselines (${{ steps.plan.outputs.loaders }})"
+          git push origin "HEAD:${{ github.ref_name }}"

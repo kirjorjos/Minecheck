@@ -16,9 +16,9 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtHelper;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.structure.Structure;
+import net.minecraft.structure.StructureManager;
 import net.minecraft.structure.StructurePlacementData;
-import net.minecraft.structure.StructureTemplate;
-import net.minecraft.structure.StructureTemplateManager;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.registry.Registry;
@@ -83,7 +83,8 @@ public class YarnServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          return s.getCommandManager().executeWithPrefix(s.getCommandSource(), command);
+          String line = command.startsWith("/") ? command.substring(1) : command;
+          return s.getCommandManager().execute(s.getCommandSource(), line);
         });
   }
 
@@ -255,10 +256,10 @@ public class YarnServerPlatform implements ServerPlatform {
       throw new IllegalArgumentException("invalid structure id: " + id);
     }
     ServerWorld world = overworld();
-    StructureTemplateManager manager = world.getStructureTemplateManager();
-    StructureTemplate template =
+    StructureManager manager = world.getStructureManager();
+    Structure template =
         manager
-            .getTemplate(identifier)
+            .getStructure(identifier)
             .orElseThrow(() -> new IllegalArgumentException("unknown structure: " + id));
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlacementData placementData = new StructurePlacementData().setIgnoreEntities(true);
