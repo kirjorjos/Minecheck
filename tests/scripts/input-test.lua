@@ -2,7 +2,8 @@
 -- cover the remaining client surface against real game state (side/minecraftVersion/config,
 -- wait/sleepUntil, lookAt, the held mouse form, pressCombination, keyPress).
 --
---   mouse: look straight down, middle-click pick the grass block, left-click break it -> the player falls into the hole: y is 1 lower keyboard: hold space to jump, wait near the jump peak, right-click to place the picked grass block back -> the player lands on it: y is back up 1
+--   mouse: look straight down, middle-click pick the grass block, left-click break it -> the player falls into the hole: y is 1 lower keyboard: hold space to jump, land again
+--   mouse: look at the floor beside the hole and right-click -> the picked block is placed in the free cell above it
 --
 -- Creative is deliberate: pick-block (middle click) puts the block type in hand with no drops involved, and breaking/placing are instant single clicks.
 
@@ -40,8 +41,68 @@ expect(target ~= nil, "crosshair on a block when looking down")
 expect(target.y == startY - 1, "crosshair on the block below the player")
 minecheck.log("input test: target block y = " .. target.y)
 
-expect(minecheck.mousePress(2), "middle-click picked the grass block")
-expect(minecheck.mousePress(0), "left-click broke the block")
+local pickedBlock = minecheck.getBlock(target)
+expect(pickedBlock ~= nil and pickedBlock.id ~= "minecraft:air", "read the block the crosshair is on")
+
+-- Creative is deliberate: pick-block (middle click) puts the block type in hand with no drops
+-- involved, and breaking is an instant single click.
+--
+-- Both clicks act on the crosshair target the *renderer* last computed, not on a per-tick raycast,
+-- and a miss is a silent early return in the game's pick/use path. Right after a look the crosshair
+-- can still hold the pre-look aim, which is exactly what a software-rendered runner produces: one
+-- press lands on nothing and the click is simply gone. Press until the effect is observed instead —
+-- each press spans a tick, so the presses themselves are what let the crosshair catch up.
+
+-- The creative inventory screen is not the survival one: slots 0..44 are the item-list tabs and the
+-- player's hotbar is 45..53 (slotCount 54), so a read at 36..44 returns tab contents and says
+-- nothing about the hand.
+local function hotbarHolds(itemId)
+  if not minecheck.openScreen("inventory", nil, 10) then
+    return false
+  end
+  local found = minecheck.waitFor(function()
+    for i = 45, 53 do
+      local s = minecheck.getSlot(i, "inventory")
+      if s ~= nil and not s.empty and s.id == itemId then
+        return true
+      end
+    end
+    return false
+  end, 10)
+  minecheck.press("Escape")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+  return found
+end
+
+local picked = false
+for _ = 1, 3 do
+  for _ = 1, 20 do
+    minecheck.mousePress(2)
+  end
+  picked = hotbarHolds(pickedBlock.id)
+  if picked then
+    break
+  end
+  minecheck.look(90, 0)
+  minecheck.sleep(0.3)
+end
+expect(picked, "middle-click put the picked block in the hotbar")
+
+-- Break it, bounded by the *block* rather than the fall: in creative every press breaks whatever
+-- the crosshair then hits, so a press while the player is already falling digs the floor out from
+-- under them and the retry loops straight down into the void.
+local broke = false
+for _ = 1, 20 do
+  local b = minecheck.getBlock({ x = target.x, y = target.y, z = target.z })
+  if b ~= nil and b.id == "minecraft:air" then
+    broke = true
+    break
+  end
+  minecheck.mousePress(0)
+end
+expect(broke, "left-click broke the block below")
 
 local fell = minecheck.waitFor(function()
   local p = minecheck.getPlayer()
@@ -52,7 +113,7 @@ local lower = minecheck.getPlayer()
 local lowerY = math.floor(lower.pos.y + 0.5)
 expect(lowerY == startY - 1, "y is 1 lower after the break (got " .. lowerY .. ")")
 
--- --- keyboard: jump, then place the block back ------------------------------
+-- --- keyboard: jump --------------------------------------------------------------
 
 -- Wait for the landing to be *observed* rather than guessed with a sleep: the fell-wait above
 -- passes while the player is still falling. The hole floor is the lowest height reachable, so a
@@ -71,55 +132,57 @@ expect(landed, "player landed in the hole")
 -- ticks, so one missed tick no longer loses the jump — and the predicate closing is itself the
 -- assertion that the player left the ground. The 5 s bound keeps a real failure fast rather than
 -- waiting out the default timeout.
---
--- The height that matters is the *placement space*, not just "airborne": the block goes at lowerY
--- and occupies lowerY..lowerY+1, so a click while the feet are still below lowerY+1 places it into
--- the player's own space and the server rejects it (the player then lands back on the hole floor,
--- one block low). The feet must clear lowerY+1 — a jump reaches ~1.32 above its start, so this is
--- an easy window, and it is the exact condition the click needs rather than a timing coincidence.
-local clearsPlacementSpace = function()
+local leftGround = function()
   local p = minecheck.getPlayer()
-  return p ~= nil and p.pos.y > lowerY + 1.0
+  return p ~= nil and p.pos.y > lowerY + 0.5
 end
-local jumped = minecheck.press("key.jump", 5, clearsPlacementSpace)
+local jumped = minecheck.press("key.jump", 5, leftGround)
 expect(jumped ~= nil and jumped.pressed, "space jump")
-expect(jumped ~= nil and jumped.released == "cond", "jump observed clearing the placement space")
+expect(jumped ~= nil and jumped.released == "cond", "jump observed leaving the ground")
 
--- Right-click while the crosshair still targets the hole floor BELOW the player, so the placed
--- block lands under the feet instead of into the player's own space. The click is *held* until the
--- block is there, not tapped: a tap is a single attempt on the tick after the clearance was
--- observed, and the server refuses a block that lands in the player's own space — while its copy of
--- the player is a tick behind the client's, that attempt can be refused and nothing retries it, so
--- the player lands back in the hole (observed as `got -61` on a loaded CI runner). Holding spans
--- the whole airborne window: an attempt rejected early is simply retried, and the release is the
--- observation that the block landed.
-local placed = minecheck.mouse(1, 5, function()
+local landedAgain = minecheck.waitFor(function()
   local p = minecheck.getPlayer()
-  local target = p ~= nil and minecheck.getTargetBlock(p) or nil
-  return target ~= nil and target.y == lowerY
-end)
-expect(type(placed) == "table" and placed.released == "cond", "right-click placed the block")
-
--- The proof the place worked is where the player comes to rest. A bare height check would be
--- satisfied mid-jump (the arc rises past the start y), so wait until the position repeats across
--- two polls — a jump is never still — and only then read the resting height: on the replaced block
--- that is the original y, and without it the player settles one block lower.
-local prevY = nil
-local settled = minecheck.waitFor(function()
-  local p = minecheck.getPlayer()
-  if p == nil then
-    prevY = nil
-    return false
-  end
-  local atRest = prevY ~= nil and math.abs(p.pos.y - prevY) < 0.001
-  prevY = p.pos.y
-  return atRest
+  return p ~= nil and p.pos.y <= lowerY + 0.05
 end, 5)
-expect(settled, "player came to rest after the jump")
-local final = minecheck.getPlayer()
-local finalY = math.floor(final.pos.y + 0.5)
-expect(finalY == startY, "y is back to start after the place (got " .. finalY .. ")")
-minecheck.log("input test: final y = " .. finalY)
+expect(landedAgain, "player landed back in the hole")
+
+-- The block goes into the free cell above the floor *beside* the hole, not back into the hole: the
+-- game refuses any placement that would overlap the player's bounding box, so "place it under your
+-- own feet" only works while the player is high enough in a jump arc for it, and the click then has
+-- to land in that same tick as the server's copy of the player — a race that loses on a loaded CI
+-- runner. Aiming at the top face of the neighbouring floor block targets an empty cell the player
+-- does not occupy, with the player standing still.
+local placePos = { x = target.x, y = target.y + 1, z = target.z - 1 }
+minecheck.lookAt(target.x + 0.5, target.y + 1.0, target.z - 0.5)
+minecheck.sleep(0.2)
+local besideAim = minecheck.getTargetBlock(minecheck.getPlayer())
+expect(
+  besideAim ~= nil and besideAim.x == target.x and besideAim.y == target.y and besideAim.z == target.z - 1,
+  "aimed at the floor beside the hole"
+)
+
+-- One press of the use button is one attempt: the game samples the button as an edge, so a button
+-- held down is *not* repeated and a refused attempt is simply lost. Press once per tick until the
+-- block reads back instead — a tap is a released attempt, so the next one is independent.
+local placedBlock = nil
+for attempt = 1, 40 do
+  local b = minecheck.getBlock(placePos)
+  if b ~= nil and b.id ~= "minecraft:air" then
+    placedBlock = b
+    break
+  end
+  minecheck.mousePress(1)
+end
+expect(placedBlock ~= nil, "right-click placed the block (40 attempts)")
+expect(
+  placedBlock ~= nil and placedBlock.id == pickedBlock.id,
+  "the placed block is the picked block (got " .. tostring(placedBlock and placedBlock.id) .. ")"
+)
+
+local resting = minecheck.getPlayer()
+local restingY = math.floor(resting.pos.y + 0.5)
+expect(restingY == lowerY, "player stayed in the hole after the place (got " .. restingY .. ")")
+minecheck.log("input test: final y = " .. restingY)
 
 -- --- surface coverage: predicates, config, timing, key taps, held mouse ----------
 -- Independent of the break/place choreography above, so it runs last: side / minecraftVersion /
