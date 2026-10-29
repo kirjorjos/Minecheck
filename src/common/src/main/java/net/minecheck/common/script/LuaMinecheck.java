@@ -3,6 +3,9 @@ package net.minecheck.common.script;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 import net.minecheck.common.config.ConfigData;
+import net.minecheck.common.live.LiveConnection;
+import net.minecheck.common.live.LiveException;
+import net.minecheck.common.live.LiveListener;
 import net.minecheck.common.net.PacketChannel;
 import net.minecheck.common.net.PacketValues;
 import net.minecheck.platform.api.ClientPlatform;
@@ -128,6 +131,9 @@ public final class LuaMinecheck {
     minecheck.set("typeText", new TypeText());
     minecheck.set("reloadResources", new ReloadResources());
 
+    // Screenshots (client)
+    minecheck.set("captureScreenshot", new CaptureScreenshot());
+
     // Recipe viewers (soft dependencies: EMI / JEI / ...)
     minecheck.set("recipeViewer", new RecipeViewerInfo());
     minecheck.set("getRecipeSlots", new GetRecipeSlots());
@@ -153,6 +159,10 @@ public final class LuaMinecheck {
     minecheck.set("bytes", new Bytes());
     minecheck.set("int64", new Int64());
     minecheck.set("reader", new Reader());
+
+    // Live session: a script-owned loopback socket, plus the builtin served breakpoint on top.
+    minecheck.set("listen", new Listen());
+    minecheck.set("liveAttach", new LiveAttach());
 
     // Third-party plugins (registered last so their names can be checked against every built-in):
     // flat minecheck.<name> plus the minecheck.ext[<plugin>][<name>] index.
@@ -1756,6 +1766,195 @@ public final class LuaMinecheck {
     }
   }
 
+  // ------------------------------------------------------------ screenshots (client)
+
+  /** Capture names already used in this run: a second call with the same name is an error. */
+  private final java.util.Set<String> capturedScreenshots = new java.util.HashSet<>();
+
+  /**
+   * minecheck.captureScreenshot(name[, options][, timeout]) -> table
+   *
+   * <p>Client: captures the frame the client is showing to a PNG under the run directory's {@code
+   * screenshots/} folder and returns {@code { path, width, height, bytes, sha256 }} for the file
+   * written.
+   *
+   * <p>{@code options} holds {@code region} today: {@code { x, y, w, h, unit? }} crops the capture.
+   * {@code unit} is {@code "framebuffer"} (default) or {@code "gui"}; a region is clamped to the
+   * frame and a region with no overlap raises. Unknown option keys raise, because a typo must not
+   * silently capture the whole frame.
+   *
+   * <p>The capture happens on the client's next rendered frame — the action yields once per tick
+   * while it waits, so the game keeps ticking — and the PNG is encoded and written off the render
+   * thread. It does <b>not</b> wait for the scene to settle: a script that wants a stable picture
+   * must already be there ({@code waitFor}, {@code worldGenSettled}, {@code isScreenOpen}, …).
+   */
+  private final class CaptureScreenshot extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = captureName(args.arg1());
+      boolean hasRegion = false;
+      int rx = 0;
+      int ry = 0;
+      int rw = 0;
+      int rh = 0;
+      String unit = net.minecheck.platform.api.ScreenshotRequest.UNIT_FRAMEBUFFER;
+
+      LuaValue optionsArg = args.arg(2);
+      if (!optionsArg.isnil()) {
+        LuaTable options = optionsArg.checktable();
+        for (LuaValue key : options.keys()) {
+          String option = key.tojstring();
+          if (!option.equals("region")) {
+            throw new LuaError("captureScreenshot: unknown option \"" + option + "\"");
+          }
+        }
+        LuaValue regionArg = options.get("region");
+        if (!regionArg.isnil()) {
+          LuaTable region = regionArg.checktable();
+          for (LuaValue key : region.keys()) {
+            String field = key.tojstring();
+            if (!field.equals("x")
+                && !field.equals("y")
+                && !field.equals("w")
+                && !field.equals("h")
+                && !field.equals("unit")) {
+              throw new LuaError("captureScreenshot: unknown region field \"" + field + "\"");
+            }
+          }
+          rx = regionInt(region, "x");
+          ry = regionInt(region, "y");
+          rw = regionInt(region, "w");
+          rh = regionInt(region, "h");
+          if (rw <= 0 || rh <= 0) {
+            throw new LuaError(
+                "captureScreenshot: region needs a positive w and h, got " + rw + "x" + rh);
+          }
+          LuaValue unitArg = region.get("unit");
+          if (!unitArg.isnil()) {
+            unit = unitArg.optjstring("").trim().toLowerCase(java.util.Locale.ROOT);
+            if (!unit.equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_FRAMEBUFFER)
+                && !unit.equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_GUI)) {
+              throw new LuaError(
+                  "captureScreenshot: region unit must be \"framebuffer\" or \"gui\", got \""
+                      + unit
+                      + "\"");
+            }
+          }
+          hasRegion = true;
+        }
+      }
+
+      if (!capturedScreenshots.add(name)) {
+        throw new LuaError("captureScreenshot: \"" + name + "\" was already captured in this run");
+      }
+
+      double seconds = args.arg(3).isnumber() ? args.arg(3).todouble() : config.defaultTimeout();
+      long deadline = clock.getAsLong() + (long) (seconds * 1000);
+      net.minecheck.platform.api.ScreenshotRequest request =
+          new net.minecheck.platform.api.ScreenshotRequest(
+              name,
+              hasRegion,
+              rx,
+              ry,
+              rw,
+              rh,
+              unit,
+              config.screenshotScale(),
+              config.screenshotChatVisible(),
+              config.screenshotWidth(),
+              config.screenshotHeight());
+      try {
+        while (true) {
+          // Re-asked every tick while queued: a platform that has to resize the window first leaves
+          // the request queued and captures on the next tick, when the new size has been applied.
+          if (request.state() == net.minecheck.platform.api.ScreenshotRequest.State.QUEUED) {
+            client.requestScreenshot(request);
+          }
+          if (request.state() == net.minecheck.platform.api.ScreenshotRequest.State.DONE) {
+            LuaTable t = new LuaTable();
+            t.set("path", LuaValue.valueOf(request.path().toString()));
+            t.set("width", LuaValue.valueOf(request.outWidth()));
+            t.set("height", LuaValue.valueOf(request.outHeight()));
+            t.set("bytes", LuaValue.valueOf(request.bytes()));
+            t.set("sha256", LuaValue.valueOf(request.sha256()));
+            return t;
+          }
+          if (request.state() == net.minecheck.platform.api.ScreenshotRequest.State.FAILED) {
+            throw new LuaError("captureScreenshot: " + request.failure());
+          }
+          if (clock.getAsLong() > deadline) {
+            throw new LuaError(
+                "captureScreenshot: timed out after "
+                    + (seconds == Math.rint(seconds) ? Long.toString((long) seconds) : seconds)
+                    + "s waiting for the frame");
+          }
+          globals.yield(LuaValue.NIL);
+        }
+      } catch (LuaError e) {
+        throw e;
+      } catch (RuntimeException e) {
+        throw wrap("captureScreenshot", e);
+      }
+    }
+
+    /**
+     * The capture name, with a trailing {@code .png} stripped: the name doubles as the file name,
+     * so {@code captureScreenshot("title.png")} writes {@code title.png} rather than {@code
+     * title.png.png}. Separators and {@code ..} are refused so a name can never escape the run's
+     * screenshots directory, and a leading {@code _} is allowed (it marks an ad-hoc capture the
+     * baseline comparison skips).
+     */
+    private String captureName(LuaValue arg) {
+      if (arg.type() != LuaValue.TSTRING) {
+        throw new LuaError(
+            "captureScreenshot: the capture name must be a string, got " + arg.typename());
+      }
+      String name = arg.tojstring();
+      if (name.endsWith(".png")) {
+        name = name.substring(0, name.length() - 4);
+      }
+      if (name.isBlank()) {
+        throw new LuaError("captureScreenshot: the capture name must not be empty");
+      }
+      if (name.contains("/") || name.contains("\\") || name.contains("..")) {
+        throw new LuaError("captureScreenshot: invalid capture name \"" + name + "\"");
+      }
+      for (int i = 0; i < name.length(); i++) {
+        if (Character.isISOControl(name.charAt(i))) {
+          throw new LuaError("captureScreenshot: invalid capture name \"" + name + "\"");
+        }
+      }
+      return name;
+    }
+
+    /** One whole-number region field, or a Lua error naming it. */
+    private int regionInt(LuaTable region, String field) {
+      LuaValue value = region.get(field);
+      if (value.isnil()) {
+        throw new LuaError(
+            "captureScreenshot: region needs numeric x, y, w, h (missing \"" + field + "\")");
+      }
+      if (!value.isnumber()) {
+        throw new LuaError(
+            "captureScreenshot: region needs numeric x, y, w, h (\""
+                + field
+                + "\" is a "
+                + value.typename()
+                + ")");
+      }
+      double number = value.todouble();
+      if (number != Math.rint(number) || number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
+        throw new LuaError(
+            "captureScreenshot: region field \""
+                + field
+                + "\" must be a whole number, got "
+                + value.tojstring());
+      }
+      return (int) number;
+    }
+  }
+
   // ------------------------------------------------------------ server actions
 
   /**
@@ -2440,6 +2639,11 @@ public final class LuaMinecheck {
       }
       t.set("failMode", config.failMode());
       t.set("defaultTimeout", config.defaultTimeout());
+      t.set("screenshotWidth", config.screenshotWidth());
+      t.set("screenshotHeight", config.screenshotHeight());
+      t.set("screenshotGuiScale", config.screenshotGuiScale());
+      t.set("screenshotScale", config.screenshotScale());
+      t.set("screenshotChatVisible", LuaValue.valueOf(config.screenshotChatVisible()));
       return t;
     }
   }
@@ -2643,5 +2847,233 @@ public final class LuaMinecheck {
       }
       return out;
     }
+  }
+
+  // ------------------------------------------------------------ live session
+
+  /**
+   * minecheck.listen([port][, host]) -> listener
+   *
+   * <p>A TCP listener on the loopback interface that the script owns: it exists because the script
+   * asked for it, it closes when the script ends, and nothing listens otherwise. {@code port} 0
+   * (the default) asks the OS for an ephemeral one; the bound port is logged at INFO, which is how
+   * a program on the same machine finds an ephemeral listener.
+   */
+  private final class Listen extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int port = args.arg(1).optint(0);
+      String host = args.arg(2).optjstring(null);
+      try {
+        LiveListener listener = LiveListener.open(host, port);
+        engine.registerLive(listener);
+        return listenerTable(listener);
+      } catch (LiveException e) {
+        throw wrap("listen", e);
+      }
+    }
+  }
+
+  /**
+   * Method on a listener handle; {@code handle:accept()} passes the handle, so it is ignored.
+   *
+   * <p>{@code op} runs inside the poll loop for the ones that wait; the loop is the same
+   * cooperative shape every other wait uses: check once, then yield to the next client tick.
+   */
+  @FunctionalInterface
+  private interface LiveOp {
+    LuaValue run(Varargs args);
+  }
+
+  private final class LiveMethod extends VarArgFunction {
+    private final String name;
+    private final LiveOp op;
+
+    LiveMethod(String name, LiveOp op) {
+      this.name = name;
+      this.op = op;
+    }
+
+    @Override
+    public Varargs invoke(Varargs args) {
+      // `handle:method(...)` passes the handle as the first argument; the methods that take
+      // arguments must not see it. (`handle.method(...)` does not pass it, so keep the args as they
+      // are when the first one is not a table.)
+      Varargs rest = args.arg(1).istable() ? args.subargs(2) : args;
+      try {
+        return op.run(rest);
+      } catch (LuaError e) {
+        throw e;
+      } catch (LiveException e) {
+        throw wrap(name, e);
+      }
+    }
+  }
+
+  private LuaTable listenerTable(LiveListener listener) {
+    LuaTable t = new LuaTable();
+    t.set("port", new LiveMethod("port", args -> LuaValue.valueOf(listener.port())));
+    t.set("isOpen", new LiveMethod("isOpen", args -> LuaValue.valueOf(listener.isOpen())));
+    t.set(
+        "close",
+        new LiveMethod(
+            "close",
+            args -> {
+              listener.close();
+              return LuaValue.NIL;
+            }));
+    t.set("accept", new LiveMethod("accept", args -> acceptLoop(listener, args)));
+    return t;
+  }
+
+  private LuaValue acceptLoop(LiveListener listener, Varargs args) {
+    long deadline = deadline(args, 1);
+    while (true) {
+      LiveConnection conn = listener.poll();
+      if (conn != null) {
+        engine.registerLive(conn);
+        return connectionTable(conn);
+      }
+      if (clock.getAsLong() > deadline) {
+        return LuaValue.NIL;
+      }
+      globals.yield(LuaValue.NIL);
+    }
+  }
+
+  private LuaTable connectionTable(LiveConnection conn) {
+    LuaTable t = new LuaTable();
+    t.set("recv", new LiveMethod("recv", args -> recvLoop(conn, args)));
+    t.set(
+        "send", new LiveMethod("send", args -> LuaValue.valueOf(conn.send(args.checkjstring(1)))));
+    t.set("peer", new LiveMethod("peer", args -> LuaValue.valueOf(conn.peer())));
+    t.set("isOpen", new LiveMethod("isOpen", args -> LuaValue.valueOf(conn.isOpen())));
+    t.set(
+        "close",
+        new LiveMethod(
+            "close",
+            args -> {
+              conn.close();
+              return LuaValue.NIL;
+            }));
+    return t;
+  }
+
+  private LuaValue recvLoop(LiveConnection conn, Varargs args) {
+    long deadline = deadline(args, 1);
+    while (true) {
+      String line = conn.pollLine();
+      if (line != null) {
+        return LuaValue.valueOf(line);
+      }
+      if (!conn.isOpen() || clock.getAsLong() > deadline) {
+        return LuaValue.NIL;
+      }
+      globals.yield(LuaValue.NIL);
+    }
+  }
+
+  /**
+   * minecheck.liveAttach([port][, timeout]) -> int | nil
+   *
+   * <p>The builtin served breakpoint: listen, report the port, accept one client and serve it until
+   * it disconnects, then return the number of chunks served ({@code nil} when no client attached
+   * before the timeout). Every line the client sends is a Lua chunk evaluated in the running
+   * script's globals, so a served chunk can read script state and call any {@code minecheck}
+   * action; the reply is one line, {@code ok <value>} or {@code err <message>}.
+   *
+   * <p>Because the script is parked inside this call, a chunk that blocks (a {@code sleep}, a
+   * {@code waitFor}, a {@code joinServer}) simply suspends the script again and resumes when its
+   * condition holds — the game keeps ticking, and the client waits for the chunk to finish before
+   * its reply.
+   */
+  private final class LiveAttach extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int port = args.arg(1).optint(0);
+      double timeoutSeconds = args.arg(2).optdouble(config.defaultTimeout());
+
+      LiveListener listener;
+      try {
+        listener = LiveListener.open(null, port);
+      } catch (LiveException e) {
+        throw wrap("liveAttach", e);
+      }
+      engine.registerLive(listener);
+      try {
+        long deadline = clock.getAsLong() + (long) (timeoutSeconds * 1000);
+        LiveConnection conn = null;
+        while (conn == null) {
+          conn = listener.poll();
+          if (conn != null) {
+            break;
+          }
+          if (clock.getAsLong() > deadline) {
+            return LuaValue.NIL;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+        engine.registerLive(conn);
+        LOG.info(String.format("Minecheck: live client attached (%s)", conn.peer()));
+
+        int served = 0;
+        while (true) {
+          long lineDeadline = clock.getAsLong() + (long) (timeoutSeconds * 1000);
+          String line;
+          while (true) {
+            try {
+              line = conn.pollLine();
+            } catch (LiveException e) {
+              // A line over the cap is the client's error, not the run's: answer it and move on so
+              // the session stays usable.
+              conn.send("err " + oneLine(e.getMessage()));
+              line = null;
+              lineDeadline = clock.getAsLong();
+              break;
+            }
+            if (line != null || !conn.isOpen() || clock.getAsLong() > lineDeadline) {
+              break;
+            }
+            globals.yield(LuaValue.NIL);
+          }
+          if (line == null) {
+            break;
+          }
+          served++;
+          if (!conn.send(evaluate(line))) {
+            break;
+          }
+        }
+        LOG.info(String.format("Minecheck: live client detached after %d chunk(s)", served));
+        conn.close();
+        return LuaValue.valueOf(served);
+      } catch (LiveException e) {
+        throw wrap("liveAttach", e);
+      } finally {
+        listener.close();
+      }
+    }
+  }
+
+  /** Runs one served chunk against the script's globals and formats the one-line reply. */
+  private String evaluate(String source) {
+    try {
+      LuaValue chunk = globals.load(source, "@live");
+      Varargs out = chunk.invoke(LuaValue.NONE);
+      if (out.narg() == 0 || out.arg(1).isnil()) {
+        return "ok";
+      }
+      return "ok " + oneLine(out.arg(1).tojstring());
+    } catch (LuaError e) {
+      return "err " + oneLine(String.valueOf(e.getMessage()));
+    } catch (RuntimeException e) {
+      String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+      return "err " + oneLine(msg);
+    }
+  }
+
+  /** One reply is one line: a chunk's message must not smuggle a second frame in. */
+  private static String oneLine(String text) {
+    return text == null ? "" : text.replace("\r", " ").replace("\n", " ");
   }
 }

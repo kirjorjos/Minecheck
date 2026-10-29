@@ -72,6 +72,289 @@ public class YarnClientPlatform implements ClientPlatform {
     return !reloadRequested || (reload != null && reload.isDone());
   }
 
+  // ------------------------------------------------------------ screenshots
+
+  /**
+   * Encode/write thread for captures: the GL readback stays on the render thread, but the crop, the
+   * PNG encode and the file write do not. One daemon thread is enough — captures are sequential in
+   * a script and the client must never wait on it.
+   */
+  private static final java.util.concurrent.ExecutorService SCREENSHOT_WRITER =
+      java.util.concurrent.Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "Minecheck-screenshot");
+            t.setDaemon(true);
+            return t;
+          });
+
+  /** GL_RENDERER of the client, recorded in profile.json so renderer drift is diagnosable. */
+  private static volatile String screenshotRenderer;
+
+  /**
+   * Points the client's clock back at the integrated server's. See {@link
+   * ClientPlatform#pinClientClock()} for why the drift is invisible live but not in a capture.
+   *
+   * <p>Called every client tick from the loader entrypoint, which runs after the level tick (where
+   * {@code ClientWorld.tickTime} advanced the day time) and before that frame is rendered — so the
+   * frame uses the server's time, not the drifted one. A mismatch is corrected in place; when they
+   * already agree nothing is written, so a world the script froze is not touched.
+   */
+  @Override
+  public void pinClientClock() {
+    MinecraftClient mc = mc();
+    net.minecraft.client.world.ClientWorld world = mc.world;
+    if (world == null) {
+      return;
+    }
+    MinecraftServer server = mc.getServer();
+    if (server == null) {
+      // Remote server: no authoritative value in this process (see pinClientClock's contract).
+      return;
+    }
+    ServerWorld overworld = server.getWorld(World.OVERWORLD);
+    if (overworld == null) {
+      return;
+    }
+    long serverTime = overworld.getTimeOfDay();
+    if (world.getTimeOfDay() != serverTime) {
+      world.setTimeOfDay(serverTime);
+    }
+  }
+
+  @Override
+  public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    onClientThread(() -> captureScreenshot(request));
+  }
+
+  /**
+   * Frames the client has finished drawing, counted by the loader's per-frame hook.
+   *
+   * <p>A capture needs a frame count and not a delay: the read must pick up a frame drawn
+   * <em>after</em> the chat was cleared, and one tick is not one frame. When the client falls
+   * behind it catches up with several ticks in a single frame, so "clear on one tick, read on the
+   * next" can still be the same picture — which is how a capture once came back with the command
+   * feedback it had just cleared.
+   */
+  private static final java.util.concurrent.atomic.AtomicLong DRAWN_FRAMES =
+      new java.util.concurrent.atomic.AtomicLong();
+
+  /**
+   * Records that the client finished drawing a frame. Called by the loader entrypoint's per-frame
+   * hook, which fires once per frame after the HUD — chat included — has been laid out.
+   */
+  public static void notifyFrameDrawn() {
+    DRAWN_FRAMES.incrementAndGet();
+  }
+
+  /**
+   * The frame at which the pending capture cleared the chat, in {@link #DRAWN_FRAMES} terms. One
+   * capture is pending at a time — the script action blocks until its capture is done — so a field
+   * is enough.
+   */
+  private long chatClearedAtFrame;
+
+  /**
+   * One attempt at a capture, on the client (render) thread: empties the chat, waits for a frame
+   * drawn without it, then reads the framebuffer into a {@link
+   * net.minecraft.client.texture.NativeImage} and hands the pixels to the writer thread; the script
+   * keeps ticking meanwhile.
+   *
+   * <p>Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
+   * it arrives, and command feedback from the scene setup arrives in the middle of the run), so a
+   * capture without chat empties the HUD. It is emptied here rather than by hiding chat in the
+   * options, because the server refuses every command from a client whose chat visibility is hidden
+   * ({@code chat.disabled.options}) — and a run that cannot run commands cannot set up a scene.
+   *
+   * <p>The clear only shows up in the next frame that is drawn, and the read otherwise returns the
+   * frame drawn <em>before</em> it, chat included. So the clear is followed by a wait for the frame
+   * counter to move, not by a read on the next tick.
+   */
+  private void captureScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    MinecraftClient mc = mc();
+    // Outside a world the HUD is not drawn, so there is no chat to take out of the picture.
+    boolean clearChat = !request.chatVisible() && mc.world != null;
+    if (clearChat && !request.prepared()) {
+      mc.inGameHud.getChatHud().clear(true);
+      chatClearedAtFrame = DRAWN_FRAMES.get();
+      request.markPrepared();
+      request.retry("clearing chat before the capture");
+      return;
+    }
+    if (clearChat && DRAWN_FRAMES.get() == chatClearedAtFrame) {
+      request.retry("waiting for the first frame drawn after the chat was cleared");
+      return;
+    }
+    net.minecraft.client.gl.Framebuffer framebuffer = mc.getFramebuffer();
+    if (framebuffer == null) {
+      request.fail("no client framebuffer — is the client in a world?");
+      return;
+    }
+    net.minecraft.client.util.Window window = mc.getWindow();
+    if (window.getFramebufferWidth() != request.frameWidth()
+        || window.getFramebufferHeight() != request.frameHeight()) {
+      // The profile pins the window size; re-assert it when something changed it. The resize is
+      // reported back by GLFW over the next frames, so ask again on the next tick.
+      window.setWindowedSize(request.frameWidth(), request.frameHeight());
+      request.retry(
+          "the client window is "
+              + window.getFramebufferWidth()
+              + "x"
+              + window.getFramebufferHeight()
+              + ", not the "
+              + request.frameWidth()
+              + "x"
+              + request.frameHeight()
+              + " the screenshot profile pins it to");
+      return;
+    }
+
+    int frameWidth = window.getFramebufferWidth();
+    int frameHeight = window.getFramebufferHeight();
+    int guiScale = guiScale(window);
+    int x = 0;
+    int y = 0;
+    int cropWidth = frameWidth;
+    int cropHeight = frameHeight;
+    if (request.hasRegion()) {
+      long unit =
+          request.unit().equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_GUI)
+              ? guiScale
+              : 1;
+      long left = (long) request.x() * unit;
+      long top = (long) request.y() * unit;
+      long right = left + (long) request.width() * unit;
+      long bottom = top + (long) request.height() * unit;
+      long fromX = Math.max(0, left);
+      long fromY = Math.max(0, top);
+      long toX = Math.min(frameWidth, right);
+      long toY = Math.min(frameHeight, bottom);
+      if (toX <= fromX || toY <= fromY) {
+        request.fail(
+            "region "
+                + request.width()
+                + "x"
+                + request.height()
+                + " at ("
+                + request.x()
+                + ", "
+                + request.y()
+                + ") "
+                + request.unit()
+                + " has no overlap with the "
+                + frameWidth
+                + "x"
+                + frameHeight
+                + " frame");
+        return;
+      }
+      x = (int) fromX;
+      y = (int) fromY;
+      cropWidth = (int) (toX - fromX);
+      cropHeight = (int) (toY - fromY);
+    }
+
+    net.minecraft.client.texture.NativeImage image;
+    try {
+      image = net.minecraft.client.util.ScreenshotRecorder.takeScreenshot(framebuffer);
+    } catch (RuntimeException e) {
+      request.fail("framebuffer read failed: " + e.getMessage());
+      return;
+    }
+    if (screenshotRenderer == null) {
+      screenshotRenderer = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
+    }
+    java.nio.file.Path target =
+        new java.io.File(mc.runDirectory, "screenshots")
+            .toPath()
+            .resolve(request.name() + ".png")
+            .toAbsolutePath();
+    request.running();
+    writeScreenshot(
+        request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, target);
+  }
+
+  /**
+   * The effective GUI scale: framebuffer pixels per GUI pixel, taken from the window the client
+   * laid its HUD out with (so {@code unit = "gui"} regions line up with what a script sees).
+   */
+  private static int guiScale(net.minecraft.client.util.Window window) {
+    int scaledWidth = window.getScaledWidth();
+    if (scaledWidth <= 0) {
+      return 1;
+    }
+    int scale = Math.round((float) window.getFramebufferWidth() / scaledWidth);
+    return Math.max(1, scale);
+  }
+
+  /** Crops, downscales, PNG-encodes and writes the capture — all off the render thread. */
+  private static void writeScreenshot(
+      net.minecheck.platform.api.ScreenshotRequest request,
+      net.minecraft.client.texture.NativeImage source,
+      int x,
+      int y,
+      int cropWidth,
+      int cropHeight,
+      int frameWidth,
+      int frameHeight,
+      int guiScale,
+      java.nio.file.Path target) {
+    SCREENSHOT_WRITER.execute(
+        () -> {
+          net.minecraft.client.texture.NativeImage out = null;
+          try {
+            int outWidth = Math.max(1, (int) Math.round(cropWidth * request.scale()));
+            int outHeight = Math.max(1, (int) Math.round(cropHeight * request.scale()));
+            out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
+            for (int dy = 0; dy < outHeight; dy++) {
+              int sy = y + (int) ((long) dy * cropHeight / outHeight);
+              for (int dx = 0; dx < outWidth; dx++) {
+                int sx = x + (int) ((long) dx * cropWidth / outWidth);
+                out.setColor(dx, dy, source.getColor(sx, sy));
+              }
+            }
+            java.nio.file.Path directory = target.getParent();
+            java.nio.file.Files.createDirectories(directory);
+            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
+            out.writeTo(tmp);
+            java.nio.file.Files.move(
+                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            byte[] bytes = java.nio.file.Files.readAllBytes(target);
+            net.minecheck.common.screenshot.ScreenshotProfile.write(
+                directory,
+                frameWidth,
+                frameHeight,
+                guiScale,
+                request.scale(),
+                request.chatVisible(),
+                screenshotRenderer);
+            request.succeed(target, outWidth, outHeight, bytes.length, sha256(bytes));
+          } catch (Exception e) {
+            request.fail(
+                "framebuffer read failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          } finally {
+            if (out != null) {
+              out.close();
+            }
+            source.close();
+          }
+        });
+  }
+
+  /** Lower-case hex SHA-256, the digest a baseline comparison reports. */
+  private static String sha256(byte[] bytes) {
+    try {
+      byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+      StringBuilder hex = new StringBuilder(digest.length * 2);
+      for (byte b : digest) {
+        hex.append(String.format("%02x", b));
+      }
+      return hex.toString();
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the Java platform", e);
+    }
+  }
+
   @Override
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");

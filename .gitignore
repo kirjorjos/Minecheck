@@ -22,6 +22,8 @@ src/fabric/mod/run/
 src/forge/mod/run/
 src/quilt/mod/run/
 
+/tests/local-baselines/
+
 # ---- Java ----
 *.class
 **/bin/
