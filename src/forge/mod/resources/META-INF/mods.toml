@@ -1,5 +1,5 @@
 modLoader = "javafml"
-loaderVersion = "[43,)"
+loaderVersion = "[40,)"
 license = "GPLv3"
 
 [[mods]]
@@ -11,13 +11,13 @@ description = "Scripted automation of the Minecraft client and server for mod de
 [[dependencies.minecheck]]
 modId = "forge"
 mandatory = true
-versionRange = "[43,)"
+versionRange = "[40,)"
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.minecheck]]
 modId = "minecraft"
 mandatory = true
-versionRange = "[1.19.2,1.20)"
+versionRange = "[${minecraft_version},${minecraft_next})"
 ordering = "NONE"
 side = "BOTH"

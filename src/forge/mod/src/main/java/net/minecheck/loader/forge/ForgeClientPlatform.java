@@ -11,13 +11,21 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.KeyboardHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.screens.BackupConfirmScreen;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.chat.CommonComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.TranslatableComponent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
@@ -25,9 +33,13 @@ import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
-import net.minecraft.world.level.levelgen.presets.WorldPreset;
-import net.minecraft.world.level.levelgen.presets.WorldPresets;
+import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
+import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -365,45 +377,61 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.createWorldOpenFlows().loadLevel(mc.screen, worldName);
-          proceedPastExperimentalWarning(mc);
+          mc.loadLevel(worldName);
+          answerWorldLoadPrompt(mc);
         });
   }
 
   /**
-   * Accepts the "this world has experimental settings" question Forge puts in the way of a local
-   * world load.
+   * Answers the "this world has experimental settings" question 1.18.2 puts in the way of a world
+   * load.
    *
-   * <p>{@code WorldOpenFlows.loadLevel} is a <em>player</em> flow: it stops on a confirmation
-   * whenever the world's settings are not lifecycle stable, which is the case for the worlds saved
-   * by this dev client — Forge enables every mod's datapack in the saved {@code DataPacks} list
-   * ({@code mod:emi}, {@code mod:jei}, …), so those worlds are not the builtin registries alone.
-   * The screen is set synchronously by the join itself, so a script that called {@code
+   * <p>1.18.2 stops a load on a confirmation screen whenever the world's settings are not lifecycle
+   * stable, which is the case both for a world this harness generates — a flat overworld is not the
+   * noise generator {@code LevelStem.stable} looks for — and for the worlds this dev client saves,
+   * because Forge writes every mod's datapack into the saved {@code DataPacks} list ({@code
+   * mod:emi}, {@code mod:jei}, …), so they are not the builtin registries alone. The screen is set
+   * synchronously by the load itself, so a script that called {@code createWorld} or {@code
    * joinLocalWorld} would otherwise sit on it until its timeout, with no world, no error and no way
    * to answer it: {@code isOnTitleScreen} is false, {@code isWorldReady} is false, and nothing is
    * connecting.
    *
-   * <p>The join request <em>is</em> the confirmation, so press {@code Proceed} — the same answer
+   * <p>The load request <em>is</em> the confirmation, so press {@code Proceed} — the same answer
    * the screen's own yes-button gives, which re-runs the load with the warning marked as confirmed.
-   * Matched on the button label rather than the screen class: {@code BackupConfirmScreen} is also a
-   * {@code ConfirmScreen} (the "back up this world first" question for old customized worlds) and
-   * that one has no {@code Proceed}, so it is left for a human to answer.
+   * On the form that offers to back the world up first, press {@code Load world anyway}: a backup
+   * exists to protect a human's save, and a harness world is created and thrown away by the run.
+   * Both are matched on their own labels, so any other confirmation — a datapack failure, say — is
+   * left alone and still fails the run.
    */
-  private static void proceedPastExperimentalWarning(Minecraft mc) {
-    if (!(mc.screen instanceof net.minecraft.client.gui.screens.ConfirmScreen confirm)) {
-      return;
+  private static void answerWorldLoadPrompt(Minecraft mc) {
+    Screen screen = mc.screen;
+    if (screen instanceof BackupConfirmScreen) {
+      pressLabelled(screen, new TranslatableComponent("selectWorld.backupJoinSkipButton"));
+    } else if (screen instanceof ConfirmScreen
+        && new TranslatableComponent("selectWorld.backupQuestion.experimental")
+            .getString()
+            .equals(screen.getTitle().getString())) {
+      pressLabelled(screen, CommonComponents.GUI_PROCEED);
     }
-    net.minecraft.network.chat.Component proceed =
-        net.minecraft.network.chat.CommonComponents.GUI_PROCEED;
-    for (net.minecraft.client.gui.components.events.GuiEventListener element : confirm.children()) {
-      if (element instanceof net.minecraft.client.gui.components.AbstractWidget widget
-          && proceed.equals(widget.getMessage())) {
-        LOG.info("joinLocalWorld: confirming the world's experimental settings (Proceed)");
-        widget.mouseClicked(
-            widget.x + widget.getWidth() / 2.0, widget.y + widget.getHeight() / 2.0, 0);
+  }
+
+  /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
+  private static void pressLabelled(Screen screen, Component label) {
+    for (GuiEventListener child : screen.children()) {
+      if (child instanceof Button button
+          && label.getString().equals(button.getMessage().getString())) {
+        LOG.info(
+            String.format(
+                "world load: answered the \"%s\" prompt with \"%s\"",
+                screen.getTitle().getString(), label.getString()));
+        button.onPress();
         return;
       }
     }
+    LOG.warning(
+        String.format(
+            "world load: \"%s\" is up but has no \"%s\" button",
+            screen.getTitle().getString(), label.getString()));
   }
 
   @Override
@@ -434,14 +462,23 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
-          WorldPreset flat =
-              registryAccess
-                  .registryOrThrow(Registry.WORLD_PRESET_REGISTRY)
-                  .getOrThrow(WorldPresets.FLAT);
+          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
+          // have built, dropped into the default dimension set in place of the noise overworld.
+          Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
+          Registry<StructureSet> structureSets =
+              registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
+          FlatLevelSource flat =
+              new FlatLevelSource(
+                  structureSets, FlatLevelGeneratorSettings.getDefault(biomes, structureSets));
+          Registry<DimensionType> dimensionTypes =
+              registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
+          Registry<LevelStem> dimensions =
+              WorldGenSettings.withOverworld(
+                  dimensionTypes, WorldGenSettings.makeDefault(registryAccess).dimensions(), flat);
           WorldGenSettings generatorOptions =
-              flat.createWorldGenSettings(options.seed(), options.structures(), false);
-          mc.createWorldOpenFlows()
-              .createFreshLevel(options.name(), levelSettings, registryAccess, generatorOptions);
+              new WorldGenSettings(options.seed(), options.structures(), false, dimensions);
+          mc.createLevel(options.name(), levelSettings, registryAccess, generatorOptions);
+          answerWorldLoadPrompt(mc);
         });
   }
 
@@ -757,6 +794,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
       mc.gameMode.useItemOn(
           mc.player,
+          mc.level,
           net.minecraft.world.InteractionHand.MAIN_HAND,
           (net.minecraft.world.phys.BlockHitResult) hit);
     }
@@ -849,7 +887,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.commandUnsigned(command);
+    // 1.18.2 has no command-only send: the client routes a leading "/" itself.
+    mc.player.chat(command.startsWith("/") ? command : "/" + command);
   }
 
   @Override

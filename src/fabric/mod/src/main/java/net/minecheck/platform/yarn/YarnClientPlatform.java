@@ -9,26 +9,36 @@ import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecraft.client.Keyboard;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.Mouse;
+import net.minecraft.client.gui.Element;
+import net.minecraft.client.gui.screen.BackupPromptScreen;
+import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.ConnectScreen;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.ScreenTexts;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.integrated.IntegratedServerLoader;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.structure.StructureSet;
+import net.minecraft.text.Text;
+import net.minecraft.text.TranslatableText;
 import net.minecraft.util.registry.DynamicRegistryManager;
 import net.minecraft.util.registry.Registry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
+import net.minecraft.world.biome.Biome;
+import net.minecraft.world.dimension.DimensionOptions;
 import net.minecraft.world.gen.GeneratorOptions;
-import net.minecraft.world.gen.WorldPreset;
-import net.minecraft.world.gen.WorldPresets;
+import net.minecraft.world.gen.chunk.FlatChunkGenerator;
+import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
@@ -366,22 +376,20 @@ public class YarnClientPlatform implements ClientPlatform {
   public void joinLocalWorld(String worldName) {
     MinecraftClient mc = mc();
     LevelStorage storage = mc.getLevelStorage();
-    boolean found = false;
+    boolean found;
     try {
-      for (LevelStorage.LevelSave save : storage.getLevelList()) {
-        if (save.getRootPath().equals(worldName)) {
-          found = true;
-          break;
-        }
-      }
+      found = storage.levelExists(worldName);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to read level list: " + e.getMessage(), e);
     }
     if (!found) {
       throw new IllegalArgumentException("World not found: " + worldName);
     }
-    IntegratedServerLoader loader = mc.createIntegratedServerLoader();
-    onClientThread(() -> loader.start(mc.currentScreen, worldName));
+    onClientThread(
+        () -> {
+          mc.startIntegratedServer(worldName);
+          answerWorldLoadPrompt(mc);
+        });
   }
 
   @Override
@@ -413,13 +421,72 @@ public class YarnClientPlatform implements ClientPlatform {
         () -> {
           DynamicRegistryManager.Immutable registryManager =
               DynamicRegistryManager.createAndLoad().toImmutable();
-          WorldPreset flat =
-              registryManager.get(Registry.WORLD_PRESET_KEY).getOrThrow(WorldPresets.FLAT);
+          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
+          // have built, dropped into the default dimension set in place of the noise overworld.
+          Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
+          Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
+          FlatChunkGenerator flat =
+              new FlatChunkGenerator(
+                  structureSets, FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets));
+          Registry<DimensionOptions> dimensions =
+              GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
+                  registryManager.get(Registry.DIMENSION_TYPE_KEY),
+                  GeneratorOptions.getDefaultOptions(registryManager).getDimensions(),
+                  flat);
           GeneratorOptions generatorOptions =
-              flat.createGeneratorOptions(options.seed(), options.structures(), false);
-          mc.createIntegratedServerLoader()
-              .createAndStart(options.name(), levelInfo, registryManager, generatorOptions);
+              new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
+          mc.createWorld(options.name(), levelInfo, registryManager, generatorOptions);
+          answerWorldLoadPrompt(mc);
         });
+  }
+
+  /**
+   * Answers the "experimental settings" prompt 1.18.2 puts in front of a world load.
+   *
+   * <p>1.18.2 flags any world whose generator is not the default one as experimental: {@code
+   * GeneratorOptions.validate()} reports an experimental lifecycle whenever {@code
+   * DimensionOptions.hasDefaultSettings} rejects the dimension set, and a flat overworld is by
+   * definition not the noise generator {@code hasDefaultSettings} looks for. The client answers
+   * that flag with a screen and stops before the server starts — a {@code ConfirmScreen} for a new
+   * world, a {@code BackupPromptScreen} for an existing one — so a headless run would sit on the
+   * prompt until its wait expired. There is nobody to ask, so the harness answers the way a human
+   * would and the load continues.
+   *
+   * <p>Matched on the prompt's own labels, so it never presses anything else: a datapack failure is
+   * a different screen and must still stop the run. On a world that is not flagged experimental
+   * there is no such screen and this is a no-op.
+   */
+  private static void answerWorldLoadPrompt(MinecraftClient mc) {
+    Screen screen = mc.currentScreen;
+    if (screen instanceof BackupPromptScreen) {
+      // "Load world anyway": the backup guards a human's save from experimental worldgen, and a
+      // harness world is created and thrown away by the run, so there is nothing to guard.
+      pressLabelled(screen, new TranslatableText("selectWorld.backupJoinSkipButton"));
+    } else if (screen instanceof ConfirmScreen
+        && new TranslatableText("selectWorld.backupQuestion.experimental")
+            .getString()
+            .equals(screen.getTitle().getString())) {
+      pressLabelled(screen, ScreenTexts.PROCEED);
+    }
+  }
+
+  /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
+  private static void pressLabelled(Screen screen, Text label) {
+    for (Element child : screen.children()) {
+      if (child instanceof ButtonWidget button
+          && label.getString().equals(button.getMessage().getString())) {
+        LOG.info(
+            String.format(
+                "world load: answered the \"%s\" prompt with \"%s\"",
+                screen.getTitle().getString(), label.getString()));
+        button.onPress();
+        return;
+      }
+    }
+    LOG.warning(
+        String.format(
+            "world load: \"%s\" is up but has no \"%s\" button",
+            screen.getTitle().getString(), label.getString()));
   }
 
   @Override
@@ -736,6 +803,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (hit.getType() == net.minecraft.util.hit.HitResult.Type.BLOCK) {
       mc.interactionManager.interactBlock(
           mc.player,
+          mc.world,
           net.minecraft.util.Hand.MAIN_HAND,
           (net.minecraft.util.hit.BlockHitResult) hit);
     }
@@ -825,7 +893,8 @@ public class YarnClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getNetworkHandler() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.sendCommand(command, net.minecraft.text.Text.empty());
+    // 1.18.2 has no command-only send: the client routes a leading "/" itself.
+    mc.player.sendChatMessage(command.startsWith("/") ? command : "/" + command);
   }
 
   @Override

@@ -378,7 +378,7 @@ Opens a container/handled screen and waits until it is open. `id` selects the sc
 
 **Returns:** `true` once [`isScreenOpen`](#minecheckisscreenopenid--boolean) reports the screen, `false` on timeout.
 
-> `"inventory"` is opened with a synthetic tap of the inventory key rather than a container interaction, so it works whether or not anything is nearby. It also works in creative mode: the game opens `CreativeInventoryScreen` there, and `isScreenOpen("inventory")` matches it (both inventory screens are siblings in 1.19.2, not subclasses of one another).
+> `"inventory"` is opened with a synthetic tap of the inventory key rather than a container interaction, so it works whether or not anything is nearby. It also works in creative mode: the game opens the creative inventory there, and `isScreenOpen("inventory")` matches it (both inventory screens are siblings in 1.18.2, not subclasses of one another).
 
 ```lua
 minecheck.openScreen("beacon", { x = 10.5, y = 65.5, z = 8.5 }, 10)
@@ -391,7 +391,7 @@ Non-blocking check of whether a screen is currently open. With no id (or `nil`),
 | Id | Matches |
 |----|---------|
 | `nil` / `""` | any container/handled screen (not the chat screen) |
-| `"inventory"` | the player inventory — the survival `InventoryScreen` **or** the creative inventory screen, which are sibling classes in 1.19.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
+| `"inventory"` | the player inventory — the survival inventory screen **or** the creative inventory screen, which are sibling classes in 1.18.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
 | `"chat"` | the chat screen (open while typing a message/command) |
 | `"beacon"` / `"chest"` / `"crafting"` / `"furnace"` | that container screen |
 
@@ -991,7 +991,7 @@ Returns `"client"` or `"server"` depending on which side the script is running o
 
 ### `minecheck.minecraftVersion() → string`
 
-Returns the Minecraft version string, e.g. `"1.19.2"`.
+Returns the Minecraft version string, e.g. `"1.18.2"`.
 
 ---
 
@@ -1124,7 +1124,7 @@ Client-only; calling it from a server script raises `"client-only function calle
 
 **Returns** the same entry shape as `findEntities` (`id`, `type`, `pos`, `tags`), from the client's own view. Outside a world it returns an empty table instead of erroring.
 
-> **No tag filter, and `tags` is always empty here.** Entity scoreboard tags never reach a client in 1.19.2 — no client or network class calls `Entity.addTag` and no packet carries the tag set — so a client-side filter on a tag (or an entry's `tags`) could only ever be empty. Two consequences:
+> **No tag filter, and `tags` is always empty here.** Entity scoreboard tags never reach a client in 1.18.2 — no client or network class calls `Entity.addTag` and no packet carries the tag set — so a client-side filter on a tag (or an entry's `tags`) could only ever be empty. Two consequences:
 >
 > - To tell a client-side target apart from worldgen mobs, filter by a **type that cannot spawn naturally** (the harness's punch test uses `minecraft:vex`), or poll an entry's `id` once the server has told you which one to use.
 > - When a scoreboard tag is the handle, do the lookup **server-side** with `findEntities` and coordinate over the packet channel (`sendPacket` / `waitForPacket`).

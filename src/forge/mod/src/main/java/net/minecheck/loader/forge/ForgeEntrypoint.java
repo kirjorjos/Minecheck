@@ -48,10 +48,9 @@ public class ForgeEntrypoint {
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
+    // No EMI bridge on Forge: EMI 1.18.2 ships for Fabric and Quilt only, so the viewer list here
+    // is JEI and REI. The Lua API is the same on every loader.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("emi")) {
-      viewers.add(new ForgeEmiRecipeViewer());
-    }
     if (!dedicated && ModList.get().isLoaded("jei")) {
       viewers.add(new ForgeJeiRecipeViewer());
     }
@@ -189,7 +188,11 @@ public class ForgeEntrypoint {
     if (event.phase != TickEvent.Phase.END || serverPlatform == null) {
       return;
     }
-    MinecraftServer s = event.getServer();
+    // 1.18.2's ServerTickEvent carries no server reference.
+    MinecraftServer s = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+    if (s == null) {
+      return;
+    }
     serverPlatform.setServer(s);
     if (rulesApplied.compareAndSet(false, true)) {
       serverPlatform.applyDeterministicRules();
