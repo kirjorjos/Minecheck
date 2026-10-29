@@ -1,11 +1,15 @@
 package net.minecheck.gradle;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.file.FileCollection;
+import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFiles;
@@ -58,6 +62,37 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getUpdate();
+
+  /**
+   * True ⇒ compare and *report* but never fail on a mismatch or a missing baseline.
+   *
+   * <p>This is the pull-request half of the baseline flow: a PR compares its own captures against
+   * the base branch's pictures, and a difference there is expected — it is what the PR reports and
+   * what the post-merge chore then regenerates on the base branch. The gate that must actually be
+   * enforced on a PR is determinism (the same code capturing twice), which the workflow runs as a
+   * second pass against the first pass's captures.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getReport();
+
+  /**
+   * When set, the tree to compare against, replacing the CI/local baseline resolution.
+   *
+   * <p>Used by the determinism pass, which points this at the first pass's captures: comparing a
+   * run against its own pictures says whether the client renders deterministically, independent of
+   * what the base branch has committed.
+   */
+  @Internal
+  public abstract DirectoryProperty getCompareDir();
+
+  /**
+   * Where report mode writes the baselines a run diverged from, one {@code tests/baselines/…} path
+   * per line. The pull-request workflow concatenates these into the list the comment job posts and
+   * the post-merge chore regenerates.
+   */
+  @Internal
+  public abstract RegularFileProperty getReportFile();
 
   /**
    * The captures, as a file tree rather than a directory property, so a run that produced nothing
@@ -124,12 +159,27 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
               + " — the script did not call captureScreenshot");
     }
     if (result.failed()) {
-      throw new GradleException(
+      String message =
           "Minecheck screenshot baselines FAILED ("
               + loader
               + "):\n\n"
               + String.join("\n\n", result.failures())
-              + "\n");
+              + "\n";
+      if (getReport().getOrElse(false)) {
+        // Report mode: the divergence is the PR's finding, not its failure. Same text, printed
+        // where the workflow and the comment job can pick it up, plus the paths on their own.
+        getLogger().warn(message);
+        getLogger()
+            .lifecycle(
+                "Minecheck: {} of {} {} capture(s) differ from the compared tree{}",
+                result.failures().size(),
+                result.total(),
+                loader,
+                REPORT_HINT);
+        writeReport(result.failures(), active);
+      } else {
+        throw new GradleException(message);
+      }
     }
     getLogger()
         .lifecycle(
@@ -140,10 +190,79 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
             ScreenshotBaselines.CHANNEL_TOLERANCE);
   }
 
-  /** {@code <baselines>/<loader>} in CI, {@code <local-baselines>/<loader>} otherwise. */
+  /**
+   * An explicit comparison tree, else {@code <baselines>/<loader>} in CI, the local tree otherwise.
+   */
   private Path activeBaselineDirectory(String loader) {
+    if (getCompareDir().isPresent()) {
+      return getCompareDir().get().getAsFile().toPath().resolve(loader);
+    }
     boolean ci = getCiMode().getOrElse(false);
     Path root = (ci ? getBaselinesDir() : getLocalBaselinesDir()).get().getAsFile().toPath();
     return root.resolve(loader);
+  }
+
+  /** The suffix report mode adds after a divergence count, naming what happens to them. */
+  private static final String REPORT_HINT =
+      "; they are regenerated on the base branch after the merge";
+
+  /**
+   * Writes the baseline paths behind report-mode failures ({@code
+   * tests/baselines/<loader>/<file>}), taken from each failure's first line — the comparator starts
+   * every block with the label it is about. Anything unparseable is skipped: this list drives a
+   * comment and a regeneration, so a missing entry degrades to "not reported", never to a wrong
+   * file.
+   */
+  private void writeReport(List<String> failures, Path active) {
+    if (getReportFile().isPresent()) {
+      Path file = getReportFile().get().getAsFile().toPath();
+      List<String> paths = divergedBaselines(failures);
+      if (paths.isEmpty()
+          && failures.stream().anyMatch(f -> f.startsWith("capture profile changed"))) {
+        // A changed profile says every picture of this loader is stale — the failure names no
+        // single file, so the whole loader's set is what the comment and the chore have to name.
+        paths = allBaselines(active);
+      }
+      try {
+        Files.createDirectories(file.getParent());
+        Files.write(file, paths);
+      } catch (IOException e) {
+        throw new GradleException("Minecheck: could not write the screenshot report " + file, e);
+      }
+    }
+  }
+
+  /** Every {@code tests/baselines/<loader>/<png>} in a baseline directory, sorted. */
+  static List<String> allBaselines(Path activeDir) {
+    List<String> paths = new ArrayList<>();
+    String loader = activeDir.getFileName().toString();
+    try (java.util.stream.Stream<Path> files = Files.list(activeDir)) {
+      files
+          .filter(p -> p.getFileName().toString().endsWith(".png"))
+          .forEach(p -> paths.add("tests/baselines/" + loader + "/" + p.getFileName()));
+    } catch (IOException e) {
+      return paths;
+    }
+    java.util.Collections.sort(paths);
+    return paths;
+  }
+
+  /** The {@code tests/baselines/…} paths named by a comparison's failure blocks, deduplicated. */
+  static List<String> divergedBaselines(List<String> failures) {
+    List<String> paths = new ArrayList<>();
+    for (String failure : failures) {
+      String first = failure.split("\n", 2)[0];
+      String label = first.replaceFirst("^(no baseline for |screenshot mismatch: )", "").trim();
+      String token = label.split(" ", 2)[0];
+      if (!token.endsWith(".png")) {
+        continue;
+      }
+      String path = "tests/baselines/" + token;
+      if (!paths.contains(path)) {
+        paths.add(path);
+      }
+    }
+    java.util.Collections.sort(paths);
+    return paths;
   }
 }
