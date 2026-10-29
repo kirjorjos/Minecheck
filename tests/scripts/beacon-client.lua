@@ -5,7 +5,11 @@ if minecheck.clickGui("Proceed to main menu", 0, 1) then
   minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
 end
 
-local joined = minecheck.joinServer("localhost:25565", 120)
+-- 300 s, not 120: the join budget starts when this script does, while the dedicated server is
+-- still booting in parallel — a loaded CI runner took 143 s from server launch to `Done`, all of it
+-- after the port was already accepting connections (so every attempt in that window is dropped).
+-- 120 s ran out before the server was up and the client gave up one retry short of joining.
+local joined = minecheck.joinServer("localhost:25565", 300)
 if not minecheck.expect(joined, "joined beacon-test server") then
   minecheck.fail("joinServer failed")
 end
@@ -211,25 +215,59 @@ end
 local inv2 = minecheck.openScreen("inventory", nil, 10)
 check(inv2, "inventory reopened")
 check(minecheck.slotCount("inventory") > 0, "inventory has slots")
-local s36 = minecheck.getSlot(36, "inventory")
-check(s36.empty, "emerald no longer in hotbar slot 36 (moved to beacon)")
-local sword = minecheck.getSlot(37, "inventory")
-check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in slot 37")
+-- The hotbar's first slot is not a constant: the survival handler puts it at 36, while the creative
+-- inventory puts the item-list tabs at 0..44 and the hotbar at 45..53 (slotCount 54). A read at 36
+-- on the creative screen returns a tab item and says nothing about the player's hotbar.
+local function hotbarStart()
+  return minecheck.slotCount("inventory") > 46 and 45 or 36
+end
+
+-- Closing the beacon screen hands the payment slot's stack back to the player (vanilla returns it
+-- on close; only activating an effect consumes it), so the emerald is expected back in the
+-- inventory, anywhere — the beacon screen already showed the move itself (payment slot full, the
+-- main slot it came from empty). What must hold after the round trip is that there is exactly one:
+-- the move through the beacon neither duplicated nor lost it.
+local function emeraldCount()
+  local total = 0
+  for i = 0, minecheck.slotCount("inventory") - 1 do
+    local s = minecheck.getSlot(i, "inventory")
+    if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
+      total = total + s.count
+    end
+  end
+  return total
+end
+
+local emeraldBack = minecheck.waitFor(function()
+  return emeraldCount() == 1
+end, 10)
+if not emeraldBack then
+  for i = 0, minecheck.slotCount("inventory") - 1 do
+    local s = minecheck.getSlot(i, "inventory")
+    if s ~= nil and not s.empty then
+      minecheck.log("beacon test: slot " .. i .. " = " .. tostring(s.id) .. " x" .. tostring(s.count))
+    end
+  end
+end
+check(emeraldBack, "the emerald came back from the beacon screen once (got " .. emeraldCount() .. ")")
+
+local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
+check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
 check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
 local redstoneReady = minecheck.waitFor(function()
-  local s = minecheck.getSlot(38, "inventory")
+  local s = minecheck.getSlot(hotbarStart() + 2, "inventory")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8
 end, 30)
-check(redstoneReady, "server gave the 8-redstone stack (hotbar slot 38)")
-local partial = minecheck.moveItem(38, 10, 3, "inventory")
+check(redstoneReady, "server gave the 8-redstone stack (third hotbar slot)")
+local partial = minecheck.moveItem(hotbarStart() + 2, 10, 3, "inventory")
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
   local s = minecheck.getSlot(10, "inventory")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 3
 end, 10)
 check(moved3, "destination holds exactly 3 redstone")
-local leftOver = minecheck.getSlot(38, "inventory")
+local leftOver = minecheck.getSlot(hotbarStart() + 2, "inventory")
 check(leftOver.id == "minecraft:redstone" and leftOver.count == 5, "source keeps the remaining 5 redstone")
 
 local typed = minecheck.typeText("give @s minecraft:diamond 2", "command")
@@ -246,7 +284,7 @@ check(chatClosed, "chat screen closed after submitting the typed command")
 local inv3 = minecheck.openScreen("inventory", nil, 10)
 check(inv3, "inventory reopened for the typeText check")
 local gotDiamonds = minecheck.waitFor(function()
-  for i = 36, 44 do
+  for i = hotbarStart(), hotbarStart() + 8 do
     local s = minecheck.getSlot(i, "inventory")
     if s ~= nil and not s.empty and s.id == "minecraft:diamond" and s.count == 2 then
       return true
@@ -309,7 +347,7 @@ check(
 if plankGhost ~= nil then
   local source = slotHolding("minecraft:oak_planks")
   local dest = nil
-  for i = 36, 44 do
+  for i = hotbarStart(), hotbarStart() + 8 do
     local s = minecheck.getSlot(i, "inventory")
     if s ~= nil and s.empty and i ~= source then
       dest = i
