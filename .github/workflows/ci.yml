@@ -87,20 +87,43 @@ jobs:
           if [ -z "$TASKS" ]; then
             TASKS=test
           fi
+          # A pull request compares against the base branch: a picture that differs or is missing
+          # there is the PR's *finding* — reported in a comment and regenerated on the base branch
+          # after the merge — not the PR's failure. What must hold on the PR is that the same code
+          # captures the same pixels twice, which the next steps check.
+          REPORT=""
+          if [[ "${{ inputs.compare_baselines }}" != "" ]]; then
+            REPORT="-Pminecheck.screenshots.report=true"
+          fi
           # --continue so one failing lifecycle suite does not stop the others: the screenshot
           # suites write a missing baseline before they fail, and a bootstrapping run has to reach
           # all three of them. The step still fails on the first non-zero task result.
-          ./gradlew $TASKS --continue --no-daemon --console=plain \
+          ./gradlew $TASKS $REPORT --continue --no-daemon --console=plain \
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dorg.gradle.worker.jvmargs="-Xmx2g"
         timeout-minutes: 120
 
-      - name: Regenerate the screenshot baselines
-        if: failure() && steps.build.outcome == 'failure' && inputs.compare_baselines != ''
-        continue-on-error: true
+      - name: Save the first pass's captures
+        if: always() && inputs.compare_baselines != ''
         run: |
-          ./gradlew testFabricShots testForgeShots testQuiltShots --no-daemon --console=plain \
-            -Pminecheck.screenshots.update=true -Pminecheck.baselines=ci \
+          set -euo pipefail
+          for loader in fabric forge quilt; do
+            src="src/$loader/mod/run/client/screenshots"
+            [[ -d "$src" ]] || continue
+            mkdir -p "$RUNNER_TEMP/shots-first/$loader"
+            cp -a "$src/." "$RUNNER_TEMP/shots-first/$loader/"
+          done
+
+      - name: Verify the captures are deterministic
+        if: always() && inputs.compare_baselines != ''
+        run: |
+          set -euo pipefail
+          # The gate that belongs to a PR: capture a second time and compare it against the first
+          # pass instead of against the base branch. A client that renders the same scene
+          # differently twice would make every baseline meaningless, and that is the only thing
+          # this pass can prove about the branch itself.
+          ./gradlew testFabricShots testForgeShots testQuiltShots --continue --no-daemon --console=plain \
+            -Pminecheck.screenshots.compareDir="$RUNNER_TEMP/shots-first" \
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dorg.gradle.worker.jvmargs="-Xmx2g"
         timeout-minutes: 90
@@ -110,11 +133,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/changed-baselines"
-          # Relative to HEAD (the PR's own copy), so this is exactly the set of files the post-merge
-          # job has to write. Deletions are excluded: only files that will be committed matter.
-          git status --porcelain -- tests/baselines \
-            | awk '$1 != "D" {print $NF}' \
-            | sort -u > "$RUNNER_TEMP/changed-baselines/changed.txt"
+          # The report the shots tasks wrote in report mode: exactly the baselines the PR's captures
+          # diverge from, which is what the comment names and the post-merge chore regenerates.
+          # Anything report mode wrote into the tree (a missing baseline) is added on top.
+          {
+            cat build/minecheck/shots-report/*.txt 2>/dev/null || true
+            git status --porcelain -- tests/baselines \
+              | awk '$1 != "D" {print $NF}' \
+              || true
+          } | sed '/^$/d' | sort -u > "$RUNNER_TEMP/changed-baselines/changed.txt"
           echo "Changed baselines:"
           cat "$RUNNER_TEMP/changed-baselines/changed.txt"
 

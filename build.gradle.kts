@@ -495,6 +495,16 @@ val updateScreenshotBaselines =
     .map { it.trim().toBoolean() }
     .orElse(false)
 
+// Report mode: compare and print, but never fail — the PR gate is determinism, run as a second
+// pass with minecheck.screenshots.compareDir pointed at the first pass's captures.
+val reportScreenshotBaselines =
+  providers
+    .gradleProperty("minecheck.screenshots.report")
+    .map { it.trim().toBoolean() }
+    .orElse(false)
+
+val screenshotCompareDir = providers.gradleProperty("minecheck.screenshots.compareDir")
+
 val profileWidth =
   providers.gradleProperty("minecheck.screenshot.width").map(String::toInt).orElse(854)
 val profileHeight =
@@ -556,6 +566,11 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
     localBaselinesDir.set(layout.projectDirectory.dir("tests/local-baselines"))
     ciMode.set(ciBaselines)
     update.set(updateScreenshotBaselines)
+    report.set(reportScreenshotBaselines)
+    reportFile.set(layout.buildDirectory.file("minecheck/shots-report/$loader.txt"))
+    screenshotCompareDir.orNull?.let { path ->
+      compareDir.set(layout.dir(providers.provider { file(path) }))
+    }
   }
 }
 
