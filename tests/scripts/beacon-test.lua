@@ -28,6 +28,10 @@ local g3 = minecheck.runCommand("give " .. player .. " minecraft:redstone 8")
 check(g3.result > 0, "8 redstone given (partial moveItem check)")
 
 minecheck.log("beacon test: player op'd and items given, waiting for client to leave")
-local left = minecheck.waitForPlayerLeave(player, 90)
+-- 180 s, not 90: this wait covers the client's *whole* remaining script (the beacon screen, the
+-- inventory round trips, the recipe-viewer probes and a resource reload), which takes ~90 s on a
+-- CI runner — a 90 s cap missed by about a second. The wait still returns the moment the player
+-- disconnects; the number only bounds how long a slow machine may take to get there.
+local left = minecheck.waitForPlayerLeave(player, 180)
 check(left, "client left after beacon test")
 minecheck.runCommand("stop")

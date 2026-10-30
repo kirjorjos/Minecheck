@@ -33,7 +33,9 @@ end
 
 -- phase A: create + leave a fresh world
 runPhase("create world", function()
-  local c = minecheck.createWorld({ name = "minecheck_world" })
+  -- 120 s, not the 60 s default: the wait already returns the moment isWorldReady() is true, but a
+  -- cold Forge client on a slow runner spends most of a minute generating the world before then.
+  local c = minecheck.createWorld({ name = "minecheck_world" }, 120)
   if not c then
     minecheck.fail("createWorld failed")
   end
