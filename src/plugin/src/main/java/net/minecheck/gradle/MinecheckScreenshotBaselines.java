@@ -20,8 +20,8 @@ import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 
 /**
- * Verifies one loader's screenshot captures against its baseline tree, within a small per-channel
- * tolerance (see {@link ScreenshotBaselines} for why exact bytes cannot work).
+ * Verifies one loader's screenshot captures against its baseline tree, byte for byte (see {@link
+ * ScreenshotBaselines} for why pixels can be compared exactly).
  *
  * <p>Runs after the loader's {@code run*Shots} lifecycle task, which writes the PNGs. The verdict
  * is the {@link ScreenshotBaselines comparison}; this class is only the Gradle surface around it.
@@ -183,11 +183,10 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
     }
     getLogger()
         .lifecycle(
-            "Minecheck: {} of {} {} capture(s) match their baseline (tolerance {} levels)",
+            "Minecheck: {} of {} {} capture(s) match their baseline (byte for byte)",
             result.matched().size(),
             result.total(),
-            loader,
-            ScreenshotBaselines.CHANNEL_TOLERANCE);
+            loader);
   }
 
   /**

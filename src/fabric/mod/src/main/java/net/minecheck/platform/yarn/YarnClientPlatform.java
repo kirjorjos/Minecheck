@@ -131,6 +131,82 @@ public class YarnClientPlatform implements ClientPlatform {
     }
   }
 
+  /** Set once the pinned counter is installed, or once installation has been given up on. */
+  private static volatile boolean renderTickDeltaPinned;
+
+  private static volatile boolean renderTickDeltaUnavailable;
+
+  /**
+   * Draws every frame at render delta 1 — see {@link ClientPlatform#pinRenderTickDelta()} for why a
+   * capture needs it.
+   *
+   * <p>The counter object is swapped rather than a value written into it: the client recomputes the
+   * delta at the start of every frame, so only an object that keeps reporting 1 survives to the
+   * render. The subclass still returns vanilla's tick count, so ticks are scheduled exactly as
+   * before — only the interpolation fraction changes.
+   */
+  @Override
+  public void pinRenderTickDelta() {
+    if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
+      return;
+    }
+    MinecraftClient mc = mc();
+    java.lang.reflect.Field counterField = null;
+    for (java.lang.reflect.Field field : MinecraftClient.class.getDeclaredFields()) {
+      if (field.getType().getSimpleName().equals("RenderTickCounter")) {
+        counterField = field;
+        break;
+      }
+    }
+    if (counterField == null) {
+      renderTickDeltaUnavailable = true;
+      LOG.warning(
+          "Minecheck: no render tick counter on this client — captures keep the vanilla partial"
+              + " tick and may differ by a level between runs");
+      return;
+    }
+    try {
+      counterField.setAccessible(true);
+      Object current = counterField.get(mc);
+      if (current instanceof PinnedRenderTickCounter) {
+        renderTickDeltaPinned = true;
+        return;
+      }
+      float fixedTimeStep = 0.0f;
+      long lastTimeMillis = 0L;
+      for (java.lang.reflect.Field field : current.getClass().getDeclaredFields()) {
+        field.setAccessible(true);
+        if (field.getType() == float.class && !field.getName().equals("tickDelta")) {
+          fixedTimeStep = field.getFloat(current);
+        } else if (field.getType() == long.class) {
+          lastTimeMillis = field.getLong(current);
+        }
+      }
+      counterField.set(mc, new PinnedRenderTickCounter(fixedTimeStep, lastTimeMillis));
+      renderTickDeltaPinned = true;
+      LOG.info("Minecheck: pinned the render tick delta to 1");
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      renderTickDeltaUnavailable = true;
+      LOG.log(Level.WARNING, "Minecheck: could not pin the render tick delta", e);
+    }
+  }
+
+  /** A render tick counter that always hands the renderer a delta of 1. */
+  private static final class PinnedRenderTickCounter
+      extends net.minecraft.client.render.RenderTickCounter {
+
+    PinnedRenderTickCounter(float fixedTimeStep, long lastTimeMillis) {
+      super(fixedTimeStep, lastTimeMillis);
+    }
+
+    @Override
+    public int beginRenderTick(long timeMillis) {
+      int ticks = super.beginRenderTick(timeMillis);
+      this.tickDelta = 1.0f;
+      return ticks;
+    }
+  }
+
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     onClientThread(() -> captureScreenshot(request));

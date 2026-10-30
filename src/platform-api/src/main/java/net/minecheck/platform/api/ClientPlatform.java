@@ -320,6 +320,23 @@ public interface ClientPlatform {
   default void pinClientClock() {}
 
   /**
+   * Draw every frame at a render delta of 1 instead of the wall-clock fraction into the tick.
+   *
+   * <p>The client renders at {@code previous + (current - previous) * delta}, so that fraction
+   * decides the sun angle, the lightmap that modulates every lit pixel, the camera's interpolated
+   * pose and any animated model in a capture. Even with the clock pinned and the camera at rest, two
+   * frames of the same scene differ by a level across the picture and by more on the texture edges
+   * that straddle a rounding step — which is why a baseline verdict could only ever be a tolerance.
+   * Pinning the delta makes the frame a function of the script alone, so the verdict is exact
+   * bytes.
+   *
+   * <p>Applied once; implementations must be idempotent, and may do nothing when the client cannot be
+   * reached (no render loop), in which case captures keep the vanilla fraction. Called from the
+   * loader entrypoint next to {@link #pinClientClock()}.
+   */
+  default void pinRenderTickDelta() {}
+
+  /**
    * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on
    * the render thread, hands the pixels to its PNG encoder, resolves the output path against the
    * run directory ({@code <run>/screenshots/<name>.png}) and reports progress through the request's

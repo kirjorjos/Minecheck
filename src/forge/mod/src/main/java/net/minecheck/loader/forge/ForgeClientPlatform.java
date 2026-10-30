@@ -131,6 +131,78 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
   }
 
+  /** Set once the pinned timer is installed, or once installation has been given up on. */
+  private static volatile boolean renderTickDeltaPinned;
+
+  private static volatile boolean renderTickDeltaUnavailable;
+
+  /**
+   * Draws every frame at render delta 1 — see {@link ClientPlatform#pinRenderTickDelta()} for why a
+   * capture needs it. The timer object is swapped rather than a value written into it, because the
+   * delta is recomputed at the start of every frame; the subclass still returns vanilla's tick
+   * count, so ticks are scheduled exactly as before.
+   */
+  @Override
+  public void pinRenderTickDelta() {
+    if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
+      return;
+    }
+    Minecraft mc = mc();
+    java.lang.reflect.Field timerField = null;
+    for (java.lang.reflect.Field field : Minecraft.class.getDeclaredFields()) {
+      if (field.getType().getSimpleName().equals("Timer")) {
+        timerField = field;
+        break;
+      }
+    }
+    if (timerField == null) {
+      renderTickDeltaUnavailable = true;
+      LOG.warning(
+          "Minecheck: no render timer on this client — captures keep the vanilla partial tick and"
+              + " may differ by a level between runs");
+      return;
+    }
+    try {
+      timerField.setAccessible(true);
+      Object current = timerField.get(mc);
+      if (current instanceof PinnedTimer) {
+        renderTickDeltaPinned = true;
+        return;
+      }
+      float msPerTick = 0.0f;
+      long lastMs = 0L;
+      for (java.lang.reflect.Field field : current.getClass().getDeclaredFields()) {
+        field.setAccessible(true);
+        if (field.getType() == float.class && !field.getName().equals("partialTick")) {
+          msPerTick = field.getFloat(current);
+        } else if (field.getType() == long.class) {
+          lastMs = field.getLong(current);
+        }
+      }
+      timerField.set(mc, new PinnedTimer(msPerTick, lastMs));
+      renderTickDeltaPinned = true;
+      LOG.info("Minecheck: pinned the render tick delta to 1");
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      renderTickDeltaUnavailable = true;
+      LOG.log(Level.WARNING, "Minecheck: could not pin the render tick delta", e);
+    }
+  }
+
+  /** A frame timer that always hands the renderer a partial tick of 1. */
+  private static final class PinnedTimer extends net.minecraft.client.Timer {
+
+    PinnedTimer(float msPerTick, long lastMs) {
+      super(msPerTick, lastMs);
+    }
+
+    @Override
+    public int advanceTime(long timeMs) {
+      int ticks = super.advanceTime(timeMs);
+      this.partialTick = 1.0f;
+      return ticks;
+    }
+  }
+
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     onClientThread(() -> captureScreenshot(request));

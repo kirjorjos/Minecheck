@@ -81,38 +81,31 @@ class ScreenshotBaselinesTest {
   }
 
   @Test
-  void aFewLevelsOfDriftAreToleratedAndReported() throws Exception {
-    // The partial tick moves the sun angle, and with it every lit pixel by a level or so.
+  void aOneLevelOfDriftIsAMismatch() throws Exception {
+    // The render delta is pinned, so the same scene must come back pixel for pixel; a level of
+    // difference is a change in the picture, not the drift this test used to allow.
     capture("world-settled", png(16, shade -> shade % 2 == 0 ? 100 : 104));
-    baseline("world-settled", png(16, shade -> (shade % 2 == 0 ? 100 : 104) + 2));
+    baseline("world-settled", png(16, shade -> (shade % 2 == 0 ? 100 : 104) + 1));
 
     ScreenshotBaselines.Result result = compare(false);
 
-    assertFalse(result.failed(), "a two-level drift must not fail a build");
-    assertEquals(1, result.matched().size());
-    assertEquals(1, result.tolerated().size());
-    assertTrue(
-        result.tolerated().get(0).contains("max channel delta 2"), result.tolerated().get(0));
+    assertTrue(result.failed(), "a one-level difference must fail a build");
+    assertTrue(result.failures().get(0).contains("world-settled"), result.failures().get(0));
+    assertTrue(result.tolerated().isEmpty(), "nothing is tolerated any more");
   }
 
   @Test
-  void theMeasuredCiDriftPassesButALitFrameShiftDoesNot() throws Exception {
-    // Between two CI client processes the whole frame sits a level or two brighter or darker, with
-    // a 99.9th percentile of 10 levels: the drift the tolerance is sized for.
-    capture("drift", png(16, shade -> Math.min(255, shade + 10)));
-    baseline("drift", png(16, shade -> shade));
-    assertFalse(compare(false).failed(), "the measured CI drift must not fail a build");
+  void identicalFramesPassAndOneChangedPixelDoesNot() throws Exception {
+    capture("drift", png(16, 80));
+    baseline("drift", png(16, 80));
+    assertFalse(compare(false).failed(), "the same pixels must pass");
 
-    // One level past the tolerance on the whole frame is a different picture, not noise.
-    capture(
-        "lit-shift",
-        png(16, shade -> Math.min(255, shade + ScreenshotBaselines.CHANNEL_TOLERANCE + 1)));
-    baseline("lit-shift", png(16, shade -> shade));
-
+    capture("edge", png(16, shade -> shade == 0 ? 81 : 80));
+    baseline("edge", png(16, 80));
     ScreenshotBaselines.Result result = compare(false);
 
-    assertTrue(result.failed(), "a frame this far off is a change, not drift");
-    assertTrue(result.failures().get(0).contains("lit-shift"), result.failures().get(0));
+    assertTrue(result.failed(), "one changed pixel is a different picture");
+    assertTrue(result.failures().get(0).contains("edge"), result.failures().get(0));
   }
 
   @Test
@@ -134,16 +127,13 @@ class ScreenshotBaselinesTest {
   }
 
   @Test
-  void aHandfulOfOutliersPassesButMoreDoNot() throws Exception {
-    // A few block edges can land on the other side of a rounding step between runs.
-    int allowed = ScreenshotBaselines.MAX_OUTLIER_PIXELS;
-    capture("edges", png(16, shade -> shade < allowed ? 0 : 120));
-    baseline("edges", png(16, shade -> shade < allowed ? 200 : 120));
-    assertFalse(compare(false).failed(), "exactly the allowed number of outliers still passes");
+  void aSingleOutlierPixelIsAMismatch() throws Exception {
+    capture("edges", png(16, shade -> shade == 5 ? 0 : 120));
+    baseline("edges", png(16, shade -> shade == 5 ? 200 : 120));
 
-    capture("edges", png(16, shade -> shade <= allowed ? 0 : 120));
     ScreenshotBaselines.Result result = compare(false);
-    assertTrue(result.failed(), "one pixel past the allowance is a mismatch");
+
+    assertTrue(result.failed());
     assertTrue(
         result.failures().get(0).contains("pixels differ by more than"), result.failures().get(0));
   }
