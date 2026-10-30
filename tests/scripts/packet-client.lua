@@ -9,7 +9,7 @@ if minecheck.clickGui("Proceed to main menu", 0, 1) then
   minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
 end
 
-local joined = minecheck.joinServer("localhost:25565", 120)
+local joined = minecheck.joinServer("localhost:25565", 300)
 if not minecheck.expect(joined, "joined the dedicated server") then
   minecheck.fail("joinServer failed")
 end

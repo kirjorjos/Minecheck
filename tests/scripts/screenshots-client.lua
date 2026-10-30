@@ -99,7 +99,12 @@ if minecheck.expect(opened, "opened the inventory") then
   local inventory = shot("inventory-open")
   minecheck.expect(inventory.width == frameWidth, "inventory-open is " .. frameWidth .. " px wide")
   minecheck.press("escape")
-  minecheck.wait(0.1)
+  minecheck.expect(
+    minecheck.waitFor(function()
+      return not minecheck.isScreenOpen(nil)
+    end, 5),
+    "escape closed the inventory"
+  )
 else
   minecheck.fail("openScreen(inventory) failed")
 end

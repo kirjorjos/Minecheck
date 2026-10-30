@@ -95,6 +95,16 @@ class ScriptEngineTest {
       return !joining;
     }
 
+    /** When true, {@link #worldLoadProgress()} advances on every poll (a load that keeps going). */
+    boolean movingLoad;
+
+    int loadProgressValue;
+
+    @Override
+    public float worldLoadProgress() {
+      return movingLoad ? loadProgressValue++ : -1f;
+    }
+
     boolean worldGenSettled;
 
     @Override
@@ -152,6 +162,8 @@ class ScriptEngineTest {
     @Override
     public void useItemOnTarget() {
       useItemOnTargetCalls++;
+      // What the click raycasts at, recorded so a test can check the aim was there when it fired.
+      clickedAt.add(getTargetBlock(playerInfo.name()));
       openRequested = true;
     }
 
@@ -316,6 +328,10 @@ class ScriptEngineTest {
     }
 
     private boolean screenOpen() {
+      // Screen queries are the fake's tick: each one lets a pending aim get one tick closer.
+      if (aimTicksLeft > 0) {
+        aimTicksLeft--;
+      }
       if (openScreenId == null || !openRequested) {
         return false;
       }
@@ -361,6 +377,25 @@ class ScriptEngineTest {
         new net.minecheck.platform.api.PlayerInfo("Dev", 8.5, 65.0, 8.5, "minecraft:overworld");
     net.minecheck.platform.api.BlockPosition targetBlock =
         new net.minecheck.platform.api.BlockPosition(8, 64, 8);
+
+    /**
+     * Ticks the crosshair takes to follow a {@code lookAt}. A real client applies the rotation on
+     * its own thread, so the crosshair keeps the previous block until the next frame; 0 models one
+     * that is already there when the script looks again.
+     */
+    int aimLagTicks = 0;
+
+    /**
+     * The block the last {@code lookAt} aimed at, published once {@link #aimTicksLeft} runs out.
+     */
+    net.minecheck.platform.api.BlockPosition aimedBlock;
+
+    int aimTicksLeft = 0;
+
+    /** The block under the crosshair at each {@code useItemOnTarget}. */
+    final java.util.List<net.minecheck.platform.api.BlockPosition> clickedAt =
+        new java.util.ArrayList<>();
+
     boolean inWorld = true;
 
     @Override
@@ -376,11 +411,21 @@ class ScriptEngineTest {
     @Override
     public void lookAt(double x, double y, double z) {
       lookAts.add(new double[] {x, y, z});
+      aimedBlock =
+          new net.minecheck.platform.api.BlockPosition(
+              (int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+      aimTicksLeft = aimLagTicks;
     }
 
     @Override
     public net.minecheck.platform.api.BlockPosition getTargetBlock(String entityName) {
-      return entityName.equals(playerInfo.name()) ? targetBlock : null;
+      if (!entityName.equals(playerInfo.name())) {
+        return null;
+      }
+      if (aimedBlock == null || aimTicksLeft > 0) {
+        return targetBlock;
+      }
+      return aimedBlock;
     }
 
     /** Entities the client currently knows about (what the server has synced to it). */
@@ -803,6 +848,84 @@ class ScriptEngineTest {
     runUntilFinished(engine, 10);
     assertTrue(engine.isFinished());
     assertTrue(engine.isFailed(), "assert(ok) should fail: the world never became ready");
+  }
+
+  @Test
+  void createWorldLetsASlowLoadRunWhileItIsStillAdvancing() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE; // never becomes ready during the test
+    client.movingLoad = true;
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'the load was still moving')\n",
+            clock);
+
+    // Two minutes of loading: past any budget sized for the usual machine, and the very window
+    // that used to be reported as "createWorld failed" on a loaded CI runner.
+    for (int i = 0; i < 120; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished(), "a load that keeps advancing is not failed");
+  }
+
+  @Test
+  void createWorldGivesUpOnceAMovingLoadStopsMoving() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE;
+    client.movingLoad = true;
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'the load stopped moving')\n",
+            clock);
+    for (int i = 0; i < 5; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished());
+
+    client.movingLoad = false; // the server has gone quiet
+    clock.addAndGet(61_000);
+    engine.tick();
+    assertTrue(engine.isFinished(), "a stalled load is reported without waiting out the ceiling");
+    assertTrue(engine.isFailed());
+    assertTrue(clock.get() < 300_000L, "the stall, not the ceiling, ended the wait");
+  }
+
+  @Test
+  void createWorldFallsBackToItsCeilingWithoutAProgressSignal() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE; // and no progress signal: movingLoad stays false
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'no signal, so the ceiling decides')\n",
+            clock);
+    for (int i = 0; i < 3; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished(), "the load is still inside its ceiling");
+
+    clock.addAndGet(120_000);
+    engine.tick();
+    assertFalse(engine.isFinished(), "with no signal there is nothing to call stalled");
+
+    clock.addAndGet(181_000);
+    runUntilFinished(engine, 20);
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
   }
 
   @Test
@@ -1392,6 +1515,30 @@ class ScriptEngineTest {
     assertEquals(65.0, client.lookAts.get(0)[1], 0.001);
     assertEquals(8.0, client.lookAts.get(0)[2], 0.001);
     assertEquals(1, client.useItemOnTargetCalls, "block right-click should be dispatched");
+  }
+
+  @Test
+  void openScreenWaitsForTheAimToLandBeforeClicking() throws Exception {
+    FakeClient client = new FakeClient();
+    client.openScreenId = "chest";
+    // Three ticks for the crosshair to follow the rotation: the click raycasts at that moment, so
+    // a click dispatched before the aim lands hits air and vanilla's use path drops it silently.
+    client.aimLagTicks = 3;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local ok = minecheck.openScreen('chest', { x = 2.5, y = -59.5, z = 0.5 }, 10)\n"
+                + "assert(ok, 'the chest screen should open')\n");
+    runUntilFinished(engine, 20);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals(1, client.useItemOnTargetCalls, "the chest is clicked once");
+    assertEquals(1, client.clickedAt.size());
+    assertEquals(
+        new net.minecheck.platform.api.BlockPosition(2, -60, 0),
+        client.clickedAt.get(0),
+        "the click must wait until the crosshair holds the block the aim named");
   }
 
   @Test

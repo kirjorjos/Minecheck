@@ -28,7 +28,7 @@ All script actions live on the global `minecheck` table. Functions that need to 
 
 | Term | Meaning |
 |------|---------|
-| *timeout* | Seconds (number). If omitted, defaults to `config.defaultTimeout`. All timeouts are **tick-driven** — checked once per game tick, not wall-clock. |
+| *timeout* | Seconds (number). If omitted, defaults to `config.defaultTimeout`. All timeouts are **tick-driven** — checked once per game tick, not wall-clock. A world-entry wait reads it as a **ceiling**: a load that is still advancing runs until then, while one that has stopped advancing gives up after a minute without movement. |
 | *boolean* | Lua truthy/falsy. Action returns `true` on success, `false` on timeout or refusal. |
 | `nil` | Absent / not-applicable return (Lua's `nil`). |
 
@@ -95,7 +95,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
   "coordinator": "coordinator.lua",
   "script": "my-script.lua",
   "failMode": "exit",
-  "defaultTimeout": 60
+  "defaultTimeout": 300
 }
 ```
 
@@ -104,7 +104,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `coordinator` | string \| null | `null` | Multi-phase entry script (wins over `script` when set). |
 | `script` | string | `""` | Single-phase entry script (used when `coordinator` is absent). |
 | `failMode` | string | `"exit"` | `"exit"`: quit/stop on script failure. `"continue"`: log and keep going. |
-| `defaultTimeout` | int | `30` | Default timeout in seconds for all wait actions (joins, waits, sleeps). |
+| `defaultTimeout` | int | `30` | Default timeout in seconds for all wait actions (joins, waits, sleeps). A world-entry wait is a ceiling: it ends early only when the load has stopped advancing. |
 | `screenshotWidth` | int | `854` | Captured frame width in pixels (the window the client is pinned to), 320–7680. |
 | `screenshotHeight` | int | `480` | Captured frame height in pixels, 240–4320. |
 | `screenshotGuiScale` | int | `2` | GUI scale the HUD is laid out at, 1–4. Pinned rather than auto, so HUD geometry does not depend on the window. |
@@ -128,7 +128,7 @@ Joins an existing singleplayer world by its folder name (under the client's save
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `name` | string | World folder name, e.g. `"minecheck_world"`. |
-| `timeout` | number | Max seconds to wait (default: `config.defaultTimeout`). |
+| `timeout` | number | Ceiling in seconds (default: `config.defaultTimeout`). The wait ends sooner only if the load stops advancing — a slow machine keeps waiting. |
 
 **Returns:** `true` once in world and ready to interact. `false` on timeout.
 
@@ -158,7 +158,7 @@ minecheck.createWorld({
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `options` | table | World options (all fields optional; see table above). |
-| `timeout` | number | Max seconds to wait (default: `config.defaultTimeout`). |
+| `timeout` | number | Ceiling in seconds (default: `config.defaultTimeout`). The wait ends sooner only if the load stops advancing — a slow machine keeps waiting. |
 
 **Returns:** `true` once in world and ready to interact (same loading-screen semantics as `joinLocalWorld`). `false` on timeout.
 
@@ -369,6 +369,8 @@ With no arguments it returns **all** entities in the overworld; with both filter
 ### `minecheck.openScreen(id[, pos][, timeout]) → boolean`
 
 Opens a container/handled screen and waits until it is open. `id` selects the screen: `"inventory"` opens the player inventory (via the inventory key); any other id right-clicks a container block — `pos` (`{ x = number, y = number, z = number }`) is looked at first (when omitted, the current aim is used).
+
+The click waits for that look to land: the rotation is applied on the client thread, so a click sent before the crosshair carries the block would hit air and the game drops the attempt silently. A `pos` that cannot be aimed at still clicks after a few seconds, so a wrong position fails on the timeout instead of waiting out an aim that never arrives.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1004,7 +1006,7 @@ Returns a read-only snapshot of the current runtime config:
     script         = "my-script.lua",   -- never nil: "" when none is set
     coordinator    = "coordinator.lua", -- nil when none is set (the key is then absent)
     failMode       = "exit",
-    defaultTimeout = 60,                 -- number
+    defaultTimeout = 300,                -- number
 }
 ```
 
@@ -1373,13 +1375,13 @@ end)
 
 -- Phase B: rejoin the saved world, leave it
 runPhase("rejoin world", function()
-    local j = minecheck.joinLocalWorld("minecheck_world", 90)
+    local j = minecheck.joinLocalWorld("minecheck_world", 300)
     if not j then minecheck.fail("joinLocalWorld failed") end
 end)
 
 -- Phase C: join the parallel dedicated server, leave it
 runPhase("join+leave server", function()
-    local j = minecheck.joinServer("localhost:25565", 120)
+    local j = minecheck.joinServer("localhost:25565", 300)
     if not j then minecheck.fail("joinServer failed") end
 end)
 
