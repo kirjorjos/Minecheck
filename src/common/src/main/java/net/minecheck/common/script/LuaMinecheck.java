@@ -1181,8 +1181,22 @@ public final class LuaMinecheck {
    * right-clicks the container block). For a block screen, {@code pos} ({@code { x =, y =, z = }})
    * is looked at before clicking; when omitted the current aim is used. Returns {@code true} once
    * {@code isScreenOpen(id)} is true, {@code false} on timeout.
+   *
+   * <p>The click waits for the aim it just made to land. {@code lookAt} is applied on the client
+   * thread and the click raycasts at that moment, so clicking in the same breath as the rotation is
+   * requested aims along the <em>previous</em> look direction: the ray hits air and vanilla's use
+   * path drops the attempt silently, leaving the screen shut. Waiting for the crosshair to hold the
+   * block {@code pos} names makes the click an act on the block the caller asked for.
    */
   private final class OpenScreen extends VarArgFunction {
+
+    /**
+     * How long the click waits for a requested aim to land before clicking anyway. A {@code pos}
+     * that cannot be aimed at is a script error, and clicking straight away keeps that failure as
+     * the caller's timeout rather than a longer wait for an aim that will never arrive.
+     */
+    private static final long AIM_GRACE_MILLIS = 5_000;
+
     @Override
     public Varargs invoke(Varargs args) {
       requireClient();
@@ -1190,6 +1204,12 @@ public final class LuaMinecheck {
       LuaValue pos = args.arg(2);
       long deadline = deadline(args, 3);
       boolean initiated = false;
+      boolean clicked = false;
+      // The block `pos` names, and the point after which the click no longer waits for it.
+      Integer aimX = null;
+      Integer aimY = null;
+      Integer aimZ = null;
+      long aimDeadline = 0;
       try {
         while (true) {
           if (!initiated) {
@@ -1197,17 +1217,24 @@ public final class LuaMinecheck {
               client.keyDown("key.inventory");
               globals.yield(LuaValue.NIL);
               client.keyUp("key.inventory");
-            } else {
-              if (!pos.isnil()) {
-                double[] p = parsePos(pos);
-                client.lookAt(p[0], p[1], p[2]);
-              }
-              onClientThread(() -> client.useItemOnTarget());
+            } else if (!pos.isnil()) {
+              double[] p = parsePos(pos);
+              aimX = (int) Math.floor(p[0]);
+              aimY = (int) Math.floor(p[1]);
+              aimZ = (int) Math.floor(p[2]);
+              aimDeadline = Math.min(deadline, clock.getAsLong() + AIM_GRACE_MILLIS);
+              client.lookAt(p[0], p[1], p[2]);
             }
             initiated = true;
           }
           if (client.isScreenOpen(id)) {
             return LuaValue.TRUE;
+          }
+          if (!id.equals("inventory")
+              && !clicked
+              && aimReadyToClick(aimX, aimY, aimZ, aimDeadline)) {
+            onClientThread(() -> client.useItemOnTarget());
+            clicked = true;
           }
           if (clock.getAsLong() > deadline) {
             return LuaValue.FALSE;
@@ -1219,6 +1246,22 @@ public final class LuaMinecheck {
       } catch (RuntimeException e) {
         throw wrap("openScreen", e);
       }
+    }
+
+    /**
+     * True once clicking is the thing to do: no {@code pos} was given (the caller aimed already),
+     * the aim was given up on, or the crosshair now holds the block {@code pos} names.
+     */
+    private boolean aimReadyToClick(Integer x, Integer y, Integer z, long aimDeadline) {
+      if (x == null || clock.getAsLong() > aimDeadline) {
+        return true;
+      }
+      net.minecheck.platform.api.PlayerInfo player = client.getPlayer();
+      if (player == null) {
+        return false;
+      }
+      net.minecheck.platform.api.BlockPosition hit = client.getTargetBlock(player.name());
+      return hit != null && hit.x() == x && hit.y() == y && hit.z() == z;
     }
   }
 
