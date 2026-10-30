@@ -110,8 +110,13 @@ public class FabricEntrypoint implements ModInitializer {
         services,
         engine -> {
           if (client != null) {
+            // Per-frame hook for the screenshot suite: captures need to know that a frame was drawn
+            // (see YarnClientPlatform#captureScreenshot).
+            net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
+                (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
             ClientTickEvents.END_CLIENT_TICK.register(
                 c -> {
+                  client.pinClientClock();
                   if (!engine.isFinished() && client.isBootComplete()) {
                     engine.tick();
                   }

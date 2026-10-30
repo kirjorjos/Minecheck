@@ -1,0 +1,114 @@
+name: PR screenshot baselines
+
+on:
+  workflow_run:
+    workflows: ["PR validation"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request_target'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the changed baseline list from the test run
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: changed-baselines
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/changed-baselines
+
+      - name: Comment baseline changes on the PR
+        if: steps.download.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          CHANGED_FILE: ${{ runner.temp }}/changed-baselines/changed.txt
+        with:
+          script: |
+            const fs = require("node:fs");
+            const run = context.payload.workflow_run;
+            const baseline = /^tests\/baselines\/(fabric|forge|quilt)\/[^/]+\.png$/;
+            const listed = fs
+              .readFileSync(process.env.CHANGED_FILE, "utf8")
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean);
+            const changed = listed.filter((file) => baseline.test(file));
+            if (changed.length !== listed.length) {
+              core.warning(
+                `Ignoring ${listed.length - changed.length} unexpected path(s) in the changed baseline list.`
+              );
+            }
+            if (changed.length === 0) {
+              core.info("No baseline changes reported - nothing to comment.");
+              return;
+            }
+
+            let number = run.pull_requests?.[0]?.number;
+            if (!number) {
+              const headOwner = (run.head_repository?.full_name ?? "").split("/")[0];
+              const { data: pulls } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                head: `${headOwner}:${run.head_branch}`,
+              });
+              number = pulls[0]?.number;
+            }
+            if (!number) {
+              core.warning(
+                `Could not resolve the pull request for run ${run.id} (${run.head_branch}).`
+              );
+              return;
+            }
+
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: number,
+            });
+            const base = pull.base.ref;
+            const marker = "<!-- screenshots-baselines:changed -->";
+            const body = [
+              marker,
+              "",
+              `Screenshot baselines differ from \`${base}\` at commit \`${pull.head.sha.slice(0, 7)}\` (${changed.length} capture${changed.length === 1 ? "" : "s"}):`,
+              "",
+              ...changed.map((file) => `- \`${file}\``),
+              "",
+              `The above captures differ from \`${base}\`; they will be regenerated and committed by CI after merge.`,
+            ].join("\n");
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log(`Updated the baseline comment on PR #${number}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body,
+              });
+              console.log(
+                `Commented ${changed.length} changed baseline(s) on PR #${number}.`
+              );
+            }

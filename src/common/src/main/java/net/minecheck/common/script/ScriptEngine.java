@@ -56,6 +56,14 @@ public final class ScriptEngine {
   private String failureMessage;
   private final java.util.List<ExpectRecord> expects = new java.util.ArrayList<>();
 
+  /**
+   * Live listeners and connections the script opened (see {@code minecheck.listen}). They are
+   * closed when the run ends, however it ends: a bound port outliving its script would make the
+   * next run fail to bind, and a leaked connection would keep a dev program talking to a game that
+   * has already moved on.
+   */
+  private final java.util.List<AutoCloseable> live = new java.util.ArrayList<>();
+
   public ScriptEngine(PlatformServices services, ConfigData config, Path scriptFile) {
     this(
         services,
@@ -118,6 +126,18 @@ public final class ScriptEngine {
    */
   public void recordExpect(String name, boolean ok) {
     expects.add(new ExpectRecord(name != null ? name : "expect #" + (expects.size() + 1), ok));
+  }
+
+  /**
+   * Registers a live listener or connection so the engine closes it when the run ends.
+   *
+   * <p>Registration is per-handle, not per-script: a script may open several and close them itself
+   * as it goes, and close is idempotent on both sides.
+   */
+  public void registerLive(AutoCloseable handle) {
+    if (handle != null) {
+      live.add(handle);
+    }
   }
 
   /** Marks the run failed with a message (called from a Lua {@code minecheck.fail}). */
@@ -199,6 +219,7 @@ public final class ScriptEngine {
     LOG.info(
         String.format(
             "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));
+    closeLive();
     writeResult();
     if (failed && config.exitOnFail()) {
       if (client != null) {
@@ -226,6 +247,17 @@ public final class ScriptEngine {
         t.interrupt();
       }
     }
+  }
+
+  private void closeLive() {
+    for (AutoCloseable handle : live) {
+      try {
+        handle.close();
+      } catch (Exception e) {
+        LOG.log(Level.WARNING, "Minecheck: failed to close a live listener", e);
+      }
+    }
+    live.clear();
   }
 
   private void writeResult() {

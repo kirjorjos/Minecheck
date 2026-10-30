@@ -69,6 +69,10 @@ import org.gradle.api.tasks.TaskAction;
  */
 public abstract class MinecheckLifecycleTest extends DefaultTask {
 
+  /** The listener's own log line: the documented way a program finds an ephemeral live port. */
+  private static final java.util.regex.Pattern LIVE_LISTEN =
+      java.util.regex.Pattern.compile("live listening on ([0-9a-fA-F.:\\[\\]]+):(\\d+)");
+
   private static final Gson GSON = new Gson();
 
   /** Loader Gradle task for the client, e.g. {@code :fabric-mod:runClient}. */
@@ -148,6 +152,52 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getXvfbRun();
 
   /**
+   * When true, the run boots with the deterministic screenshot profile: a pinned window size and
+   * GUI scale, no VSync/frame pacing, no clouds, minimal particles, fixed FOV, chat and subtitles
+   * off (unless {@link #getScreenshotChatVisible()}), and the tutorial disabled.
+   *
+   * <p>Off by default: the other lifecycle suites were written against vanilla defaults, and
+   * silently changing what a click test sees would be exactly the kind of drift that makes a suite
+   * lie.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getScreenshotProfile();
+
+  /** Captured frame width the profile pins the window to (default {@code 854}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotWidth();
+
+  /** Captured frame height the profile pins the window to (default {@code 480}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotHeight();
+
+  /** GUI scale the profile pins the HUD to (default {@code 2}, never auto). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getScreenshotGuiScale();
+
+  /** Encode-time downscale the captures use (default {@code 1.0}). */
+  @Input
+  @Optional
+  public abstract Property<Double> getScreenshotScale();
+
+  /** Whether chat may appear in a capture (default {@code false}); the profile's escape hatch. */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getScreenshotChatVisible();
+
+  /**
+   * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
+   * deleted from the script cannot linger and be compared against a stale baseline.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getCleanScreenshots();
+
+  /**
    * When true, a run verdict that FAILS ({@code finished && failed}) counts as a PASS, and a
    * passing verdict fails the task — for negative tests of the fail path itself. The game processes
    * must STILL exit cleanly (code 0) and write a verdict; a crash or a hung JVM always fails the
@@ -156,6 +206,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getExpectFailure();
+
+  /**
+   * A live-session driver file (see {@code tests/scripts/live-driver.txt}): {@code
+   * <chunk>|<expected reply>} per line, sent to the running script's live listener over TCP while
+   * the client is up.
+   *
+   * <p>Present means the run is expected to serve: the task finds the listener by the {@code live
+   * listening on host:port} line in the client's output, connects, sends the chunks, compares the
+   * replies, and disconnects so the script can continue. The script asserts the effects itself —
+   * the driver only proves the channel works.
+   */
+  @InputFile
+  @Optional
+  public abstract RegularFileProperty getLiveDriverFile();
 
   /**
    * Client launch descriptor: a {@code key=value} file written by the loader's {@code
@@ -280,6 +344,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
 
     try {
       deleteRecursively(runDir.resolve("saves").resolve(world()));
+      if (getCleanScreenshots().getOrElse(false)) {
+        deleteRecursively(runDir.resolve("screenshots"));
+      }
       stageClientOptions(runDir);
       if (getServerScript().isPresent()) {
         Path setupDir = null;
@@ -305,6 +372,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path resultFile = getResultFile().get().getAsFile().toPath();
     Files.deleteIfExists(resultFile);
 
+    Path logFile = runLog(getRunDir().get(), "client-" + phase);
     getLogger().lifecycle("Minecheck: [{}] launching client {}", phase, getLoaderTask().get());
     Process p =
         start(
@@ -313,13 +381,134 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 List.of(),
                 descriptorPath(getClientLaunchFile()),
                 getXvfbRun().getOrElse(true)),
-            "client-" + phase);
+            "client-" + phase,
+            logFile);
+
+    // Before the verdict: a serving script is parked until the driver disconnects, so waiting for
+    // the verdict first would deadlock the pair.
+    List<String> liveProblems =
+        getLiveDriverFile().isPresent()
+            ? driveLive(getLiveDriverFile().get().getAsFile().toPath(), logFile, p)
+            : List.of();
+
     RunResultDto result = awaitVerdict(resultFile, Duration.ofMinutes(20), p);
     int exit = waitExit(p, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [{}] client exited (code {})", phase, exit);
 
     requireCleanExit(exit, "client " + phase);
     requirePassed(result, "client " + phase);
+    if (!liveProblems.isEmpty()) {
+      throw new GradleException("Minecheck live driver FAILED: " + String.join("; ", liveProblems));
+    }
+  }
+
+  /**
+   * Drives the script's live listener: finds it in the client's own log output, attaches, sends the
+   * driver file's chunks in order and compares each reply.
+   *
+   * <p>Discovery is by the {@code live listening on host:port} line, which is the documented way a
+   * program finds an ephemeral listener — the test exercises the same path a person's shell does.
+   * Returns the problems it found instead of throwing, so a mismatch cannot leave the game process
+   * running: the caller waits for the verdict and the process exit first, then fails the task.
+   */
+  private List<String> driveLive(Path driverFile, Path logFile, Process client) {
+    List<String> problems = new ArrayList<>();
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(driverFile, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      problems.add("cannot read the live driver file " + driverFile + ": " + e.getMessage());
+      return problems;
+    }
+
+    List<String[]> commands = new ArrayList<>();
+    for (String line : lines) {
+      String trimmed = line.trim();
+      if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+        continue;
+      }
+      int sep = trimmed.indexOf('|');
+      if (sep <= 0) {
+        problems.add("live driver line has no `chunk|expected` separator: " + trimmed);
+        continue;
+      }
+      commands.add(new String[] {trimmed.substring(0, sep), trimmed.substring(sep + 1)});
+    }
+    if (!problems.isEmpty()) {
+      return problems;
+    }
+    if (commands.isEmpty()) {
+      problems.add("the live driver file has no commands: " + driverFile);
+      return problems;
+    }
+
+    String host = null;
+    int port = -1;
+    long deadline = System.currentTimeMillis() + Duration.ofMinutes(5).toMillis();
+    while (System.currentTimeMillis() < deadline) {
+      java.util.regex.Matcher m = LIVE_LISTEN.matcher(readLog(logFile));
+      if (m.find()) {
+        host = m.group(1);
+        port = Integer.parseInt(m.group(2));
+        break;
+      }
+      if (client != null && !client.isAlive()) {
+        break;
+      }
+      sleep(500);
+    }
+    if (port <= 0) {
+      problems.add(
+          "the script never logged a live listener in "
+              + logFile
+              + " (expected a `live listening on host:port` line)");
+      return problems;
+    }
+
+    getLogger().lifecycle("Minecheck: [live] attaching to {}:{} ({}) ", host, port, driverFile);
+    try (java.net.Socket socket = new java.net.Socket()) {
+      socket.connect(new java.net.InetSocketAddress(host, port), 10_000);
+      // A served chunk may block (sleep, waitFor, joinServer) and the script keeps ticking until it
+      // finishes, so the read timeout is generous rather than tight.
+      socket.setSoTimeout(120_000);
+      java.io.PrintWriter out =
+          new java.io.PrintWriter(
+              new java.io.OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8),
+              true);
+      java.io.BufferedReader in =
+          new java.io.BufferedReader(
+              new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+
+      for (String[] command : commands) {
+        String chunk = command[0];
+        String expected = command[1];
+        out.print(chunk);
+        out.print('\n');
+        out.flush();
+        String reply = in.readLine();
+        if (reply == null) {
+          problems.add("the client closed the live session before replying to `" + chunk + "`");
+          break;
+        }
+        getLogger().lifecycle("Minecheck: [live] {} -> {}", chunk, reply);
+        if (!reply.equals(expected)) {
+          problems.add(
+              "live chunk `" + chunk + "` replied `" + reply + "`, expected `" + expected + "`");
+        }
+      }
+      // Closing the socket is the detach signal: the script's liveAttach returns its served count.
+    } catch (IOException e) {
+      problems.add("the live driver could not talk to the client: " + e.getMessage());
+    }
+    return problems;
+  }
+
+  private static String readLog(Path logFile) {
+    try {
+      return Files.isRegularFile(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+    } catch (IOException e) {
+      return "";
+    }
   }
 
   // ------------------------------------------------------- parallel server
@@ -467,10 +656,87 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    */
   private void stageClientOptions(Path runDir) throws IOException {
     Files.createDirectories(runDir);
-    Files.writeString(runDir.resolve("options.txt"), "renderDistance:10\nsimulationDistance:10\n");
+    StringBuilder options = new StringBuilder();
+    options.append("renderDistance:10\n").append("simulationDistance:10\n");
+    if (screenshotProfile()) {
+      // The deterministic capture profile. Everything here either changes what is drawn (graphics,
+      // FOV, particles, clouds, GUI scale, window size) or when it is drawn (VSync, FPS cap), and
+      // every one of those would make the same script produce a different PNG on a different run.
+      // Authored settings that cannot be expressed here (time of day, weather, the world's seed)
+      // belong to the script that created the world.
+      options.append("overrideWidth:").append(screenshotWidth()).append('\n');
+      options.append("overrideHeight:").append(screenshotHeight()).append('\n');
+      options.append("guiScale:").append(screenshotGuiScale()).append('\n');
+      options.append("forceUnicodeFont:false\n");
+      options.append("graphicsMode:1\n"); // fancy, never fabulous
+      options.append("ao:true\n");
+      options.append("entityShadows:true\n");
+      options.append("biomeBlendRadius:0\n");
+      options.append("renderClouds:false\n");
+      options.append("particles:2\n"); // minimal
+      options.append("fov:70\n");
+      options.append("fovEffectScale:0.0\n");
+      options.append("screenEffectScale:0.0\n");
+      options.append("bobView:false\n");
+      options.append("gamma:0.5\n");
+      options.append("enableVsync:false\n");
+      options.append("maxFps:120\n");
+      options.append("fullscreen:false\n");
+      options.append("showSubtitles:false\n");
+      options.append("reducedDebugInfo:false\n");
+      options.append("pauseOnLostFocus:false\n");
+      // Chat stays *enabled* here even when captures must not contain it: the server refuses every
+      // command from a client whose chat visibility is hidden ("chat.disabled.options"), and a run
+      // that cannot run commands cannot set up a scene. The capture empties the chat lines itself
+      // and reads the first frame drawn afterwards.
+      options.append("chatVisibility:0\n");
+      // Tutorial toasts and the multiplayer warning are timing-dependent overlays.
+      options.append("tutorialStep:none\n");
+      options.append("hideBundleTutorial:true\n");
+      options.append("skipMultiplayerWarning:true\n");
+      options.append("joinedFirstServer:true\n");
+      // The system locale would otherwise pick the UI language.
+      options.append("lang:en_us\n");
+    }
+    Files.writeString(runDir.resolve("options.txt"), options.toString());
     getLogger()
         .lifecycle(
-            "Minecheck: pinned client options.txt render/simulation distance to 10 in {}", runDir);
+            "Minecheck: pinned client options.txt (render/simulation distance 10{}) in {}",
+            screenshotProfile()
+                ? ", screenshot profile "
+                    + screenshotWidth()
+                    + "x"
+                    + screenshotHeight()
+                    + " guiScale "
+                    + screenshotGuiScale()
+                : "",
+            runDir);
+  }
+
+  // ---------------------------------------------------------------- screenshot profile
+
+  private boolean screenshotProfile() {
+    return getScreenshotProfile().getOrElse(false);
+  }
+
+  private int screenshotWidth() {
+    return getScreenshotWidth().getOrElse(854);
+  }
+
+  private int screenshotHeight() {
+    return getScreenshotHeight().getOrElse(480);
+  }
+
+  private int screenshotGuiScale() {
+    return getScreenshotGuiScale().getOrElse(2);
+  }
+
+  private double screenshotScale() {
+    return getScreenshotScale().getOrElse(1.0);
+  }
+
+  private boolean screenshotChatVisible() {
+    return getScreenshotChatVisible().getOrElse(false);
   }
 
   /**
@@ -593,13 +859,21 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
               });
     }
 
-    Files.writeString(
-        configDir.resolve("config.json"),
-        "{ "
-            + (coordinator ? "\"coordinator\"" : "\"script\"")
-            + ": \""
-            + scriptName
-            + "\", \"failMode\": \"exit\", \"defaultTimeout\": 60 }\n");
+    Map<String, Object> config = new LinkedHashMap<>();
+    config.put(coordinator ? "coordinator" : "script", scriptName);
+    config.put("failMode", "exit");
+    config.put("defaultTimeout", 60);
+    if (screenshotProfile()) {
+      // The same profile the options.txt above pins, told to the mod: it needs these for the
+      // capture itself (which frame size to expect, the GUI scale for `unit = "gui"` regions) and
+      // writes them into profile.json so a baseline records the settings that produced it.
+      config.put("screenshotWidth", screenshotWidth());
+      config.put("screenshotHeight", screenshotHeight());
+      config.put("screenshotGuiScale", screenshotGuiScale());
+      config.put("screenshotScale", screenshotScale());
+      config.put("screenshotChatVisible", screenshotChatVisible());
+    }
+    Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
     getLogger()
         .lifecycle(
             "Minecheck: staged config.json ({}={}) into {}",
@@ -739,12 +1013,27 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   }
 
   private Process start(ProcessBuilder pb, String label) throws IOException {
+    return start(pb, label, null);
+  }
+
+  /**
+   * Starts a process, forwarding its output to the build log — and, when {@code logFile} is given,
+   * to that file as well. The copy on disk is what the live driver reads to find the listener's
+   * port, and what is left behind to read after a failed run.
+   */
+  private Process start(ProcessBuilder pb, String label, Path logFile) throws IOException {
     if (pb.directory() == null) {
       pb.directory(getProject().getRootDir());
     }
     pb.redirectErrorStream(true);
     Process p = pb.start();
     String lp = label == null ? "" : label;
+    java.io.OutputStream fileOut = null;
+    if (logFile != null) {
+      Files.createDirectories(logFile.getParent());
+      fileOut = Files.newOutputStream(logFile);
+    }
+    final java.io.OutputStream sink = fileOut;
     new Thread(
             () -> {
               try {
@@ -753,12 +1042,27 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 int n;
                 while ((n = in.read(buf)) != -1) {
                   System.out.write(buf, 0, n);
+                  if (sink != null) {
+                    sink.write(buf, 0, n);
+                    sink.flush();
+                  }
                 }
-              } catch (IOException ignored) { }
+              } catch (IOException ignored) { } finally {
+                if (sink != null) {
+                  try {
+                    sink.close();
+                  } catch (IOException ignored) { }
+                }
+              }
             },
             "dh-forward-" + lp)
         .start();
     return p;
+  }
+
+  /** The per-phase log file under the run dir ({@code logs/<label>.log}). */
+  private Path runLog(String runDir, String label) {
+    return Path.of(runDir).resolve("logs").resolve(label + ".log");
   }
 
   /** Recursively deletes a directory tree (no-op if absent). */

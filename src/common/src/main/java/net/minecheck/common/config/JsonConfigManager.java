@@ -61,7 +61,12 @@ public class JsonConfigManager implements ConfigManager {
           stringField(obj, "script", ""),
           stringField(obj, "coordinator", null),
           stringField(obj, "failMode", "exit"),
-          intField(obj, "defaultTimeout", 30));
+          intField(obj, "defaultTimeout", 30),
+          rangedIntField(obj, "screenshotWidth", ConfigData.DEFAULT_SCREENSHOT_WIDTH, 320, 7680),
+          rangedIntField(obj, "screenshotHeight", ConfigData.DEFAULT_SCREENSHOT_HEIGHT, 240, 4320),
+          rangedIntField(obj, "screenshotGuiScale", ConfigData.DEFAULT_SCREENSHOT_GUI_SCALE, 1, 4),
+          rangedDoubleField(obj, "screenshotScale", ConfigData.DEFAULT_SCREENSHOT_SCALE, 0.25, 1.0),
+          booleanField(obj, "screenshotChatVisible", ConfigData.DEFAULT_SCREENSHOT_CHAT_VISIBLE));
     } catch (RuntimeException e) {
       throw new IOException(
           String.format(
@@ -124,6 +129,58 @@ public class JsonConfigManager implements ConfigManager {
               + value.getAsString());
     }
     return (int) number;
+  }
+
+  /**
+   * A whole-number field bounded by {@code min}–{@code max} (inclusive), or {@code fallback} when
+   * absent. A value outside the range is an error naming the field and the range rather than being
+   * clamped: the screenshot profile is part of a baseline's identity, so silently capturing at
+   * 854×480 when the config asked for 80×60 would make the resulting picture unexplainable.
+   */
+  private static int rangedIntField(JsonObject obj, String key, int fallback, int min, int max) {
+    int value = intField(obj, key, fallback);
+    if (value < min || value > max) {
+      throw new IllegalArgumentException(
+          "\"" + key + "\" must be between " + min + " and " + max + ", got " + value);
+    }
+    return value;
+  }
+
+  /** A decimal field bounded by {@code min}–{@code max} (inclusive), or {@code fallback}. */
+  private static double rangedDoubleField(
+      JsonObject obj, String key, double fallback, double min, double max) {
+    JsonElement value = present(obj, key);
+    if (value == null) {
+      return fallback;
+    }
+    if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+      throw new IllegalArgumentException("\"" + key + "\" must be a number");
+    }
+    double number = value.getAsDouble();
+    if (number < min || number > max) {
+      throw new IllegalArgumentException(
+          "\""
+              + key
+              + "\" must be between "
+              + min
+              + " and "
+              + max
+              + ", got "
+              + value.getAsString());
+    }
+    return number;
+  }
+
+  /** A boolean field, or {@code fallback} when absent or JSON {@code null}. */
+  private static boolean booleanField(JsonObject obj, String key, boolean fallback) {
+    JsonElement value = present(obj, key);
+    if (value == null) {
+      return fallback;
+    }
+    if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
+      throw new IllegalArgumentException("\"" + key + "\" must be a boolean");
+    }
+    return value.getAsBoolean();
   }
 
   /** The field's value, or {@code null} when it is absent or an explicit JSON {@code null}. */

@@ -299,6 +299,46 @@ public interface ClientPlatform {
   boolean isResourceReloadSettled();
 
   /**
+   * Re-assert the server's time of day on the client's level, once per client tick.
+   *
+   * <p>The client's clock is <em>not</em> the server's: {@code ClientLevel.tickTime} advances the
+   * level's day time every tick, and the server only syncs it about once a second. The drift is
+   * invisible to a player (a second of "time" is a fraction of a degree of sun angle) but it is not
+   * invisible to a capture: the sky gradient, the sky-light colour and the lightmap that modulates
+   * every lit surface are all derived from it, so two captures of the same scene a few ticks apart
+   * differ by a rounding step across the whole frame. Pointing the client's clock back at the
+   * server's before each frame removes the drift, which makes captures byte-reproducible whether
+   * the script froze the clock with {@code gamerule doDaylightCycle false} or let the server's own
+   * time stand — and it makes the client's picture what the server says the time is, which is also
+   * what a player would see the instant after a sync.
+   *
+   * <p>Only an <em>integrated</em> server is re-asserted (that is the server this process owns and
+   * the one a lifecycle test creates); against a remote server the client's clock is left alone,
+   * because there is no authoritative value here to re-assert and stepping a remote world's sky is
+   * not this mod's business.
+   */
+  default void pinClientClock() {}
+
+  /**
+   * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on
+   * the render thread, hands the pixels to its PNG encoder, resolves the output path against the
+   * run directory ({@code <run>/screenshots/<name>.png}) and reports progress through the request's
+   * state.
+   *
+   * <p>Never blocks and never captures on the calling thread: this is called once per tick by the
+   * {@code captureScreenshot} action while it yields, so a platform that needs another tick (for
+   * example to let a window resize apply) simply leaves the request queued and is asked again. A
+   * change that has to be in the picture — chat emptied out of the HUD — needs a rendered frame
+   * rather than a tick, since the client ticks more than once per frame when it falls behind.
+   *
+   * <p>The default fails the request rather than doing nothing, so a platform without a screenshot
+   * implementation surfaces as a clear Lua error instead of a file that never appears.
+   */
+  default void requestScreenshot(ScreenshotRequest request) {
+    request.fail("screenshots are not supported by this platform");
+  }
+
+  /**
    * Open the chat screen on the client thread, dispatched asynchronously (see {@link
    * #runOnClientThread(Runnable)}): the screen is <em>not</em> guaranteed to be up when this
    * returns. {@code mode} is {@code "command"} to pre-fill a leading {@code "/"} (so the text is
