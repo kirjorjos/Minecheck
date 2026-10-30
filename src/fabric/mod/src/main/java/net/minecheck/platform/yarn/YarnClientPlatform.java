@@ -131,6 +131,82 @@ public class YarnClientPlatform implements ClientPlatform {
     }
   }
 
+  /**
+   * True once the client's render tick counter has been replaced (see {@link
+   * #pinRenderTickDelta()}).
+   */
+  private static boolean renderTickPinned;
+
+  /**
+   * Replaces the client's render tick counter with {@link PinnedRenderTickCounter}. See {@link
+   * net.minecheck.platform.api.ClientPlatform#pinRenderTickDelta()} for why the partial tick has to
+   * be fixed for captures to be reproducible.
+   *
+   * <p>The counter is a {@code private final} field of {@code MinecraftClient} and the delta is a
+   * plain public field on it, so the swap is one reflective write of the object — no field value of
+   * the client is modified, and vanilla's tick accounting keeps running inside the replacement.
+   */
+  @Override
+  public void pinRenderTickDelta() {
+    if (renderTickPinned) {
+      return;
+    }
+    renderTickPinned = true;
+    MinecraftClient client = mc();
+    try {
+      java.lang.reflect.Field counter = MinecraftClient.class.getDeclaredField("renderTickCounter");
+      counter.setAccessible(true);
+      Object current = counter.get(client);
+      if (current instanceof PinnedRenderTickCounter) {
+        return;
+      }
+      java.lang.reflect.Field tickTime =
+          net.minecraft.client.render.RenderTickCounter.class.getDeclaredField("tickTime");
+      tickTime.setAccessible(true);
+      counter.set(
+          client,
+          new PinnedRenderTickCounter(tickTime.getFloat(current), System.currentTimeMillis()));
+      LOG.info(
+          "Minecheck: drawing every frame with a pinned render delta of "
+              + net.minecheck.platform.api.ClientPlatform.PINNED_RENDER_DELTA);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.log(
+          java.util.logging.Level.WARNING,
+          "Minecheck: could not pin the client render tick delta; captures stay frame-time dependent",
+          e);
+    }
+  }
+
+  /**
+   * A render tick counter that keeps vanilla's tick accounting but hands the renderer a constant
+   * partial tick.
+   *
+   * <p>{@code RenderTickCounter.tickDelta} is both the fraction that is carried between frames to
+   * schedule ticks and the value the client draws with, so a constant has to be swapped in and out
+   * of it: the real remainder is restored before {@code super} accumulates the next frame, and
+   * stashed again afterwards. Ticks therefore still happen exactly when vanilla says they do; only
+   * what the frame is drawn at is fixed.
+   */
+  private static final class PinnedRenderTickCounter
+      extends net.minecraft.client.render.RenderTickCounter {
+
+    /** Vanilla's own remainder, held here while the field carries the pinned value. */
+    private float carried;
+
+    PinnedRenderTickCounter(float tickTime, long startTime) {
+      super(tickTime, startTime);
+    }
+
+    @Override
+    public int beginRenderTick(long timeMillis) {
+      this.tickDelta = carried;
+      int ticks = super.beginRenderTick(timeMillis);
+      this.carried = this.tickDelta;
+      this.tickDelta = net.minecheck.platform.api.ClientPlatform.PINNED_RENDER_DELTA;
+      return ticks;
+    }
+  }
+
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     onClientThread(() -> captureScreenshot(request));

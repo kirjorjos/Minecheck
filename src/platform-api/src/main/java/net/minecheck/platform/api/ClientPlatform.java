@@ -320,6 +320,34 @@ public interface ClientPlatform {
   default void pinClientClock() {}
 
   /**
+   * The partial tick every frame is drawn with once {@link #pinRenderTickDelta()} has run.
+   *
+   * <p>One is the end of the tick: the pose, the lighting and every animation are drawn at the
+   * state the tick left them in, with no interpolation to the next one.
+   */
+  float PINNED_RENDER_DELTA = 1.0f;
+
+  /**
+   * Draw every frame with a fixed partial tick instead of the wall-clock fraction of a tick.
+   *
+   * <p>The client interpolates between two ticks when it renders: the camera, the lightmap, the sky
+   * colour and the pose of every animated model are drawn at {@code previous + (current - previous)
+   * * delta}, where delta is how far into the tick the frame happened to land. That fraction comes
+   * from wall-clock time, so it is different in every run — which is one of the reasons two
+   * captures of the same paused scene differ by a rounding step across the whole frame, and why an
+   * animation (the clock item's dial, an idle arm) can sit a frame apart.
+   *
+   * <p>Pinning the delta removes both: a frame becomes a function of the game state alone, which is
+   * what lets the screenshot suite compare captures byte for byte. Tick <em>scheduling</em> is left
+   * exactly as vanilla computed it (the real remainder is still carried between frames, so the
+   * client ticks at the same rate); only the value handed to the renderer is fixed.
+   *
+   * <p>Idempotent, and safe to call before the client has booted. A platform that cannot reach its
+   * render timer leaves the default no-op and its captures stay wall-clock dependent.
+   */
+  default void pinRenderTickDelta() {}
+
+  /**
    * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on
    * the render thread, hands the pixels to its PNG encoder, resolves the output path against the
    * run directory ({@code <run>/screenshots/<name>.png}) and reports progress through the request's

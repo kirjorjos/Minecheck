@@ -164,6 +164,7 @@ public class ForgeEntrypoint {
     if (client.isBootComplete() && builtinWarmed.compareAndSet(false, true)) {
       warmBuiltinRegistryAccess();
     }
+    client.pinRenderTickDelta();
     client.pinClientClock();
     ScriptEngine e = engine;
     if (e != null && !e.isFinished() && client.isBootComplete()) {

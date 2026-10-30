@@ -107,6 +107,7 @@ public class QuiltEntrypoint implements ModInitializer {
                 (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
             ClientTickEvents.END_CLIENT_TICK.register(
                 c -> {
+                  client.pinRenderTickDelta();
                   client.pinClientClock();
                   if (!engine.isFinished() && client.isBootComplete()) {
                     engine.tick();

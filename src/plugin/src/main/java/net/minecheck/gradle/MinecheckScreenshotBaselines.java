@@ -20,8 +20,8 @@ import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 
 /**
- * Verifies one loader's screenshot captures against its baseline tree, within a small per-channel
- * tolerance (see {@link ScreenshotBaselines} for why exact bytes cannot work).
+ * Verifies one loader's screenshot captures against its baseline tree, byte for byte (see {@link
+ * ScreenshotBaselines}).
  *
  * <p>Runs after the loader's {@code run*Shots} lifecycle task, which writes the PNGs. The verdict
  * is the {@link ScreenshotBaselines comparison}; this class is only the Gradle surface around it.
@@ -29,8 +29,9 @@ import org.gradle.api.tasks.TaskAction;
  * <p><b>Which tree is compared against</b> is the point of {@link #getCiMode()}: locally a capture
  * is compared against {@code tests/local-baselines/<loader>/} (git-ignored scratch generated on
  * this machine), in CI against {@code tests/baselines/<loader>/} (the committed pictures generated
- * by the pinned CI image). Comparing a local capture against CI's pictures would only ever report
- * "different GPU", which says nothing about the code under test.
+ * by the pinned CI image). The two trees are not interchangeable — comparing a local capture
+ * against CI's pictures would only ever report "different GPU", which says nothing about the code
+ * under test — which is also what lets the verdict be exact bytes instead of a tolerance.
  *
  * <p>{@code -Pminecheck.screenshots.update=true} rewrites the active tree instead of comparing —
  * the re-baseline path. A missing baseline is written and still fails, so a new capture cannot slip
@@ -143,9 +144,6 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
     for (String written : result.written()) {
       getLogger().lifecycle("Minecheck: wrote baseline {}", written);
     }
-    for (String tolerated : result.tolerated()) {
-      getLogger().lifecycle("Minecheck: {} is within tolerance", tolerated);
-    }
     for (String unused : result.unused()) {
       getLogger().warn("Minecheck: baseline {} matches no capture in this run", unused);
     }
@@ -183,11 +181,10 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
     }
     getLogger()
         .lifecycle(
-            "Minecheck: {} of {} {} capture(s) match their baseline (tolerance {} levels)",
+            "Minecheck: {} of {} {} capture(s) match their baseline byte for byte",
             result.matched().size(),
             result.total(),
-            loader,
-            ScreenshotBaselines.CHANNEL_TOLERANCE);
+            loader);
   }
 
   /**

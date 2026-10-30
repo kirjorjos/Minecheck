@@ -50,12 +50,49 @@ local function command(cmd)
   minecheck.expect(result.success == true, "ran /" .. cmd)
 end
 
+--- Digests the frame one capture at a time, under an ad-hoc name (`_` ⇒ never baselined).
+local settleIndex = 0
+local function frameDigest()
+  settleIndex = settleIndex + 1
+  return minecheck.captureScreenshot("_settle-" .. settleIndex).sha256
+end
+
+--- Waits until the picture has stopped changing, i.e. two captures a second apart agree.
+---
+--- The level's lighting keeps easing for a while after the world is created: measured on this
+--- corpus, the frame is nine levels brighter ten seconds in than it is half a second in, and no two
+--- runs reach that point after the same number of frames. Once it has arrived, two captures of the
+--- same scene are byte-identical, within a run and across runs — which is the property the
+--- committed baselines rest on. Settling on the digest rather than on a fixed wait keeps that true
+--- on a runner whose frames are far slower than a developer's.
+local function settledFrame()
+  local previous = frameDigest()
+  for _ = 1, 30 do
+    minecheck.wait(1)
+    local current = frameDigest()
+    if current == previous then
+      return true
+    end
+    previous = current
+  end
+  return false
+end
+
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 0 })
 if not minecheck.expect(created, "created the screenshot world") then
   minecheck.fail("createWorld failed")
 end
 minecheck.expect(minecheck.waitFor(minecheck.isInWorld, 60), "joined the world")
-minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled") -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
+minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled")
+
+-- The clock has to be *stopped*, not just moved. `time set` jumps the day time and then time runs
+-- on, so the day time at the moment of a capture depended on how many ticks the scene setup
+-- happened to take: the sun angle, the sky light the lightmap derives from it and the clock item's
+-- dial all moved with it, which is a one-or-two-level difference across the frame and a rotated
+-- dial in the inventory shot. With the cycle off, `time set` is the time of every frame from then
+-- on, and the picture is a function of the world, not of the run's tick count.
+command("gamerule doDaylightCycle false")
+command("gamerule doWeatherCycle false") -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
 -- random spot near the world spawn, and two runs standing a block apart see different terrain. The
 -- teleport sets the position and the rotation (yaw 0, pitch 90 = straight down) in one go.
 local function atPinnedSpot()
@@ -77,7 +114,7 @@ end
 -- frame, with the sky's light at the flat top of its curve.
 command("time set 6000")
 stand()
-minecheck.wait(0.5)
+minecheck.expect(settledFrame(), "the frame stopped changing before the first capture")
 local world = shot("world-settled")
 minecheck.expect(world.width == frameWidth, "world-settled is " .. frameWidth .. " px wide")
 minecheck.expect(world.height == frameHeight, "world-settled is " .. frameHeight .. " px tall")
@@ -91,17 +128,37 @@ local night = shot("world-night")
 minecheck.expect(night.width == frameWidth, "world-night is " .. frameWidth .. " px wide")
 
 -- 3. A container screen over the world: proves a GUI is captured, not just the terrain.
+--
+-- A chest, not the player inventory: every inventory screen carries something that keeps moving.
+-- The creative one draws item models as its tab icons, and the clock/compass models pick their frame
+-- from a continuously-derived angle — they landed a needle apart between two runs even with the
+-- clock pinned and the frame settled. The survival one animates its player preview, so a capture of
+-- it never stops changing either. A chest's panel is slots and a title: static by construction.
 command("time set 6000")
+command("setblock 2 -60 0 minecraft:chest")
+-- `setblock` returns when the *server* has the block; the client learns about it from the chunk
+-- packet a tick or two later. Clicking before that raycasts into air, and a missed interact is a
+-- silent early return in the game's use path — the screen simply never opens, one run in three.
+-- Wait for the client's own copy of the world instead of assuming the packet has landed.
+minecheck.expect(
+  minecheck.waitFor(function()
+    local block = minecheck.getBlock({ x = 2, y = -60, z = 0 })
+    return block ~= nil and block.id == "minecraft:chest"
+  end, 5),
+  "the client sees the chest before it is clicked"
+)
 stand()
-local opened = minecheck.openScreen("inventory")
-if minecheck.expect(opened, "opened the inventory") then
-  minecheck.wait(0.1)
-  local inventory = shot("inventory-open")
-  minecheck.expect(inventory.width == frameWidth, "inventory-open is " .. frameWidth .. " px wide")
-  minecheck.press("escape")
+-- `pos` is the point to aim at, not a block id: an integer would name the block's corner, and the
+-- ray would graze it and report whatever air block shares that corner. Aim at the centre.
+local opened = minecheck.openScreen("chest", { x = 2.5, y = -59.5, z = 0.5 })
+if minecheck.expect(opened, "opened the chest") then
+  minecheck.expect(settledFrame(), "the chest screen stopped changing before its capture")
+  local chest = shot("chest-open")
+  minecheck.expect(chest.width == frameWidth, "chest-open is " .. frameWidth .. " px wide")
+  minecheck.press("Escape")
   minecheck.wait(0.1)
 else
-  minecheck.fail("openScreen(inventory) failed")
+  minecheck.fail("openScreen(chest) failed")
 end
 
 -- 4. An ad-hoc crop (a leading `_` keeps it out of the baselines): the bottom strip of the HUD in

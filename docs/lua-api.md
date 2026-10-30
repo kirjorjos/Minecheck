@@ -373,7 +373,7 @@ Opens a container/handled screen and waits until it is open. `id` selects the sc
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`. |
-| `pos` | table | Block position to look at + right-click (required for block screens). |
+| `pos` | table | Point to aim at, then right-click (required for block screens). Aim at a block's *centre* — `{ x = bx + 0.5, y = by + 0.5, z = bz + 0.5 }` — since the corner coordinates name a point that a block hit ray grazes instead of entering. |
 | `timeout` | number | Max seconds to wait (default: `config.defaultTimeout`). |
 
 **Returns:** `true` once [`isScreenOpen`](#minecheckisscreenopenid--boolean) reports the screen, `false` on timeout.
@@ -613,8 +613,9 @@ Chat is the one HUD element a script can make nondeterministic (a line of text w
 
 Two things are deliberately **not** part of the profile: time of day and weather. They belong to the world the script creates (`createWorld` already pins the seed and disables the daylight/weather cycle), because a profile that changed the world at capture time would make a baseline depend on capture order.
 
-The **sky is the one thing a script should keep out of a baseline**, and Minecheck does not fully remove it for you: the client's clock is re-synced to the server's every tick, but the client also draws each frame at a *partial* tick, and that fraction moves the sun angle, the sky gradient and the lightmap that modulates every lit surface by a step. Two frames of an
-identical scene therefore differ by a level on a few percent of their pixels — a couple of block edges can move further. That is why the shipped suite looks straight down (ground fills the frame) for its world capture, pins the time of day with `/time set` (noon and midnight, where the sky-light curve is flat), and why the baselines are compared with a small tolerance rather than byte for byte. The title screen is avoided for the same reason: its background panorama rotates with every rendered frame.
+The **sky is the one thing a script should keep out of a baseline**. Minecheck pins the two inputs that would otherwise move it on their own: the client's clock is re-synced to the server's every tick, and the *partial tick* every frame is drawn at is fixed, so the sun angle, the sky gradient and the lightmap that modulates every lit surface are a function of the level's state rather than of when the frame happened to land.
+
+What is left is the level's own lighting easing in. Measured on the shipped suite's world, the frame is nine light levels brighter ten seconds after the world is created than half a second after it, and no two runs arrive at that point after the same number of frames. A scene therefore has to settle on its *own picture* — capture, wait, capture again, and only shoot once two digests agree — rather than on a fixed wait. That is why the shipped suite looks straight down (ground fills the frame) for its world capture and pins the time of day with `/time set` (noon and midnight, where the sky-light curve is flat) — and why the comparison can stay byte-for-byte. The title screen is avoided for the same reason: its background panorama rotates with every rendered frame.
 
 A capture also pins nothing about the **camera** for you. The view is part of the picture, so a deterministic scene sets it explicitly — a fresh world spawns the player at a random spot near the world spawn, and two runs standing a block apart see different terrain:
 
@@ -629,7 +630,30 @@ minecheck.createWorld({ name = "minecheck_world", seed = 0 })
 minecheck.waitFor(minecheck.worldGenSettled, 120)
 minecheck.runCommand("time set 6000")
 minecheck.runCommand("tp @s 0.5 -60 0.5 0 90")
-minecheck.wait(0.5)
+
+-- Settle on the picture, not on a timeout: two captures a second apart that agree mean the frame
+-- has stopped easing. A leading `_` keeps these probes out of the baselines, and every probe needs
+-- its own name.
+local settleIndex = 0
+local function digest()
+  settleIndex = settleIndex + 1
+  return minecheck.captureScreenshot("_settle-" .. settleIndex).sha256
+end
+
+local function settled()
+  local previous = digest()
+  for _ = 1, 30 do
+    minecheck.wait(1)
+    local current = digest()
+    if current == previous then
+      return true
+    end
+    previous = current
+  end
+  return false
+end
+
+minecheck.expect(settled(), "the frame stopped changing")
 minecheck.captureScreenshot("world-settled")
 ```
 
@@ -652,15 +676,17 @@ Two names can never be used twice in a run: a second capture would either overwr
 
 #### Where captures go, and the baselines that check them
 
-Captures land in the run directory: `src/<loader>/mod/run/client/screenshots/<name>.png`. The suite's committed baselines live in `tests/baselines/<loader>/<name>.png` and are compared by the loader's `test<Loader>Shots` Gradle task after `run<Loader>Shots` produced them. Local runs compare against `tests/local-baselines/<loader>/` (git-ignored) instead, because a picture rendered by a different GPU than CI's says nothing about the code:
+Captures land in the run directory: `src/<loader>/mod/run/client/screenshots/<name>.png`. The suite's committed baselines live in `tests/baselines/<loader>/<name>.png` and are compared by the loader's `test<Loader>Shots` Gradle task after `run<Loader>Shots` produced them. Local runs compare against `tests/local-baselines/<loader>/` (git-ignored) instead, because a picture rendered by a different GPU than CI's says nothing about the code. The two trees are **not interchangeable**: the committed one only ever holds pictures the pinned CI image produced, and only CI compares against it.
 
-The comparison is **byte-identical when it can be, and tolerant when it cannot**: a capture passes when every colour channel of every pixel is within 8 levels of its baseline (of 255), allowing at most 64 pixels of a 854×480 frame to exceed that. The tolerance is there because the client's partial tick shifts the lighting by a level between any two frames; it is not a licence to move the picture — a shifted pixel, a missing HUD element or a different GUI is thousands of pixels away from its baseline. Every tolerated capture is logged with the drift it needed, so a baseline that is slowly rotting is visible before it fails.
+The comparison is **byte for byte** — same file or a failure, no tolerance:
 
 ```bash
-./gradlew testFabricShots                                  # capture + compare (local baseline tree)
-./gradlew testFabricShots -Pminecheck.screenshots.update=true   # re-baseline into the active tree
-./gradlew testFabricShots -Pminecheck.baselines=ci         # compare against the committed tree
+./gradlew testFabricShots                                        # capture + compare (local baseline tree)
+./gradlew testFabricShots -Pminecheck.screenshots.update=true    # re-baseline into the active tree
+./gradlew testFabricShots -Pminecheck.baselines=ci               # compare against the committed tree
 ```
+
+A tolerance would spend its allowance on exactly the differences a baseline exists to catch (a HUD pixel that moved, a texture edge that shifted, a half-transparent overlay), and every run would turn into a debate about how much drift is acceptable. The cost of exactness is that a scene has to be static by construction — settled, lit by a flat part of the sky-light curve, camera pinned — which is the script's job, not the comparison's.
 
 A missing baseline is written and **fails** the task (review it, then commit it). A baseline whose capture no longer runs is a warning, not a failure. The captures, the run's `run-result.json` and the baseline trees are uploaded as the `screenshots` artifact on every CI run, so a red build comes with the picture that broke it.
 
