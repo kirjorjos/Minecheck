@@ -370,6 +370,8 @@ With no arguments it returns **all** entities in the overworld; with both filter
 
 Opens a container/handled screen and waits until it is open. `id` selects the screen: `"inventory"` opens the player inventory (via the inventory key); any other id right-clicks a container block — `pos` (`{ x = number, y = number, z = number }`) is looked at first (when omitted, the current aim is used).
 
+The click waits for that look to land: the rotation is applied on the client thread, so a click sent before the crosshair carries the block would hit air and the game drops the attempt silently. A `pos` that cannot be aimed at still clicks after a few seconds, so a wrong position fails on the timeout instead of waiting out an aim that never arrives.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`. |
