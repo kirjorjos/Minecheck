@@ -123,7 +123,9 @@ minecheck.expect(world.height == frameHeight, "world-settled is " .. frameHeight
 -- the lightmap derives is at the bottom of its curve here, so a client left to advance its own
 -- clock between server syncs would render a different picture.
 command("time set 18000")
-minecheck.wait(0.5)
+-- The command sets the *server's* time; the client learns it from the sync a tick or two later, and
+-- the sky and lightmap ease to it. Settle on the digest instead of assuming 0.5 s is enough.
+minecheck.expect(settledFrame(), "the frame stopped changing after midnight")
 local night = shot("world-night")
 minecheck.expect(night.width == frameWidth, "world-night is " .. frameWidth .. " px wide")
 
@@ -156,7 +158,9 @@ if minecheck.expect(opened, "opened the chest") then
   local chest = shot("chest-open")
   minecheck.expect(chest.width == frameWidth, "chest-open is " .. frameWidth .. " px wide")
   minecheck.press("Escape")
-  minecheck.wait(0.1)
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen(nil)
+  end, 5)
 else
   minecheck.fail("openScreen(chest) failed")
 end

@@ -630,6 +630,26 @@ public class ForgeClientPlatform implements ClientPlatform {
     return mc().getOverlay() == null;
   }
 
+  /**
+   * Spawn-region chunk tasks the integrated server still has outstanding while a local world is
+   * loading — the only progress-like number a 1.18.2 client can see before the level is ready.
+   *
+   * <p>Not a percentage, and deliberately not presented as one: the wait only compares samples, so
+   * all this has to do is change while the server is working and stop changing while it is stuck.
+   * Reported as {@code -1} whenever there is nothing to watch (no local server, or already in the
+   * world), which leaves the caller on its plain deadline.
+   */
+  @Override
+  public float worldLoadProgress() {
+    Minecraft mc = mc();
+    MinecraftServer server = mc.getSingleplayerServer();
+    if (mc.player != null || server == null) {
+      return -1f;
+    }
+    ServerLevel overworld = server.overworld();
+    return overworld == null ? -1f : overworld.getChunkSource().getPendingTasksCount();
+  }
+
   @Override
   public boolean isWorldGenSettled() {
     MinecraftServer server = mc().getSingleplayerServer();

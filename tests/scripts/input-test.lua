@@ -34,7 +34,14 @@ minecheck.log("input test: start y = " .. startY)
 -- --- mouse: pick + break the block under the player -------------------------
 
 minecheck.look(90, 0) -- straight down
-minecheck.sleep(0.3)
+-- The rotation is applied on the client thread and the crosshair is raycast from the camera, so
+-- wait for it to land instead of giving the change a fixed 0.3 s to happen.
+expect(
+  minecheck.waitFor(function()
+    return minecheck.getTargetBlock(start) ~= nil
+  end, 5),
+  "the crosshair landed after look()"
+)
 
 local target = minecheck.getTargetBlock(start)
 expect(target ~= nil, "crosshair on a block when looking down")
@@ -86,7 +93,9 @@ for _ = 1, 3 do
     break
   end
   minecheck.look(90, 0)
-  minecheck.sleep(0.3)
+  minecheck.waitFor(function()
+    return minecheck.getTargetBlock(start) ~= nil
+  end, 5)
 end
 expect(picked, "middle-click put the picked block in the hotbar")
 
@@ -154,7 +163,12 @@ expect(landedAgain, "player landed back in the hole")
 -- does not occupy, with the player standing still.
 local placePos = { x = target.x, y = target.y + 1, z = target.z - 1 }
 minecheck.lookAt(target.x + 0.5, target.y + 1.0, target.z - 0.5)
-minecheck.sleep(0.2)
+-- lookAt is dispatched to the client thread; wait for the crosshair to arrive rather than assuming
+-- 0.2 s is enough for the rotation to apply.
+minecheck.waitFor(function()
+  local hit = minecheck.getTargetBlock(minecheck.getPlayer())
+  return hit ~= nil and hit.x == placePos.x and hit.y == placePos.y and hit.z == placePos.z
+end, 5)
 local besideAim = minecheck.getTargetBlock(minecheck.getPlayer())
 expect(
   besideAim ~= nil and besideAim.x == target.x and besideAim.y == target.y and besideAim.z == target.z - 1,
@@ -199,7 +213,7 @@ expect(
 local cfg = minecheck.config()
 expect(cfg ~= nil and cfg.script == "input-test.lua", "config().script is the running script")
 expect(cfg.failMode == "exit", "config().failMode is exit")
-expect(cfg.defaultTimeout == 60, "config().defaultTimeout is 60")
+expect(cfg.defaultTimeout == 300, "config().defaultTimeout is 300")
 expect(cfg.coordinator == nil, "config().coordinator is absent for a plain script")
 
 -- wait(): no argument waits exactly one tick, a number waits that many seconds. Both must hand
@@ -223,7 +237,9 @@ end, 0.3) == false, "sleepUntil returns false on timeout")
 local standing = minecheck.getPlayer()
 local feetY = math.floor(standing.pos.y + 0.5)
 expect(minecheck.lookAt(standing.pos.x, standing.pos.y - 2.0, standing.pos.z), "lookAt aimed")
-minecheck.sleep(0.2)
+minecheck.waitFor(function()
+  return minecheck.getTargetBlock(standing) ~= nil
+end, 5)
 local aimed = minecheck.getTargetBlock(standing)
 expect(aimed ~= nil, "lookAt produced a target block")
 if aimed then

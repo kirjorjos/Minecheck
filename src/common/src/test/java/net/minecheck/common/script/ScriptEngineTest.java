@@ -95,6 +95,16 @@ class ScriptEngineTest {
       return !joining;
     }
 
+    /** When true, {@link #worldLoadProgress()} advances on every poll (a load that keeps going). */
+    boolean movingLoad;
+
+    int loadProgressValue;
+
+    @Override
+    public float worldLoadProgress() {
+      return movingLoad ? loadProgressValue++ : -1f;
+    }
+
     boolean worldGenSettled;
 
     @Override
@@ -803,6 +813,84 @@ class ScriptEngineTest {
     runUntilFinished(engine, 10);
     assertTrue(engine.isFinished());
     assertTrue(engine.isFailed(), "assert(ok) should fail: the world never became ready");
+  }
+
+  @Test
+  void createWorldLetsASlowLoadRunWhileItIsStillAdvancing() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE; // never becomes ready during the test
+    client.movingLoad = true;
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'the load was still moving')\n",
+            clock);
+
+    // Two minutes of loading: past any budget sized for the usual machine, and the very window
+    // that used to be reported as "createWorld failed" on a loaded CI runner.
+    for (int i = 0; i < 120; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished(), "a load that keeps advancing is not failed");
+  }
+
+  @Test
+  void createWorldGivesUpOnceAMovingLoadStopsMoving() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE;
+    client.movingLoad = true;
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'the load stopped moving')\n",
+            clock);
+    for (int i = 0; i < 5; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished());
+
+    client.movingLoad = false; // the server has gone quiet
+    clock.addAndGet(61_000);
+    engine.tick();
+    assertTrue(engine.isFinished(), "a stalled load is reported without waiting out the ceiling");
+    assertTrue(engine.isFailed());
+    assertTrue(clock.get() < 300_000L, "the stall, not the ceiling, ended the wait");
+  }
+
+  @Test
+  void createWorldFallsBackToItsCeilingWithoutAProgressSignal() throws Exception {
+    FakeClient client = new FakeClient();
+    client.joinTicks = Integer.MAX_VALUE; // and no progress signal: movingLoad stays false
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            new ConfigData("", null, "exit", 300),
+            "local ok = minecheck.createWorld({ name = 'test' }, 300)\n"
+                + "assert(ok, 'no signal, so the ceiling decides')\n",
+            clock);
+    for (int i = 0; i < 3; i++) {
+      clock.addAndGet(1000);
+      engine.tick();
+    }
+    assertFalse(engine.isFinished(), "the load is still inside its ceiling");
+
+    clock.addAndGet(120_000);
+    engine.tick();
+    assertFalse(engine.isFinished(), "with no signal there is nothing to call stalled");
+
+    clock.addAndGet(181_000);
+    runUntilFinished(engine, 20);
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
   }
 
   @Test
