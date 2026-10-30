@@ -304,6 +304,53 @@ public final class LuaMinecheck {
     return clock.getAsLong() + (long) (seconds * 1000);
   }
 
+  /**
+   * A world-entry wait's budget: the call's timeout as a ceiling, plus a stall window that only
+   * arms once the platform's {@link ClientPlatform#worldLoadProgress()} has been seen to move.
+   *
+   * <p>A ceiling alone cannot tell a slow machine from a stuck load. Size it for the slowest
+   * contributor and a real hang sits there for minutes before anyone hears about it; size it for
+   * the usual case and a loaded CI runner fails a perfectly healthy run — which is exactly how the
+   * Forge client's first world load came to be reported as "createWorld failed" while the server
+   * was still preparing spawn. The progress signal closes that gap: while it moves the load is
+   * alive and may take as long as it needs, and once it has not moved for {@link #STALL_MILLIS} it
+   * is stuck, so the wait gives up at once.
+   *
+   * <p>The window stays disarmed until the signal moves, so a platform that reports none (or a load
+   * that never reports one) keeps plain ceiling behaviour instead of failing early.
+   */
+  private static final class WaitBudget {
+    /** How long a load that has been seen to move may sit still before it counts as stuck. */
+    private static final long STALL_MILLIS = 60_000L;
+
+    private final long ceiling;
+    private long lastMovement;
+    private float lastSignal = Float.NaN;
+    private boolean armed;
+
+    WaitBudget(long ceiling, long now) {
+      this.ceiling = ceiling;
+      this.lastMovement = now;
+    }
+
+    /** Feeds one sample; a change means the load moved, which pushes the stall window out. */
+    void observe(long now, float signal) {
+      if (signal < 0) {
+        return;
+      }
+      if (!Float.isNaN(lastSignal) && signal != lastSignal) {
+        armed = true;
+        lastMovement = now;
+      }
+      lastSignal = signal;
+    }
+
+    /** True when the wait must stop: the ceiling is past, or a moving load has stalled. */
+    boolean expired(long now) {
+      return now > ceiling || (armed && now - lastMovement >= STALL_MILLIS);
+    }
+  }
+
   /** Converts a platform NBT map (as in {@code SlotInfo}/{@code BlockInfo}) into a Lua table. */
   private static LuaTable nbtToLua(java.util.Map<String, Object> nbt) {
     LuaTable out = new LuaTable();
@@ -462,7 +509,7 @@ public final class LuaMinecheck {
     public Varargs invoke(Varargs args) {
       requireClient();
       String name = args.arg1().checkjstring();
-      long deadline = deadline(args, 2);
+      WaitBudget budget = new WaitBudget(deadline(args, 2), clock.getAsLong());
       boolean initiated = false;
       try {
         while (true) {
@@ -473,7 +520,9 @@ public final class LuaMinecheck {
           if (client.isWorldReady()) {
             return LuaValue.TRUE;
           }
-          if (clock.getAsLong() > deadline) {
+          long now = clock.getAsLong();
+          budget.observe(now, client.worldLoadProgress());
+          if (budget.expired(now)) {
             return LuaValue.FALSE;
           }
           globals.yield(LuaValue.NIL);
@@ -503,7 +552,7 @@ public final class LuaMinecheck {
     public Varargs invoke(Varargs args) {
       requireClient();
       LuaTable opts = args.arg1().checktable();
-      long deadline = deadline(args, 2);
+      WaitBudget budget = new WaitBudget(deadline(args, 2), clock.getAsLong());
       CreateWorldOptions options = parseOptions(opts);
       boolean initiated = false;
       try {
@@ -515,7 +564,9 @@ public final class LuaMinecheck {
           if (client.isWorldReady()) {
             return LuaValue.TRUE;
           }
-          if (clock.getAsLong() > deadline) {
+          long now = clock.getAsLong();
+          budget.observe(now, client.worldLoadProgress());
+          if (budget.expired(now)) {
             return LuaValue.FALSE;
           }
           globals.yield(LuaValue.NIL);

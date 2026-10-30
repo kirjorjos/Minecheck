@@ -143,6 +143,25 @@ public interface ClientPlatform {
   }
 
   /**
+   * A number that moves while a world load is progressing, or {@code -1} when there is nothing to
+   * watch.
+   *
+   * <p>This exists so a wait does not have to choose between a budget long enough for the slowest
+   * machine and one that reports a real hang promptly: while the value changes, the load is alive
+   * and may take as long as it needs; once it has not changed for a while, the load is stuck and
+   * the wait can give up immediately. Called every tick from a wait loop; treat it as a fresh poll.
+   *
+   * <p>Deliberately <em>not</em> specified as a percentage: a 1.18.2 client is told almost nothing
+   * about an integrated load until it finishes, so an implementation reports whatever it can
+   * actually observe and callers must only compare consecutive samples. {@code -1} means "no
+   * signal" (not loading, or this platform cannot see one) and leaves the wait on its plain
+   * deadline.
+   */
+  default float worldLoadProgress() {
+    return -1f;
+  }
+
+  /**
    * True once world chunk generation has settled and it is safe to leave the current world (e.g.
    * before {@link #leaveWorld()}, so the save captures fully-generated spawn chunks instead of
    * re-generating them on rejoin).

@@ -80,7 +80,9 @@ if not minecheck.expect(created, "created the screenshot world") then
   minecheck.fail("createWorld failed")
 end
 minecheck.expect(minecheck.waitFor(minecheck.isInWorld, 60), "joined the world")
-minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled") -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
+minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled")
+
+-- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
 -- random spot near the world spawn, and two runs standing a block apart see different terrain. The
 -- teleport sets the position and the rotation (yaw 0, pitch 90 = straight down) in one go.
 local function atPinnedSpot()
@@ -111,6 +113,8 @@ minecheck.expect(world.height == frameHeight, "world-settled is " .. frameHeight
 -- the lightmap derives is at the bottom of its curve here, so a client left to advance its own
 -- clock between server syncs would render a different picture.
 command("time set 18000")
+-- The command sets the *server's* time; the client learns it from the sync a tick or two later, and
+-- the sky and lightmap ease to it, so settle on the digest rather than assuming a wait is enough.
 settle("night")
 local night = shot("world-night")
 minecheck.expect(night.width == frameWidth, "world-night is " .. frameWidth .. " px wide")
@@ -128,6 +132,7 @@ minecheck.expect(
   end, 10),
   "the crafting table reached the client"
 )
+
 -- Aim at the block's centre, not the position that names it: (1, -60, 0) is a corner of the cube, so
 -- a ray to it grazes the edge and the click that opens the menu hits nothing. `openScreen` with a
 -- position aims and clicks in one step, so the aim is confirmed here instead and the click follows
@@ -147,6 +152,14 @@ if minecheck.expect(opened, "opened the crafting table") then
   local crafting = shot("crafting-open")
   minecheck.expect(crafting.width == frameWidth, "crafting-open is " .. frameWidth .. " px wide")
   minecheck.press("escape")
+  -- The HUD capture below needs the world back, so wait for the screen to be gone rather than
+  -- assuming the keypress was consumed by the next frame.
+  minecheck.expect(
+    minecheck.waitFor(function()
+      return not minecheck.isScreenOpen(nil)
+    end, 5),
+    "the crafting screen closed"
+  )
   settle("hud")
 else
   minecheck.fail("openScreen(crafting) failed")
