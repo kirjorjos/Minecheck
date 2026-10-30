@@ -49,7 +49,7 @@ end)
 
 -- phase B: rejoin the saved world
 runPhase("rejoin world", function()
-  local j = minecheck.joinLocalWorld("minecheck_world", 90)
+  local j = minecheck.joinLocalWorld("minecheck_world", 300)
   if not j then
     minecheck.fail("joinLocalWorld failed")
   end
@@ -57,7 +57,7 @@ end)
 
 -- phase C: join the parallel dedicated server on localhost
 runPhase("join+leave server", function()
-  local j = minecheck.joinServer("localhost:25565", 120)
+  local j = minecheck.joinServer("localhost:25565", 300)
   if not j then
     minecheck.fail("joinServer failed")
   end

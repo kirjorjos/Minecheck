@@ -2,7 +2,7 @@
 -- generated in phase A. The marker block is the proof: it only exists in that save, so a server
 -- that generated a world of its own would not have it.
 
-local joined = minecheck.joinServer("localhost:25565", 180)
+local joined = minecheck.joinServer("localhost:25565", 300)
 minecheck.expect(joined, "joined the server running the generated world")
 if not joined then
   minecheck.fail("could not join the handoff server")

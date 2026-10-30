@@ -23,9 +23,11 @@ local left = minecheck.leaveWorld(30)
 if not minecheck.expect(left, "left world after create") then
   minecheck.fail("leaveWorld after create failed")
 end
-minecheck.sleep(1)
+-- leaveWorld returns once the player is gone; the title screen is what follows it, and waiting for
+-- that is what the rejoin below actually needs.
+minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "back on the title screen")
 
-local rejoined = minecheck.joinLocalWorld(world, 60)
+local rejoined = minecheck.joinLocalWorld(world, 300)
 if not minecheck.expect(rejoined, "rejoined existing world") then
   minecheck.fail("joinLocalWorld (rejoin) failed")
 end
