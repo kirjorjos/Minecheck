@@ -35,12 +35,16 @@ minecheck.log("input test: start y = " .. startY)
 
 minecheck.look(90, 0) -- straight down
 -- The rotation is applied on the client thread and the crosshair is raycast from the camera, so
--- wait for it to land instead of giving the change a fixed 0.3 s to happen.
+-- wait for it to land instead of giving the change a fixed 0.3 s to happen. The wait names the
+-- exact block the choreography below acts on, x/z included: "a block under the crosshair" is
+-- already true of the pre-look aim, so a wait that loose resolves before the rotation lands.
+local feetBlock = { x = math.floor(start.pos.x), y = startY - 1, z = math.floor(start.pos.z) }
 expect(
   minecheck.waitFor(function()
-    return minecheck.getTargetBlock(start) ~= nil
+    local hit = minecheck.getTargetBlock(start)
+    return hit ~= nil and hit.x == feetBlock.x and hit.y == feetBlock.y and hit.z == feetBlock.z
   end, 5),
-  "the crosshair landed after look()"
+  "the crosshair landed on the block below the player"
 )
 
 local target = minecheck.getTargetBlock(start)
@@ -94,7 +98,8 @@ for _ = 1, 3 do
   end
   minecheck.look(90, 0)
   minecheck.waitFor(function()
-    return minecheck.getTargetBlock(start) ~= nil
+    local hit = minecheck.getTargetBlock(start)
+    return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z
   end, 5)
 end
 expect(picked, "middle-click put the picked block in the hotbar")
@@ -237,13 +242,20 @@ end, 0.3) == false, "sleepUntil returns false on timeout")
 local standing = minecheck.getPlayer()
 local feetY = math.floor(standing.pos.y + 0.5)
 expect(minecheck.lookAt(standing.pos.x, standing.pos.y - 2.0, standing.pos.z), "lookAt aimed")
+-- Same as the look-down above: the aim is applied on the client thread, so wait for the crosshair
+-- to carry the exact block the assertion reads rather than for "some" block to be under it.
+local underFeet = { x = math.floor(standing.pos.x), y = feetY - 1, z = math.floor(standing.pos.z) }
 minecheck.waitFor(function()
-  return minecheck.getTargetBlock(standing) ~= nil
+  local hit = minecheck.getTargetBlock(standing)
+  return hit ~= nil and hit.x == underFeet.x and hit.y == underFeet.y and hit.z == underFeet.z
 end, 5)
 local aimed = minecheck.getTargetBlock(standing)
 expect(aimed ~= nil, "lookAt produced a target block")
 if aimed then
-  expect(aimed.y == feetY - 1, "lookAt aimed at the block below the feet (got " .. aimed.y .. ")")
+  expect(
+    aimed.x == underFeet.x and aimed.y == underFeet.y and aimed.z == underFeet.z,
+    "lookAt aimed at the block below the feet (got " .. aimed.x .. "," .. aimed.y .. "," .. aimed.z .. ")"
+  )
 end
 
 -- mouse: the held form (as opposed to the mousePress tap used above). Middle-click picks the
