@@ -59,7 +59,11 @@ jobs:
       - name: Preflight, bump and promote
         id: plan
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The promotion PR must be authored by github-actions[bot] (the rule for */main), so the
+          # default token opens it. The app token is used only for the one write that has to bypass
+          # the PR-only rule on */development: the version bump.
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           VERSIONS_RAW: ${{ inputs.versions }}
           BUMP: ${{ inputs.bump }}
@@ -85,6 +89,15 @@ jobs:
 
           def gh(*args, check=True):
               return run(["gh", *args], check=check)
+
+
+          def gh_app(*args, check=True):
+              # Same CLI, the app's identity: this is what can write to a PR-only branch.
+              environment = dict(os.environ)
+              environment["GH_TOKEN"] = os.environ["APP_TOKEN"]
+              return subprocess.run(
+                  ["gh", *args], text=True, capture_output=True, check=check, env=environment
+              )
 
 
           def gh_json(*args):
@@ -236,7 +249,9 @@ jobs:
 
 
           def write_version(mc, version):
-              current = gh_json("api", f"repos/{REPO}/contents/build.gradle.kts?ref={mc}/development")
+              current = json.loads(
+                  gh_app("api", f"repos/{REPO}/contents/build.gradle.kts?ref={mc}/development").stdout
+              )
               import base64
 
               text = base64.b64decode(current["content"]).decode("utf-8")
@@ -257,7 +272,7 @@ jobs:
               }
               with open("/tmp/version.json", "w", encoding="utf-8") as handle:
                   json.dump(payload, handle)
-              gh(
+              gh_app(
                   "api", "-X", "PUT", f"repos/{REPO}/contents/build.gradle.kts",
                   "--input", "/tmp/version.json",
               )
