@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.function.IntUnaryOperator;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
@@ -46,6 +47,10 @@ class ScreenshotBaselinesTest {
 
   private ScreenshotBaselines.Result compare(boolean update) throws IOException {
     return ScreenshotBaselines.compare("fabric", captures(), baselines(), update);
+  }
+
+  private ScreenshotBaselines.Result compareOnly(String... labels) throws IOException {
+    return ScreenshotBaselines.compare("fabric", captures(), baselines(), false, Set.of(labels));
   }
 
   /** A solid grey PNG, {@code size} pixels square, offset by {@code shade} levels. */
@@ -238,6 +243,48 @@ class ScreenshotBaselinesTest {
 
     assertFalse(result.failed(), "the task fails on an empty run; the comparison just reports it");
     assertEquals(0, result.total());
+  }
+
+  @Test
+  void aNarrowedComparisonIgnoresEveryCaptureItDoesNotName() throws Exception {
+    // The determinism pass names only the captures the first pass found divergent; everything else
+    // the rerun produced (a new picture, one with no baseline at all) must not decide it.
+    capture("title", png(8, 40));
+    capture("world-settled", png(8, 200));
+    baseline("world-settled", png(8, 60));
+
+    ScreenshotBaselines.Result result = compareOnly("fabric/world-settled.png");
+
+    assertTrue(result.failed(), "the named capture still differs");
+    assertEquals(1, result.filtered().size());
+    assertEquals("fabric/title.png", result.filtered().get(0));
+    assertFalse(
+        Files.exists(baselines().resolve("title.png")),
+        "a capture outside the list is not compared, so no baseline is written for it");
+  }
+
+  @Test
+  void aNarrowedComparisonPassesWhenTheNamedCapturesAreReproduced() throws Exception {
+    capture("title", png(8, 40));
+    capture("world-settled", png(8, 200));
+    baseline("world-settled", png(8, 200));
+
+    ScreenshotBaselines.Result result = compareOnly("tests/baselines/fabric/world-settled.png");
+
+    assertFalse(result.failed(), "the report path spelling is accepted too");
+    assertEquals(1, result.matched().size());
+  }
+
+  @Test
+  void aNamedCaptureTheRerunDidNotProduceFails() throws Exception {
+    capture("title", png(8, 40));
+
+    ScreenshotBaselines.Result result = compareOnly("fabric/gone.png");
+
+    assertTrue(result.failed(), "a picture that vanished between runs is not reproducible");
+    assertTrue(
+        result.failures().get(0).contains("no capture named fabric/gone.png"),
+        result.failures().get(0));
   }
 
   private static final java.nio.charset.Charset UTF8 = StandardCharsets.UTF_8;

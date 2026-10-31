@@ -74,6 +74,7 @@ public final class ScreenshotBaselines {
       List<String> matched,
       List<String> tolerated,
       List<String> skipped,
+      List<String> filtered,
       List<String> unused) {
 
     public boolean failed() {
@@ -95,11 +96,28 @@ public final class ScreenshotBaselines {
    */
   public static Result compare(String loader, Path capturesDir, Path activeDir, boolean update)
       throws IOException {
+    return compare(loader, capturesDir, activeDir, update, Set.of());
+  }
+
+  /**
+   * As {@link #compare(String, Path, Path, boolean)}, restricted to {@code only}: a set of {@code
+   * <loader>/<file>.png} labels, empty meaning every capture.
+   *
+   * <p>This is the determinism pass. The captures that disagreed with the committed tree are the
+   * ones whose reproducibility is being decided, so every other capture the rerun produced is
+   * counted but not compared. A name in {@code only} that the rerun did not produce is a failure:
+   * the picture the first pass took no longer exists.
+   */
+  public static Result compare(
+      String loader, Path capturesDir, Path activeDir, boolean update, Set<String> only)
+      throws IOException {
     List<String> failures = new ArrayList<>();
     List<String> written = new ArrayList<>();
     List<String> matched = new ArrayList<>();
     List<String> tolerated = new ArrayList<>();
     List<String> skipped = new ArrayList<>();
+    List<String> filtered = new ArrayList<>();
+    Set<String> named = normalizeOnly(only);
     List<String> unused = new ArrayList<>();
 
     List<Path> captures = new ArrayList<>();
@@ -123,6 +141,11 @@ public final class ScreenshotBaselines {
         skipped.add(loader + "/" + fileName);
         continue;
       }
+      String label = loader + "/" + fileName;
+      if (!named.isEmpty() && !named.contains(label)) {
+        filtered.add(label);
+        continue;
+      }
       Path baseline = activeDir.resolve(fileName);
       if (update) {
         copy(capture, baseline);
@@ -143,7 +166,6 @@ public final class ScreenshotBaselines {
       }
       byte[] actual = Files.readAllBytes(capture);
       byte[] expected = Files.readAllBytes(baseline);
-      String label = loader + "/" + fileName;
       if (java.util.Arrays.equals(actual, expected)) {
         matched.add(label);
         continue;
@@ -206,7 +228,26 @@ public final class ScreenshotBaselines {
       }
     }
 
-    if (Files.isDirectory(activeDir)) {
+    // A capture the first pass named and the rerun did not produce is the nondeterminism this pass
+    // exists to catch, so it is a failure rather than the "baseline matches no capture" warning.
+    for (String label : named) {
+      String prefix = loader + "/";
+      if (!label.startsWith(prefix) || !label.endsWith(".png")) {
+        continue;
+      }
+      String fileName = label.substring(prefix.length());
+      if (!captureNames.contains(fileName.substring(0, fileName.length() - 4))) {
+        failures.add(
+            "no capture named "
+                + label
+                + " in the rerun — the first pass captured it, so the renderer is not"
+                + " reproducible");
+      }
+    }
+
+    // Skip the warning scan when the run was narrowed: captures outside `only` are expected not to
+    // be compared, and a named one that went missing is already a failure above.
+    if (named.isEmpty() && Files.isDirectory(activeDir)) {
       try (Stream<Path> files = Files.list(activeDir)) {
         files
             .filter(Files::isRegularFile)
@@ -229,7 +270,27 @@ public final class ScreenshotBaselines {
     }
     unused.sort(String::compareTo);
 
-    return new Result(failures, written, matched, tolerated, skipped, unused);
+    return new Result(failures, written, matched, tolerated, skipped, filtered, unused);
+  }
+
+  /**
+   * The comparison list as labels: {@code <loader>/<file>.png}, from either that spelling or the
+   * {@code tests/baselines/…} paths the report writes. Anything else is dropped — this list decides
+   * a verdict and never touches a file.
+   */
+  private static Set<String> normalizeOnly(Set<String> only) {
+    Set<String> labels = new TreeSet<>();
+    for (String raw : only) {
+      String label = raw.trim();
+      if (label.startsWith("tests/baselines/")) {
+        label = label.substring("tests/baselines/".length());
+      }
+      String[] parts = label.split("/");
+      if (parts.length == 2 && !parts[0].isEmpty() && parts[1].endsWith(".png")) {
+        labels.add(label);
+      }
+    }
+    return labels;
   }
 
   /**
