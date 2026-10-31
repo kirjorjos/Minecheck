@@ -119,6 +119,91 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
   }
 
+  /** Set once the pinned timer is installed, or once installation has been given up on. */
+  private static volatile boolean renderTickDeltaPinned;
+
+  private static volatile boolean renderTickDeltaUnavailable;
+
+  /**
+   * Draws every frame at render delta 1 — see {@link ClientPlatform#pinRenderTickDelta()} for why a
+   * capture needs it. The timer object is swapped rather than a value written into it, because the
+   * delta is recomputed at the start of every frame; the subclass still returns vanilla's tick
+   * count, so ticks are scheduled exactly as before.
+   */
+  @Override
+  public void pinRenderTickDelta() {
+    if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
+      return;
+    }
+    Minecraft mc = mc();
+    java.lang.reflect.Field timerField = null;
+    for (java.lang.reflect.Field field : Minecraft.class.getDeclaredFields()) {
+      if (field.getType().getSimpleName().equals("Timer")) {
+        timerField = field;
+        break;
+      }
+    }
+    if (timerField == null) {
+      renderTickDeltaUnavailable = true;
+      LOG.warning(
+          "Minecheck: no render timer on this client — captures keep the vanilla partial tick and"
+              + " may differ by a level between runs");
+      return;
+    }
+    try {
+      timerField.setAccessible(true);
+      Object current = timerField.get(mc);
+      if (current instanceof PinnedTimer) {
+        renderTickDeltaPinned = true;
+        return;
+      }
+      float msPerTick = 0.0f;
+      long lastMs = 0L;
+      for (java.lang.reflect.Field field : current.getClass().getDeclaredFields()) {
+        field.setAccessible(true);
+        if (field.getType() == float.class && !field.getName().equals("partialTick")) {
+          msPerTick = field.getFloat(current);
+        } else if (field.getType() == long.class) {
+          lastMs = field.getLong(current);
+        }
+      }
+      timerField.set(mc, new PinnedTimer(msPerTick, lastMs));
+      renderTickDeltaPinned = true;
+      LOG.info("Minecheck: pinned the render tick delta to 1");
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      renderTickDeltaUnavailable = true;
+      LOG.log(java.util.logging.Level.WARNING, "Minecheck: could not pin the render tick delta", e);
+    }
+  }
+
+  /**
+   * A frame timer that hands the renderer a partial tick of 1 without touching the tick count.
+   *
+   * <p>The same hazard as the Yarn counter: the field vanilla uses to accumulate tick time is the
+   * one the renderer reads, so a value written for the renderer would be carried into the next
+   * frame's arithmetic. Whatever vanilla computed is kept aside and restored before each call.
+   */
+  private static final class PinnedTimer extends net.minecraft.client.Timer {
+
+    /** The partial tick vanilla computed, restored before the next {@code advanceTime}. */
+    private float accumulatedPartialTick = Float.NaN;
+
+    PinnedTimer(float msPerTick, long lastMs) {
+      super(msPerTick, lastMs);
+    }
+
+    @Override
+    public int advanceTime(long timeMs) {
+      if (!Float.isNaN(accumulatedPartialTick)) {
+        this.partialTick = accumulatedPartialTick;
+      }
+      int ticks = super.advanceTime(timeMs);
+      accumulatedPartialTick = this.partialTick;
+      this.partialTick = 1.0f;
+      return ticks;
+    }
+  }
+
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     onClientThread(() -> captureScreenshot(request));
@@ -521,6 +606,26 @@ public class ForgeClientPlatform implements ClientPlatform {
     return mc().getOverlay() == null;
   }
 
+  /**
+   * Spawn-region chunk tasks the integrated server still has outstanding while a local world is
+   * loading — the only progress-like number a 1.18.2 client can see before the level is ready.
+   *
+   * <p>Not a percentage, and deliberately not presented as one: the wait only compares samples, so
+   * all this has to do is change while the server is working and stop changing while it is stuck.
+   * Reported as {@code -1} whenever there is nothing to watch (no local server, or already in the
+   * world), which leaves the caller on its plain deadline.
+   */
+  @Override
+  public float worldLoadProgress() {
+    Minecraft mc = mc();
+    MinecraftServer server = mc.getSingleplayerServer();
+    if (mc.player != null || server == null) {
+      return -1f;
+    }
+    ServerLevel overworld = server.overworld();
+    return overworld == null ? -1f : overworld.getChunkSource().getPendingTasksCount();
+  }
+
   @Override
   public boolean isWorldGenSettled() {
     MinecraftServer server = mc().getSingleplayerServer();
@@ -686,6 +791,20 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     net.minecraft.world.phys.HitResult hit = mc.player.pick(5.0, 1.0F, false);
     if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
+      return null;
+    }
+    net.minecraft.core.BlockPos pos = ((net.minecraft.world.phys.BlockHitResult) hit).getBlockPos();
+    return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
+  }
+
+  @Override
+  public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.level == null) {
+      return null;
+    }
+    net.minecraft.world.phys.HitResult hit = mc.hitResult;
+    if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
       return null;
     }
     net.minecraft.core.BlockPos pos = ((net.minecraft.world.phys.BlockHitResult) hit).getBlockPos();

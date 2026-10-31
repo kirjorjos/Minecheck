@@ -117,6 +117,7 @@ public class FabricEntrypoint implements ModInitializer {
             ClientTickEvents.END_CLIENT_TICK.register(
                 c -> {
                   client.pinClientClock();
+                  client.pinRenderTickDelta();
                   if (!engine.isFinished() && client.isBootComplete()) {
                     engine.tick();
                   }

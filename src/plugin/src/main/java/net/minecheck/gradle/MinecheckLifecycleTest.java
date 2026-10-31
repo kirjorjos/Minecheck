@@ -862,7 +862,14 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Map<String, Object> config = new LinkedHashMap<>();
     config.put(coordinator ? "coordinator" : "script", scriptName);
     config.put("failMode", "exit");
-    config.put("defaultTimeout", 60);
+    // 300 s, not 60: every wait is a tick-driven bump against this budget, and a lifecycle run is
+    // slow on the CI runners. A dedicated server there takes 70-120 s to report "Done", and the
+    // client is launched in parallel with it, so a join's budget has to outlast the server's own
+    // startup. The Forge client's first world load was still at 43% of spawn prep when a 60 s
+    // budget expired, which failed the run with nothing wrong in the world it was loading.
+    // This is a ceiling, not an expectation: a world load that is still advancing runs until it,
+    // and one that has stopped advancing is reported after a minute of no movement.
+    config.put("defaultTimeout", 300);
     if (screenshotProfile()) {
       // The same profile the options.txt above pins, told to the mod: it needs these for the
       // capture itself (which frame size to expect, the GUI scale for `unit = "gui"` regions) and
