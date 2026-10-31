@@ -170,12 +170,20 @@ end
 -- its checks always run. JEI in this harness starts before the dedicated server's recipe sync and
 -- can stay empty for the whole session, so its content is probed *after* the reload at the end of
 -- the script (see there) — a viewer that indexes too early is exactly what the reload is for.
+-- Which viewer wins the priority order is a property of what is installed, not of the harness:
+-- EMI ships no Forge build for 1.18.2, so the priority there is JEI. The assertions name whichever
+-- one this loader actually has.
+local emiInstalled = minecheck.isModLoaded("emi")
+local priorityId = emiInstalled and "emi" or "jei"
 local viewer = minecheck.recipeViewer()
 check(viewer ~= nil, "priority recipe viewer bridged")
-check(viewer.id == "emi", "priority recipe viewer is emi (got " .. tostring(viewer.id) .. ")")
-checkViewer(nil, "priority (EMI)")
-check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
+check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
 check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
+
+if emiInstalled then
+  checkViewer(nil, "priority (EMI)")
+  check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
+end
 
 local jeiInstalled = minecheck.isModLoaded("jei")
 if jeiInstalled then
@@ -338,6 +346,22 @@ check(
   "server gave 4 oak planks"
 )
 
+-- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
+-- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
+-- background thread and is still filling it when the script gets here (see the note at the top of
+-- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
+-- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
+-- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
+local indexed = minecheck.waitFor(function()
+  return #minecheck.getRecipeSlots("minecraft:stick") > 0
+end, 30)
+if not indexed then
+  minecheck.runCommand("reload")
+  minecheck.waitFor(function()
+    return #minecheck.getRecipeSlots("minecraft:stick") > 0
+  end, 30)
+end
+
 local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
 check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
 check(
@@ -379,16 +403,30 @@ end
 -- purpose: a reload re-syncs client state, which would perturb the inventory reads above.)
 check(minecheck.reloadResources(30), "client resource reload finished mid-session")
 
+-- `checkViewer` asserts that a fill is refused when no container is open, and the ghost-slot moves
+-- above left the inventory open: close it with the same key that opened it before probing JEI.
+if minecheck.isScreenOpen() then
+  minecheck.keyPress("key.inventory")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+end
+
 -- JEI is probed only now, with the client's recipes long since synced and a reload behind it: an
 -- index that is still empty here is empty for the session, not just early. The provider logs what
 -- JEI holds on this read. If JEI started before the server's recipe sync (which is what happens on
 -- a dedicated-server client) its index was built from an empty recipe manager; a server-side
 -- datapack reload re-sends the sync, which is the event JEI's rebuild path waits for.
 if jeiInstalled then
-  minecheck.runCommand("reload")
   local indexed = minecheck.waitFor(function()
     return #minecheck.getRecipeSlots("minecraft:stick", "jei") > 0
-  end, 40)
+  end, 20)
+  if not indexed then
+    minecheck.runCommand("reload")
+    indexed = minecheck.waitFor(function()
+      return #minecheck.getRecipeSlots("minecraft:stick", "jei") > 0
+    end, 30)
+  end
   if indexed then
     checkViewer("jei", "JEI")
   else

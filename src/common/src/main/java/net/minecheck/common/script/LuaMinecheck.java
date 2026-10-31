@@ -118,6 +118,7 @@ public final class LuaMinecheck {
     minecheck.set("look", new Look());
     minecheck.set("lookAt", new LookAt());
     minecheck.set("getTargetBlock", new GetTargetBlock());
+    minecheck.set("getCrosshairBlock", new GetCrosshairBlock());
     minecheck.set("getBlock", new GetBlock());
     minecheck.set("findNearbyEntities", new FindNearbyEntities());
 
@@ -1124,6 +1125,34 @@ public final class LuaMinecheck {
         pos = client.getTargetBlock(name);
       } catch (RuntimeException e) {
         throw wrap("getTargetBlock", e);
+      }
+      if (pos == null) {
+        return LuaValue.NIL;
+      }
+      LuaTable t = new LuaTable();
+      t.set("x", LuaValue.valueOf(pos.x()));
+      t.set("y", LuaValue.valueOf(pos.y()));
+      t.set("z", LuaValue.valueOf(pos.z()));
+      return t;
+    }
+  }
+
+  /**
+   * minecheck.getCrosshairBlock() -> table|nil
+   *
+   * <p>The block the renderer's crosshair is on — the target a click acts on, which the game
+   * refreshes once per frame rather than on demand. Returns {@code { x =, y =, z = }}, or {@code
+   * nil} when the crosshair is on nothing or the client is not in a world.
+   */
+  private final class GetCrosshairBlock extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      net.minecheck.platform.api.BlockPosition pos;
+      try {
+        pos = client.getCrosshairBlock();
+      } catch (RuntimeException e) {
+        throw wrap("getCrosshairBlock", e);
       }
       if (pos == null) {
         return LuaValue.NIL;

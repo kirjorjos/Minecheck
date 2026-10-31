@@ -229,6 +229,18 @@ public interface ClientPlatform {
   BlockPosition getTargetBlock(String entityName);
 
   /**
+   * The block the renderer's crosshair is on right now — the target an input click actually acts
+   * on. This is <b>not</b> the same as {@link #getTargetBlock(String)}: that raycasts from the
+   * entity's current rotation on demand, while this returns the game's own crosshair, which the
+   * renderer recomputes once per frame. After a {@link #lookAt(double, double, double)} the two
+   * disagree until a frame has been drawn, and a press in that window acts on the stale block — so
+   * wait on this before asserting that a click changed the world.
+   *
+   * <p>Returns {@code null} when the client is not in a world or the crosshair is on nothing.
+   */
+  BlockPosition getCrosshairBlock();
+
+  /**
    * Query the entities the client currently knows about — the ones the server has synced into our
    * loaded chunks, which is what the local player can actually see and reach (and therefore what is
    * worth aiming at). The client-side counterpart of {@link ServerPlatform#findEntities(String,
@@ -337,6 +349,23 @@ public interface ClientPlatform {
    * not this mod's business.
    */
   default void pinClientClock() {}
+
+  /**
+   * Draw every frame at a render delta of 1 instead of the wall-clock fraction into the tick.
+   *
+   * <p>The client renders at {@code previous + (current - previous) * delta}, so that fraction
+   * decides the sun angle, the lightmap that modulates every lit pixel, the camera's interpolated
+   * pose and any animated model in a capture. Even with the clock pinned and the camera at rest,
+   * two frames of the same scene differ by a level across the picture and by more on the texture
+   * edges that straddle a rounding step — which is why a baseline verdict could only ever be a
+   * tolerance. Pinning the delta makes the frame a function of the script alone, so the verdict is
+   * exact bytes.
+   *
+   * <p>Applied once; implementations must be idempotent, and may do nothing when the client cannot
+   * be reached (no render loop), in which case captures keep the vanilla fraction. Called from the
+   * loader entrypoint next to {@link #pinClientClock()}.
+   */
+  default void pinRenderTickDelta() {}
 
   /**
    * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on

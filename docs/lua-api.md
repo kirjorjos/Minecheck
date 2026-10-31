@@ -380,7 +380,7 @@ The click waits for that look to land: the rotation is applied on the client thr
 
 **Returns:** `true` once [`isScreenOpen`](#minecheckisscreenopenid--boolean) reports the screen, `false` on timeout.
 
-> `"inventory"` is opened with a synthetic tap of the inventory key rather than a container interaction, so it works whether or not anything is nearby. It also works in creative mode: the game opens `CreativeInventoryScreen` there, and `isScreenOpen("inventory")` matches it (both inventory screens are siblings in 1.19.2, not subclasses of one another).
+> `"inventory"` is opened with a synthetic tap of the inventory key rather than a container interaction, so it works whether or not anything is nearby. It also works in creative mode: the game opens the creative inventory there, and `isScreenOpen("inventory")` matches it (both inventory screens are siblings in 1.18.2, not subclasses of one another).
 
 ```lua
 minecheck.openScreen("beacon", { x = 10.5, y = 65.5, z = 8.5 }, 10)
@@ -393,7 +393,7 @@ Non-blocking check of whether a screen is currently open. With no id (or `nil`),
 | Id | Matches |
 |----|---------|
 | `nil` / `""` | any container/handled screen (not the chat screen) |
-| `"inventory"` | the player inventory — the survival `InventoryScreen` **or** the creative inventory screen, which are sibling classes in 1.19.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
+| `"inventory"` | the player inventory — the survival inventory screen **or** the creative inventory screen, which are sibling classes in 1.18.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
 | `"chat"` | the chat screen (open while typing a message/command) |
 | `"beacon"` / `"chest"` / `"crafting"` / `"furnace"` | that container screen |
 
@@ -616,7 +616,7 @@ Chat is the one HUD element a script can make nondeterministic (a line of text w
 Two things are deliberately **not** part of the profile: time of day and weather. They belong to the world the script creates (`createWorld` already pins the seed and disables the daylight/weather cycle), because a profile that changed the world at capture time would make a baseline depend on capture order.
 
 The **sky is the one thing a script should keep out of a baseline**, and Minecheck does not fully remove it for you: the client's clock is re-synced to the server's every tick, but the client also draws each frame at a *partial* tick, and that fraction moves the sun angle, the sky gradient and the lightmap that modulates every lit surface by a step. Two frames of an
-identical scene therefore differ by a level on a few percent of their pixels — a couple of block edges can move further. That is why the shipped suite looks straight down (ground fills the frame) for its world capture, pins the time of day with `/time set` (noon and midnight, where the sky-light curve is flat), and why the baselines are compared with a small tolerance rather than byte for byte. The title screen is avoided for the same reason: its background panorama rotates with every rendered frame.
+identical scene therefore differ by a level on a few percent of their pixels — a couple of block edges can move further. That is why the shipped suite looks straight down (ground fills the frame) for its world capture, pins the time of day with `/time set` (noon and midnight, where the sky-light curve is flat), and why the baselines are compared byte for byte. The title screen is avoided for the same reason: its background panorama rotates with every rendered frame.
 
 A capture also pins nothing about the **camera** for you. The view is part of the picture, so a deterministic scene sets it explicitly — a fresh world spawns the player at a random spot near the world spawn, and two runs standing a block apart see different terrain:
 
@@ -631,7 +631,7 @@ minecheck.createWorld({ name = "minecheck_world", seed = 0 })
 minecheck.waitFor(minecheck.worldGenSettled, 120)
 minecheck.runCommand("time set 6000")
 minecheck.runCommand("tp @s 0.5 -60 0.5 0 90")
-minecheck.wait(0.5)
+-- then capture once two consecutive captures report the same digest
 minecheck.captureScreenshot("world-settled")
 ```
 
@@ -656,7 +656,7 @@ Two names can never be used twice in a run: a second capture would either overwr
 
 Captures land in the run directory: `src/<loader>/mod/run/client/screenshots/<name>.png`. The suite's committed baselines live in `tests/baselines/<loader>/<name>.png` and are compared by the loader's `test<Loader>Shots` Gradle task after `run<Loader>Shots` produced them. Local runs compare against `tests/local-baselines/<loader>/` (git-ignored) instead, because a picture rendered by a different GPU than CI's says nothing about the code:
 
-The comparison is **byte-identical when it can be, and tolerant when it cannot**: a capture passes when every colour channel of every pixel is within 8 levels of its baseline (of 255), allowing at most 64 pixels of a 854×480 frame to exceed that. The tolerance is there because the client's partial tick shifts the lighting by a level between any two frames; it is not a licence to move the picture — a shifted pixel, a missing HUD element or a different GUI is thousands of pixels away from its baseline. Every tolerated capture is logged with the drift it needed, so a baseline that is slowly rotting is visible before it fails.
+The comparison is **exact bytes**: a capture passes only when every pixel is identical to its baseline. That is possible because the client pins its render delta to 1 (`ClientPlatform#pinRenderTickDelta`), the scenes are static by construction and the profile is fixed — the fraction of a tick used to be the one input left over, and it moved the lighting of the whole frame by a level. A changed pixel, a missing HUD element or a different GUI all fail; there is no allowance to hide behind.
 
 ```bash
 ./gradlew testFabricShots                                  # capture + compare (local baseline tree)
@@ -993,7 +993,7 @@ Returns `"client"` or `"server"` depending on which side the script is running o
 
 ### `minecheck.minecraftVersion() → string`
 
-Returns the Minecraft version string, e.g. `"1.19.2"`.
+Returns the Minecraft version string, e.g. `"1.18.2"`.
 
 ---
 
@@ -1088,6 +1088,24 @@ Points the camera at the given world position (eye-to-target).
 
 Raycasts from the named entity's eyes along its look direction and returns the hit block's position `{ x, y, z }`, or `nil` on a miss. Only the local player is resolvable.
 
+### `minecheck.getCrosshairBlock() → table | nil`
+
+The block the **renderer's crosshair** is on — the target a click (`mouse(1)`, `mousePress(1)`, `press("key.use")`, attack) actually acts on. Returns `{ x, y, z }`, or `nil` when the crosshair is on nothing or the client is not in a world.
+
+Unlike [`getTargetBlock`](#minecheckgettargetblockentityname--table--nil), which raycasts from the player's *current* rotation whenever it is called, the crosshair is recomputed by the renderer once per **frame**. Right after a [`lookAt`](#minechecklookatx-y-z--boolean) the two disagree until a frame has been drawn, and a press in that window acts on the stale block — so wait on this before asserting that a press changed the world.
+
+```lua
+minecheck.lookAt(x, y, z)
+local ax, ay, az = x_floor, y_floor, z_floor -- the block the look targets
+minecheck.waitFor(function()
+  local hit = minecheck.getCrosshairBlock()
+  return hit ~= nil and hit.x == ax and hit.y == ay and hit.z == az
+end, 30)
+minecheck.mousePress(1) -- now the click cannot act on anything else
+```
+
+Client-only.
+
 ### `minecheck.getBlock(pos) → table | nil`
 
 Reads the block at integer position `pos` (`{ x = number, y = number, z = number }`) from the **client** world.
@@ -1126,7 +1144,7 @@ Client-only; calling it from a server script raises `"client-only function calle
 
 **Returns** the same entry shape as `findEntities` (`id`, `type`, `pos`, `tags`), from the client's own view. Outside a world it returns an empty table instead of erroring.
 
-> **No tag filter, and `tags` is always empty here.** Entity scoreboard tags never reach a client in 1.19.2 — no client or network class calls `Entity.addTag` and no packet carries the tag set — so a client-side filter on a tag (or an entry's `tags`) could only ever be empty. Two consequences:
+> **No tag filter, and `tags` is always empty here.** Entity scoreboard tags never reach a client in 1.18.2 — no client or network class calls `Entity.addTag` and no packet carries the tag set — so a client-side filter on a tag (or an entry's `tags`) could only ever be empty. Two consequences:
 >
 > - To tell a client-side target apart from worldgen mobs, filter by a **type that cannot spawn naturally** (the harness's punch test uses `minecraft:vex`), or poll an entry's `id` once the server has told you which one to use.
 > - When a scoreboard tag is the handle, do the lookup **server-side** with `findEntities` and coordinate over the packet channel (`sendPacket` / `waitForPacket`).
@@ -1411,7 +1429,7 @@ Key points:
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getBlock` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
 | `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
@@ -1419,7 +1437,7 @@ Key points:
 | Third-party plugins (`minecheck.ext`, `ServiceLoader` discovery) | ✅ | ✅ | ✅ |
 | Headless client (Xvfb) | ✅ | ✅ | ✅ |
 
-Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, 35 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
+Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.
 
