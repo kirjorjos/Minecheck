@@ -41,6 +41,7 @@ fun configureSpotless(project: Project) {
 configureSpotless(project)
 
 version = "1.1.1"
+
 group = "net.minecheck"
 
 repositories { mavenCentral() }

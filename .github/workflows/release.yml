@@ -167,7 +167,7 @@ jobs:
               text = remote_file(ref, "build.gradle.kts")
               if not text:
                   return None
-              match = re.search(r'^version\s*=\s*"(.*)"\s*$', text, re.M)
+              match = re.search(r'^version[ \t]*=[ \t]*"(.*)"[ \t]*$', text, re.M)
               return match.group(1) if match else None
 
 
@@ -256,7 +256,7 @@ jobs:
 
               text = base64.b64decode(current["content"]).decode("utf-8")
               updated = re.sub(
-                  r'^version\s*=\s*".*"\s*$',
+                  r'^version[ \t]*=[ \t]*".*"[ \t]*$',
                   f'version = "{version}"',
                   text,
                   count=1,
@@ -478,7 +478,10 @@ jobs:
               echo "$MC/main was created from development - nothing to merge"
               continue
             fi
-            gh pr merge "$PR" --repo "$REPO" --squash --delete-branch=false
+            # A merge commit, not a squash: main keeps development as a parent, so the next
+            # promotion shares history with it instead of replaying every file since the last
+            # squash as a change on both sides (which left the promotion PR permanently conflicted).
+            gh pr merge "$PR" --repo "$REPO" --merge --delete-branch=false
             echo "merged promotion PR #$PR: $MC v$VERSION is now on $MC/main"
           done
 
