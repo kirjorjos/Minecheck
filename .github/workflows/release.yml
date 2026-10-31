@@ -7,6 +7,15 @@ on:
         description: "Comma-separated Minecraft versions to release, e.g. 1.19.2,1.20.1"
         required: true
         type: string
+      bump:
+        description: "Which component of the current version to increment"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
       dry_run:
         description: "Preflight and print the plan; push, tag and publish nothing"
         required: false
@@ -25,7 +34,7 @@ jobs:
     name: Prepare promotion PRs
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
       issues: read
     outputs:
@@ -37,12 +46,27 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Preflight and open promotion PRs
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Preflight, bump and promote
         id: plan
         env:
+          # The promotion PR must be authored by github-actions[bot] (the rule for */main), so the
+          # default token opens it. The app token is used only for the one write that has to bypass
+          # the PR-only rule on */development: the version bump.
           GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           VERSIONS_RAW: ${{ inputs.versions }}
+          BUMP: ${{ inputs.bump }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
@@ -55,6 +79,7 @@ jobs:
 
           REPO = os.environ["REPO"]
           RAW = os.environ["VERSIONS_RAW"]
+          BUMP = os.environ["BUMP"]
           DRY = os.environ["DRY_RUN"] == "true"
 
 
@@ -66,12 +91,21 @@ jobs:
               return run(["gh", *args], check=check)
 
 
+          def gh_app(*args, check=True):
+              # Same CLI, the app's identity: this is what can write to a PR-only branch.
+              environment = dict(os.environ)
+              environment["GH_TOKEN"] = os.environ["APP_TOKEN"]
+              return subprocess.run(
+                  ["gh", *args], text=True, capture_output=True, check=check, env=environment
+              )
+
+
           def gh_json(*args):
               return json.loads(gh(*args).stdout)
 
 
-          def error(msg):
-              print(f"::error::{msg}")
+          def error(message):
+              print(f"::error::{message}")
 
 
           def parse_versions(raw):
@@ -124,12 +158,29 @@ jobs:
               return result.stdout.strip() if result.returncode == 0 else None
 
 
+          def head_sha(branch):
+              result = run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], check=False)
+              return result.stdout.split()[0] if result.stdout.strip() else None
+
+
           def project_version(ref):
               text = remote_file(ref, "build.gradle.kts")
               if not text:
                   return None
               match = re.search(r'^version\s*=\s*"(.*)"\s*$', text, re.M)
               return match.group(1) if match else None
+
+
+          def bumped(version, part):
+              parts = [int(x) for x in version.split(".")]
+              while len(parts) < 3:
+                  parts.append(0)
+              major, minor, patch = parts[0], parts[1], parts[2]
+              if part == "major":
+                  return f"{major + 1}.0.0"
+              if part == "minor":
+                  return f"{major}.{minor + 1}.0"
+              return f"{major}.{minor}.{patch + 1}"
 
 
           def changelog_notes(ref):
@@ -177,37 +228,66 @@ jobs:
           def commits_since(mc):
               tag = last_tag(mc)
               revision_range = f"{tag}..origin/{mc}/development" if tag else f"origin/{mc}/development"
-              return run(["git", "log", "--oneline", "--no-merges", revision_range], check=False).stdout.strip()
+              return run(
+                  ["git", "log", "--oneline", "--no-merges", revision_range], check=False
+              ).stdout.strip()
 
 
-          def open_prs(mc):
-              return gh_json(
-                  "pr",
-                  "list",
-                  "--repo",
-                  REPO,
-                  "--base",
-                  f"{mc}/main",
-                  "--head",
-                  f"{mc}/development",
-                  "--state",
-                  "open",
-                  "--json",
-                  "number,url",
+          def open_pr(mc):
+              found = gh_json(
+                  "pr", "list", "--repo", REPO, "--base", f"{mc}/main", "--head",
+                  f"{mc}/development", "--state", "open", "--json", "number,url",
               )
+              return found[0]["number"] if found else None
 
 
           def ensure_label(name):
               gh(
-                  "label",
-                  "create",
-                  name,
-                  "--color",
-                  "5319E7",
-                  "--description",
-                  "Release promotion PR",
-                  check=False,
+                  "label", "create", name, "--color", "5319E7",
+                  "--description", "Release promotion PR", check=False,
               )
+
+
+          def write_version(mc, version):
+              current = json.loads(
+                  gh_app("api", f"repos/{REPO}/contents/build.gradle.kts?ref={mc}/development").stdout
+              )
+              import base64
+
+              text = base64.b64decode(current["content"]).decode("utf-8")
+              updated = re.sub(
+                  r'^version\s*=\s*".*"\s*$',
+                  f'version = "{version}"',
+                  text,
+                  count=1,
+                  flags=re.M,
+              )
+              if updated == text:
+                  return False
+              payload = {
+                  "message": f"Bump to {version}",
+                  "content": base64.b64encode(updated.encode("utf-8")).decode(),
+                  "sha": current["sha"],
+                  "branch": f"{mc}/development",
+              }
+              with open("/tmp/version.json", "w", encoding="utf-8") as handle:
+                  json.dump(payload, handle)
+              gh_app(
+                  "api", "-X", "PUT", f"repos/{REPO}/contents/build.gradle.kts",
+                  "--input", "/tmp/version.json",
+              )
+              return True
+
+
+          def create_main(mc):
+              sha = head_sha(f"{mc}/development")
+              if not sha:
+                  return False
+              gh(
+                  "api", "-X", "POST", f"repos/{REPO}/git/refs",
+                  "-f", f"ref=refs/heads/{mc}/main", "-f", f"sha={sha}",
+              )
+              return True
 
 
           def main():
@@ -215,129 +295,128 @@ jobs:
               if parse_error:
                   error(parse_error)
                   return 1
+              if BUMP not in ("major", "minor", "patch"):
+                  error(f"invalid bump {BUMP!r}")
+                  return 1
 
               errors = []
               rows = []
               for mc in versions:
                   dev = f"{mc}/development"
-                  main = f"{mc}/main"
-                  dev_exists = branch_exists(dev)
-                  main_exists = branch_exists(main)
-                  if not dev_exists:
-                      errors.append(f"{dev}: branch does not exist")
-                  if not main_exists:
-                      errors.append(f"{main}: branch does not exist")
-
-                  version = project_version(dev) if dev_exists else None
-                  if not version:
+                  if not branch_exists(dev):
+                      print(f"::notice::{dev} does not exist - skipping this version")
+                      rows.append({"mc": mc, "status": "skipped: no development branch"})
+                      continue
+                  main_exists = branch_exists(f"{mc}/main")
+                  current = project_version(dev)
+                  if not current:
                       errors.append(f"{dev}: could not read the root project version")
-
-                  notes = changelog_notes(dev) if version else None
+                      continue
+                  version = bumped(current, BUMP)
+                  notes = changelog_notes(dev)
                   if not notes:
                       errors.append(f"{dev}: CHANGELOG.md has no pending release notes")
-
+                  tag = f"{mc}/v{version}"
+                  if tag_exists(tag):
+                      errors.append(f"{tag}: tag already exists")
                   rows.append(
                       {
                           "mc": mc,
+                          "status": "planned",
+                          "current": current,
                           "version": version,
                           "notes": notes,
-                          "docs": blob_sha(dev, "docs/lua-api.md") if dev_exists else None,
-                          "commits": commits_since(mc) if version else "",
+                          "main_exists": main_exists,
+                          "docs": blob_sha(dev, "docs/lua-api.md"),
+                          "commits": commits_since(mc),
                       }
                   )
 
-              documented = {row["mc"]: row["docs"] for row in rows if row["docs"]}
+              planned = [row for row in rows if row["status"] == "planned"]
+              if not planned:
+                  errors.append("no selected version has a development branch to release")
+
+              declared = {row["mc"]: row["version"] for row in planned}
+              if len(set(declared.values())) > 1:
+                  detail = ", ".join(f"{mc}={version}" for mc, version in declared.items())
+                  errors.append(
+                      f"root project version differs across the branches being released ({detail});"
+                      " refusing to release"
+                  )
+
+              documented = {row["mc"]: row["docs"] for row in planned if row["docs"]}
               if len(set(documented.values())) > 1:
                   detail = ", ".join(f"{mc}={sha[:8]}" for mc, sha in documented.items())
                   errors.append(f"docs/lua-api.md differs across versions ({detail}); refusing to release")
               elif not documented:
                   errors.append("docs/lua-api.md is missing on the selected branches")
 
-              # `main` is deliberately absent from this comparison: the version reaches main
-              # from the promotion PR this job opens, so it can only be checked after the merge.
-              # The release step does that before it builds, tags or publishes anything.
-              declared = {row["mc"]: row["version"] for row in rows if row["version"]}
-              if len(set(declared.values())) > 1:
-                  detail = ", ".join(f"{mc}={version}" for mc, version in declared.items())
-                  errors.append(
-                      "root project version differs across the branches being released "
-                      f"({detail}); refusing to release"
-                  )
-
-              for row in rows:
-                  if not row["version"]:
-                      continue
-                  tag = f'{row["mc"]}/v{row["version"]}'
-                  if tag_exists(tag):
-                      errors.append(f"{tag}: tag already exists")
-
               if errors:
                   for message in errors:
                       error(message)
+                  for row in rows:
+                      print(f'{row["mc"]}: {row["status"]}')
                   return 1
 
               if not DRY:
                   ensure_label("release")
 
-              plan = []
-              for row in rows:
-                  existing = open_prs(row["mc"])
-                  body = (
-                      f'## Release {row["mc"]} v{row["version"]}\n\n'
-                      f'{row["notes"]}\n\n'
-                      f'### Commits\n\n```\n{row["commits"]}\n```\n'
-                  )
-                  pr_number = existing[0]["number"] if existing else None
-
+              for row in planned:
+                  mc = row["mc"]
                   if DRY:
-                      print(f'would open {row["mc"]}/development -> {row["mc"]}/main (v{row["version"]})')
-                  else:
-                      with open("/tmp/pr-body.md", "w") as handle:
+                      print(f'would release {mc} v{row["version"]} (from {row["current"]})')
+                      if row["main_exists"]:
+                          print(f'  would open {mc}/development -> {mc}/main')
+                      else:
+                          print(f'  would create {mc}/main from {mc}/development and release it')
+                      continue
+
+                  write_version(mc, row["version"])
+                  if row["main_exists"]:
+                      body = (
+                          f'## Release {mc} v{row["version"]}\n\n'
+                          f'{row["notes"]}\n\n'
+                          f'### Commits\n\n```\n{row["commits"]}\n```\n'
+                      )
+                      number = open_pr(mc)
+                      with open("/tmp/pr-body.md", "w", encoding="utf-8") as handle:
                           handle.write(body)
-                      if pr_number:
+                      if number:
                           gh(
-                              "pr",
-                              "edit",
-                              str(pr_number),
-                              "--repo",
-                              REPO,
-                              "--body-file",
-                              "/tmp/pr-body.md",
+                              "pr", "edit", str(number), "--repo", REPO,
+                              "--body-file", "/tmp/pr-body.md",
                           )
-                          print(f'updated promotion PR #{pr_number} for {row["mc"]}')
                       else:
                           created = gh(
-                              "pr",
-                              "create",
-                              "--repo",
-                              REPO,
-                              "--base",
-                              f'{row["mc"]}/main',
-                              "--head",
-                              f'{row["mc"]}/development',
-                              "--title",
-                              f'Release {row["mc"]} v{row["version"]}',
-                              "--body-file",
-                              "/tmp/pr-body.md",
-                              "--label",
-                              "release",
+                              "pr", "create", "--repo", REPO,
+                              "--base", f"{mc}/main", "--head", f"{mc}/development",
+                              "--title", f"Release {mc} v{row['version']}",
+                              "--body-file", "/tmp/pr-body.md", "--label", "release",
                           ).stdout.strip()
-                          pr_number = int(created.rstrip("/").split("/")[-1])
-                          print(f'opened promotion PR #{pr_number} for {row["mc"]}')
+                          number = int(created.rstrip("/").split("/")[-1])
+                      row["pr"] = number
+                      print(f'promotion PR #{number} for {mc} v{row["version"]}')
+                  else:
+                      create_main(mc)
+                      row["pr"] = None
+                      print(f'created {mc}/main from {mc}/development for v{row["version"]}')
 
-                  plan.append({"mc": row["mc"], "version": row["version"], "pr": pr_number})
-
-              with open("/tmp/plan.json", "w") as handle:
-                  json.dump(plan, handle)
+              with open("/tmp/plan.json", "w", encoding="utf-8") as handle:
+                  json.dump(planned if not DRY else rows, handle)
 
               summary = os.environ.get("GITHUB_STEP_SUMMARY")
               if summary:
-                  with open(summary, "a") as handle:
-                      handle.write("| MC version | Project version | Promotion PR |\n|---|---|---|\n")
-                      for item in plan:
-                          pr_text = "(dry run)" if DRY else f'#{item["pr"]}'
-                          handle.write(f'| {item["mc"]} | {item["version"]} | {pr_text} |\n')
-
+                  with open(summary, "a", encoding="utf-8") as handle:
+                      handle.write("| MC version | Current | Next | Promotion |\n|---|---|---|---|\n")
+                      for row in planned:
+                          target = (
+                              "(dry run)"
+                              if DRY
+                              else (f'#{row["pr"]}' if row.get("pr") else "created main")
+                          )
+                          handle.write(
+                              f'| {row["mc"]} | {row["current"]} | {row["version"]} | {target} |\n'
+                          )
               return 0
 
 
@@ -373,6 +452,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+
       - name: Merge the promotion PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -380,60 +468,50 @@ jobs:
           PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
           set -euo pipefail
-
-          # Abort everything on the first failure: versions are merged in the input order and
-          # later versions are not touched once one fails (spec decision 15). This is the step
-          # that puts the version on main; tagging and publishing happen after it, in the next
-          # step, so main is already hit by the time anything leaves the repository.
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
+          # Abort everything on the first failure: versions are processed in the input order and a
+          # later version is not touched once one fails. A line whose main was just created has no
+          # PR to merge - its main already carries development's head.
+          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr // "")\t\(.version)"' <<<"$PLAN")
           for row in "${ROWS[@]}"; do
             IFS=$'\t' read -r MC PR VERSION <<<"$row"
-            if [[ -z "$PR" || "$PR" == "null" ]]; then
-              echo "::error::no promotion PR for $MC"
-              exit 1
+            if [[ -z "$PR" ]]; then
+              echo "$MC/main was created from development - nothing to merge"
+              continue
             fi
-
             gh pr merge "$PR" --repo "$REPO" --squash --delete-branch=false
             echo "merged promotion PR #$PR: $MC v$VERSION is now on $MC/main"
           done
 
-      - name: Publish, tag and release every merged version
+      - name: Publish, tag and release every version
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
           set -euo pipefail
+          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.version)"' <<<"$PLAN")
 
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr)\t\(.version)"' <<<"$PLAN")
-
-          # The step above is what puts the version on main, so this is the first point where the
-          # branch and the version being released can be compared. Check every version before
-          # building anything: a mismatch must not leave a tag or a published artifact behind.
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC PR VERSION <<<"$row"
+            IFS=$'\t' read -r MC VERSION <<<"$row"
             git fetch --force --prune --tags origin
             DECLARED="$(git show "origin/$MC/main:build.gradle.kts" \
               | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' | head -1)"
             if [[ "$DECLARED" != "$VERSION" ]]; then
-              echo "::error::$MC/main declares version ${DECLARED:-none} after the promotion merge, not $VERSION; nothing was tagged or published"
+              echo "::error::$MC/main declares version ${DECLARED:-none} after promotion, not $VERSION; nothing was tagged or published"
               exit 1
             fi
           done
 
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC PR VERSION <<<"$row"
+            IFS=$'\t' read -r MC VERSION <<<"$row"
             TAG="$MC/v$VERSION"
 
             echo "::group::Release $TAG"
             git switch --force-create "release-$MC" "origin/$MC/main"
 
-            # Build and publish before tagging: a failed build or a rejected upload must not
-            # leave a tag behind that claims artifacts which do not exist.
             ./gradlew buildAll collectArtifacts --no-daemon --console=plain \
               -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
               -Dorg.gradle.worker.jvmargs="-Xmx2g"
-
             ./gradlew publish -Pminecraft_version="$MC" --no-daemon --console=plain \
               -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
               -Dorg.gradle.worker.jvmargs="-Xmx2g"
@@ -469,8 +547,7 @@ jobs:
           PY
 
             find build/artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-production.jar' -print0 \
-              | sort -z \
-              | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
+              | sort -z | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
             mapfile -t ASSETS < <(
               find build/artifacts -maxdepth 1 -type f \
                 \( -name '*.jar' ! -name '*-production.jar' -o -name 'SHA256SUMS.txt' \) -print
@@ -483,14 +560,16 @@ jobs:
             gh release create "$TAG" --repo "$REPO" --verify-tag \
               --title "$TAG" --notes-file /tmp/release-notes.md "${ASSETS[@]}"
 
-            MC="$MC" TAG="$TAG" python3 - <<'PY'
+            MC="$MC" VERSION="$VERSION" python3 - <<'PY'
           import json
           import os
           import subprocess
 
           REPO = os.environ["REPO"]
           MC = os.environ["MC"]
-          TAG = os.environ["TAG"]
+          VERSION = os.environ["VERSION"]
+          EDITED = "/tmp/edited.txt"
+          MARK = f"closed in `{MC}` by PR #"
 
 
           def gh(*args):
@@ -500,119 +579,62 @@ jobs:
 
 
           issues = json.loads(
-              gh(
-                  "api",
-                  f"repos/{REPO}/issues?state=open&labels=versions/{MC}&per_page=100",
-              )
+              gh("api", f"repos/{REPO}/issues?state=open&labels=versions/{MC}&per_page=100")
           )
+          edited = set()
+          if os.path.exists(EDITED):
+              with open(EDITED, encoding="utf-8") as handle:
+                  edited = {int(line) for line in handle.read().split() if line.strip()}
           for issue in issues:
               number = issue["number"]
-              bodies = gh("api", f"repos/{REPO}/issues/{number}/comments", "--paginate", "--jq", ".[].body")
-              if f"minecheck-fixed-in:{MC}" not in bodies:
-                  continue
-              if f"minecheck-released-in:{MC}@" in bodies:
-                  continue
-              message = f"Released in **{TAG}**. <!-- minecheck-released-in:{MC}@{TAG} -->"
-              gh("api", f"repos/{REPO}/issues/{number}/comments", "-f", f"body={message}")
-              print(f"commented released-in on #{number}")
+              comments = json.loads(
+                  gh("api", f"repos/{REPO}/issues/{number}/comments?per_page=100")
+              )
+              for comment in comments:
+                  body = comment.get("body") or ""
+                  if MARK not in body or f"closed in release `{VERSION}`" in body:
+                      continue
+                  updated = body + f"\n\nclosed in release `{VERSION}`"
+                  with open("/tmp/comment.json", "w", encoding="utf-8") as handle:
+                      json.dump({"body": updated}, handle)
+                  gh(
+                      "api", "-X", "PATCH",
+                      f"repos/{REPO}/issues/comments/{comment['id']}",
+                      "--input", "/tmp/comment.json",
+                  )
+                  edited.add(number)
+                  print(f"marked #{number} released in {VERSION}")
+          with open(EDITED, "w", encoding="utf-8") as handle:
+              handle.write("\n".join(str(number) for number in sorted(edited)))
           PY
 
             echo "| $MC | $VERSION | $TAG | released |" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
           done
 
-      - name: Close fully released issues
+      - name: Close the issues this release touched
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
           set -euo pipefail
-          # Runs only after every version succeeded (the previous step aborts otherwise).
-          PLAN="$PLAN" python3 - <<'PY'
-          import json
-          import os
-          import re
-          import subprocess
+          # Runs only after every version succeeded: the step above aborts otherwise, so an issue is
+          # never closed for a release that did not finish.
+          [[ -f /tmp/edited.txt ]] || { echo "No issue was marked released."; exit 0; }
+          while IFS= read -r number; do
+            [[ -n "$number" ]] || continue
+            jq -n --arg body "Closing: every affected Minecraft version this branch names has been released." \
+              '{body: $body}' | gh api "repos/$REPO/issues/$number/comments" --input - >/dev/null
+            gh api "repos/$REPO/issues/$number" -X PATCH -f state=closed >/dev/null
+            echo "closed #$number"
+          done < /tmp/edited.txt
 
-          REPO = os.environ["REPO"]
-          plan = json.loads(os.environ["PLAN"])
-          versions = [item["mc"] for item in plan]
-
-
-          def gh(*args):
-              return subprocess.run(
-                  ["gh", *args], text=True, capture_output=True, check=True
-              ).stdout
-
-
-          def affected_versions(body):
-              lines = (body or "").splitlines()
-              for index, line in enumerate(lines):
-                  if line.strip().lower() == "### affected minecraft versions":
-                      values = []
-                      for following in lines[index + 1 :]:
-                          if following.startswith("### "):
-                              break
-                          if following.strip():
-                              values.append(following.strip())
-                      joined = ",".join(values)
-                      return [token.strip() for token in joined.split(",") if token.strip()]
-              return []
-
-
-          seen = set()
-          for mc in versions:
-              issues = json.loads(
-                  gh(
-                      "api",
-                      f"repos/{REPO}/issues?state=open&labels=versions/{mc}&per_page=100",
-                  )
-              )
-              for issue in issues:
-                  number = issue["number"]
-                  if number in seen:
-                      continue
-                  seen.add(number)
-
-                  comments = gh(
-                      "api", f"repos/{REPO}/issues/{number}/comments", "--paginate", "--jq", ".[].body"
-                  )
-                  released = set(re.findall(r"minecheck-released-in:([^@\s]+)@", comments))
-                  required = set(affected_versions(issue.get("body") or ""))
-                  if not required:
-                      print(f"::notice::#{number} has no parsable affected-version field; leaving it open")
-                      continue
-                  missing = sorted(required - released)
-                  if missing:
-                      print(f"#{number} still pending: {', '.join(missing)}")
-                      continue
-
-                  message = (
-                      "Closing automatically: every affected Minecraft version has been released. "
-                      "<!-- minecheck-all-released -->"
-                  )
-                  gh("api", f"repos/{REPO}/issues/{number}/comments", "-f", f"body={message}")
-                  gh("api", f"repos/{REPO}/issues/{number}", "-X", "PATCH", "-f", "state=closed")
-                  print(f"closed #{number}")
-          PY
-
-      # Both release branches are PR-only, so resetting the scratchpad needs a token that can
-      # bypass the `Version development` ruleset: the CI App is a bypass actor there. The reset
-      # lands on development, so main keeps the released notes until the next promotion PR
-      # replaces them, and the next release starts from a clean scratchpad.
-      - name: Mint app token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          permission-contents: write
-
+      # development is PR-only, so resetting the scratchpad needs a token that can bypass the
+      # `Version development` ruleset: the CI App is the bypass actor. The reset lands on
+      # development, so main keeps the released notes until the next promotion replaces them.
       - name: Clear the pending release notes
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
@@ -635,8 +657,6 @@ jobs:
 
 
           def header_only(text):
-              # Same rule as the preflight: the title and leading HTML comments are the header,
-              # everything after them is the pending note text.
               out = []
               in_comment = False
               for line in text.splitlines():
@@ -671,7 +691,7 @@ jobs:
               with open("/tmp/changelog-reset.json", "w", encoding="utf-8") as handle:
                   json.dump(
                       {
-                          "message": f"Clear the release notes after {branch.replace('/development', '')}/v{version}",
+                          "message": f"Clear the release notes after {mc}/v{version}",
                           "content": base64.b64encode(cleared.encode("utf-8")).decode(),
                           "sha": current["sha"],
                           "branch": branch,
@@ -679,12 +699,8 @@ jobs:
                       handle,
                   )
               gh(
-                  "api",
-                  "-X",
-                  "PUT",
-                  f"repos/{REPO}/contents/CHANGELOG.md",
-                  "--input",
-                  "/tmp/changelog-reset.json",
+                  "api", "-X", "PUT", f"repos/{REPO}/contents/CHANGELOG.md",
+                  "--input", "/tmp/changelog-reset.json",
               )
               print(f"{branch}: release notes cleared after v{version}")
           PY

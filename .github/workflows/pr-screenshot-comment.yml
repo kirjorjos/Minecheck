@@ -2,20 +2,21 @@ name: PR screenshot baselines
 
 on:
   workflow_run:
-    workflows: ["PR validation"]
+    workflows: ["CI"]
     types: [completed]
 
 permissions:
   contents: read
   actions: read
   pull-requests: write
+  checks: write
 
 jobs:
   comment:
     if: github.event.workflow_run.event == 'pull_request_target'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
-      - name: Download the changed baseline list from the test run
+      - name: Download the mismatch manifest
         id: download
         continue-on-error: true
         uses: actions/download-artifact@v4
@@ -25,29 +26,43 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ runner.temp }}/changed-baselines
 
-      - name: Comment baseline changes on the PR
-        if: steps.download.outcome == 'success'
+      - name: Comment the mismatch table
+        id: table
         uses: actions/github-script@v7
         env:
-          CHANGED_FILE: ${{ runner.temp }}/changed-baselines/changed.txt
+          MANIFEST: ${{ runner.temp }}/changed-baselines/manifest.jsonl
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         with:
           script: |
             const fs = require("node:fs");
             const run = context.payload.workflow_run;
             const baseline = /^tests\/baselines\/(fabric|forge|quilt)\/[^/]+\.png$/;
-            const listed = fs
-              .readFileSync(process.env.CHANGED_FILE, "utf8")
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean);
-            const changed = listed.filter((file) => baseline.test(file));
-            if (changed.length !== listed.length) {
-              core.warning(
-                `Ignoring ${listed.length - changed.length} unexpected path(s) in the changed baseline list.`
-              );
+
+            // One JSON object per line, written by the screenshot task in report mode:
+            // {"path":"tests/baselines/fabric/world-settled.png","class":"change"}
+            const entries = [];
+            if (fs.existsSync(process.env.MANIFEST)) {
+              for (const line of fs.readFileSync(process.env.MANIFEST, "utf8").split("\n")) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                let entry;
+                try {
+                  entry = JSON.parse(trimmed);
+                } catch (error) {
+                  core.warning(`Ignoring unparseable manifest line: ${trimmed}`);
+                  continue;
+                }
+                if (!entry || typeof entry.path !== "string" || !baseline.test(entry.path)) {
+                  core.warning(`Ignoring unexpected manifest entry: ${trimmed}`);
+                  continue;
+                }
+                entries.push({ path: entry.path, kind: entry.class || "change" });
+              }
             }
-            if (changed.length === 0) {
-              core.info("No baseline changes reported - nothing to comment.");
+            core.setOutput("count", String(entries.length));
+
+            if (entries.length === 0) {
+              core.info("No screenshot mismatches reported - nothing to comment.");
               return;
             }
 
@@ -63,9 +78,7 @@ jobs:
               number = pulls[0]?.number;
             }
             if (!number) {
-              core.warning(
-                `Could not resolve the pull request for run ${run.id} (${run.head_branch}).`
-              );
+              core.warning(`Could not resolve the pull request for run ${run.id}.`);
               return;
             }
 
@@ -74,18 +87,38 @@ jobs:
               repo: context.repo.repo,
               pull_number: number,
             });
-            const base = pull.base.ref;
+
+            // Group by loader so the table answers "what did each loader do", which is how a
+            // mismatch is acted on: it decides which baseline tree the chore rewrites.
+            const byLoader = new Map();
+            for (const entry of entries) {
+              const loader = entry.path.split("/")[2];
+              if (!byLoader.has(loader)) byLoader.set(loader, []);
+              byLoader.get(loader).push(entry);
+            }
+
+            const green = process.env.CONCLUSION === "success";
+            const rows = [];
+            for (const [loader, list] of [...byLoader].sort((a, b) => a[0].localeCompare(b[0]))) {
+              rows.push(`| loader | ${loader} | |`);
+              for (const entry of list) {
+                rows.push(`| | \`${entry.path.split("/").pop()}\` | ${entry.kind} |`);
+              }
+            }
+
             const marker = "<!-- screenshots-baselines:changed -->";
             const body = [
               marker,
               "",
-              `Screenshot baselines differ from \`${base}\` at commit \`${pull.head.sha.slice(0, 7)}\` (${changed.length} capture${changed.length === 1 ? "" : "s"}):`,
+              `Screenshot baselines differ from \`${pull.base.ref}\` at commit \`${run.head_sha.slice(0, 7)}\` (${entries.length} capture${entries.length === 1 ? "" : "s"}):`,
               "",
-              ...changed.map((file) => `- \`${file}\``),
+              "| loader | capture | class |",
+              "|---|---|---|",
+              ...rows,
               "",
-              run.conclusion === "success"
-                ? `A second capture of exactly these names reproduced them byte for byte, so they are deterministic: this run is green, and the committed pictures are regenerated by CI after merge.`
-                : `The rerun of these captures did not reproduce them - this run is red for nondeterminism, not for the committed pictures.`,
+              green
+                ? "A second capture of exactly these reproduced them byte for byte, so they are deterministic: this run is green, and the post-merge chore writes these pictures into the branch."
+                : "The rerun of these captures did not reproduce them - this run is red for nondeterminism, not for the committed pictures.",
             ].join("\n");
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -102,7 +135,7 @@ jobs:
                 comment_id: existing.id,
                 body,
               });
-              console.log(`Updated the baseline comment on PR #${number}.`);
+              console.log(`Updated the mismatch table on PR #${number}.`);
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -110,7 +143,38 @@ jobs:
                 issue_number: number,
                 body,
               });
-              console.log(
-                `Commented ${changed.length} changed baseline(s) on PR #${number}.`
-              );
+              console.log(`Commented ${entries.length} mismatch(es) on PR #${number}.`);
+            }
+
+      - name: Report the mismatch-table check
+        uses: actions/github-script@v7
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          COUNT: ${{ steps.table.outputs.count }}
+        with:
+          script: |
+            // The second required context on <mc>/development: it cannot go green before the
+            // table above has been handled, and it mirrors the run's own verdict.
+            const run = context.payload.workflow_run;
+            const conclusion = process.env.CONCLUSION === "success" ? "success" : "failure";
+            try {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: "Screenshot mismatch table",
+                head_sha: run.head_sha,
+                status: "completed",
+                conclusion,
+                output: {
+                  title: `${process.env.COUNT || 0} mismatch(es)`,
+                  summary:
+                    conclusion === "success"
+                      ? "Every reported mismatch reproduced byte for byte, or there was none."
+                      : "The run is red: either a capture did not reproduce, or a loader failed.",
+                },
+              });
+            } catch (error) {
+              // A fork PR's head commit is not in this repository, so the check cannot be attached
+              // to it. The comment above is still what a reviewer reads.
+              core.warning(`Could not report the mismatch-table check: ${error.message}`);
             }

@@ -29,8 +29,7 @@ jobs:
       target_type: ${{ steps.rules.outputs.target_type }}
       target_version: ${{ steps.rules.outputs.target_version }}
       source_issue: ${{ steps.rules.outputs.source_issue }}
-      tasks: ${{ steps.scope.outputs.tasks }}
-      run_ci: ${{ steps.scope.outputs.run_ci }}
+      run_ci: ${{ steps.rules.outputs.run_ci }}
     steps:
       - name: Validate branch rules
         id: rules
@@ -45,8 +44,11 @@ jobs:
           set -euo pipefail
 
           # Branch grammar (.notes/branching-versioning-migration-spec.md §4.1):
-          #   <version>/main | <version>/development | <version>/development-issue-<n>
+          #   <version>/main | <version>/development | everything else
           # <version> admits two-part MC versions (1.8, 1.19, 26.1) and three-part ones (1.19.2).
+          # Anything that is neither <version>/development nor <version>/main is a plain
+          # contribution target (issue, collation or feature branch) and is never closed for its
+          # shape — see .notes/ci-structure-spec.md S21.
           VALID="true"
           REASON=""
           TARGET_TYPE=""
@@ -64,6 +66,8 @@ jobs:
           elif [[ "$TARGET" =~ ^([0-9]+(\.[0-9]+){1,2})/main$ ]]; then
             TARGET_TYPE="main"
             TARGET_VERSION="${BASH_REMATCH[1]}"
+          else
+            TARGET_TYPE="other"
           fi
 
           if [[ "$SOURCE" =~ ^([0-9]+(\.[0-9]+){1,2})/development-issue-([0-9]+)$ ]]; then
@@ -77,8 +81,8 @@ jobs:
 
           if [[ "$ACTION" != "closed" ]]; then
             case "$TARGET_TYPE" in
-              issue)
-                # Anything may open a PR into an issue branch.
+              issue | other)
+                # Anything may open a PR into an issue, collation or feature branch.
                 ;;
               development)
                 if [[ "$SOURCE_KIND" != "issue" ]]; then
@@ -105,11 +109,15 @@ jobs:
                   REASON="Source version \`$SOURCE_VERSION\` does not match target version \`$TARGET_VERSION\`."
                 fi
                 ;;
-              *)
-                VALID="false"
-                REASON="Target branch \`$TARGET\` is not a supported branch (expected \`<version>/main\`, \`<version>/development\`, or \`<version>/development-issue-{issue}\`)."
-                ;;
             esac
+          fi
+
+          # Promotion PRs skip the suite: development already passed the full gate, and a
+          # GITHUB_TOKEN-authored PR cannot report a required check anyway.
+          if [[ "$ACTION" == "closed" || "$TARGET_TYPE" == "main" ]]; then
+            RUN_CI="false"
+          else
+            RUN_CI="true"
           fi
 
           {
@@ -118,65 +126,69 @@ jobs:
             echo "target_type=$TARGET_TYPE"
             echo "target_version=$TARGET_VERSION"
             echo "source_issue=$SOURCE_ISSUE"
+            echo "run_ci=$RUN_CI"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Determine test scope
-        id: scope
-        if: steps.rules.outputs.valid == 'true' && github.event.action != 'closed'
+      - name: Note an ungated target
+        if: >-
+          steps.rules.outputs.valid == 'true' &&
+          steps.rules.outputs.target_type == 'other' &&
+          github.event.action != 'closed'
+        run: |
+          {
+            echo "### Ungated target"
+            echo ""
+            echo "\`${{ github.event.pull_request.base.ref }}\` is neither \`<version>/development\`"
+            echo "nor \`<version>/main\`. This PR runs the full loader matrix, no required check"
+            echo "gates it, and it is never closed for its shape."
+            echo ""
+            echo "Recognized gated shapes: \`<version>/development\` (from \`<version>/development-issue-<n>\`)"
+            echo "and \`<version>/main\` (release workflow only)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment when the PR drops a loader
+        if: >-
+          steps.rules.outputs.valid == 'true' &&
+          github.event.action != 'closed'
         env:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_TYPE: ${{ steps.rules.outputs.target_type }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [[ "$TARGET_TYPE" == "main" ]]; then
-            # Promotion PRs skip the suite: the development branch already passed the full gate.
-            # main's ruleset therefore must not require this workflow's check (see the spec).
-            echo "run_ci=false" >> "$GITHUB_OUTPUT"
-            echo "tasks=" >> "$GITHUB_OUTPUT"
-            echo "Promotion PR: development already passed the full gate, skipping tests." >> "$GITHUB_STEP_SUMMARY"
+          read_loaders() {
+            gh api "repos/$REPO/contents/.github/loaders.jsonl?ref=$1" \
+              -H "Accept: application/vnd.github.raw" 2>/dev/null \
+              | jq -r '.id // empty' 2>/dev/null || true
+          }
+
+          base="$(read_loaders "$BASE_SHA" | sed '/^$/d' | sort -u)"
+          head="$(read_loaders "$HEAD_SHA" | sed '/^$/d' | sort -u)"
+          removed="$(comm -23 <(printf '%s\n' "$base") <(printf '%s\n' "$head") | sed '/^$/d')"
+          if [[ -z "$removed" ]]; then
+            echo "No loader was removed."
             exit 0
           fi
 
-          echo "run_ci=true" >> "$GITHUB_OUTPUT"
-
-          if [[ "$TARGET_TYPE" == "development" ]]; then
-            echo "tasks=test" >> "$GITHUB_OUTPUT"
+          marker='<!-- loaders-removed -->'
+          if gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq '.[].body' \
+            | grep -F "$marker" >/dev/null; then
+            echo "Already announced a loader removal."
             exit 0
           fi
 
-          # Issue branch: test only what the diff touches, failing safe to the full chain.
-          LOADERS=""
-          FULL=false
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > /tmp/changed-files.txt
-          if [[ ! -s /tmp/changed-files.txt ]]; then
-            FULL=true
-          fi
-          while IFS= read -r file; do
-            case "$file" in
-              src/fabric/*) LOADERS="$LOADERS testFabric testFabricFail testFabricShots testFabricLive" ;;
-              src/forge/*) LOADERS="$LOADERS testForge testForgeFail testForgeShots testForgeLive" ;;
-              src/quilt/*) LOADERS="$LOADERS testQuilt testQuiltFail testQuiltShots testQuiltLive" ;;
-              tests/baselines/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots" ;;
-              tests/scripts/*) LOADERS="$LOADERS testFabricShots testForgeShots testQuiltShots testFabricLive testForgeLive testQuiltLive" ;;
-              *) FULL=true ;;
-            esac
-          done < /tmp/changed-files.txt
+          body="$marker
+          This PR removes $(wc -l <<<"$removed" | tr -d ' ') loader(s) from \`.github/loaders.jsonl\`, so CI will run fewer jobs:
 
-          if [[ "$FULL" == "true" ]]; then
-            echo "tasks=test" >> "$GITHUB_OUTPUT"
-          else
-            read -r -a LOADER_TASKS <<< "$LOADERS"
-            TASKS="$(printf '%s\n' "${LOADER_TASKS[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-            if [[ -z "$TASKS" ]]; then
-              # Fail safe: a diff that touches no known source path still gets the full chain.
-              TASKS="test"
-            else
-              TASKS="spotlessCheck $TASKS"
-            fi
-            echo "tasks=$TASKS" >> "$GITHUB_OUTPUT"
-          fi
+          $(printf -- '- `%s`\n' $removed)
+
+          Confirm this is intentional before merging."
+
+          jq -n --arg body "$body" '{body: $body}' \
+            | gh api "repos/$REPO/issues/$PR_NUMBER/comments" --input - >/dev/null
+          echo "Announced the removal of: $(tr '\n' ' ' <<<"$removed")"
 
       - name: Comment and close invalid PR
         if: steps.rules.outputs.valid == 'false' && github.event.action != 'closed'
@@ -192,7 +204,8 @@ jobs:
             "Branch model:\n" +
             "- `<version>/development-issue-<n>` — work branch; any source, relevant tests must pass\n" +
             "- `<version>/development` — source: `<version>/development-issue-<n>` of the same version; full test suite\n" +
-            "- `<version>/main` — release workflow only (bot-authored, same repository, from `<version>/development`)\n\n" +
+            "- `<version>/main` — release workflow only (bot-authored, same repository, from `<version>/development`)\n" +
+            "- any other branch — feature or collation branch; any source, gated by nothing\n\n" +
             "See `.notes/branching-versioning-migration-spec.md` for the full model.\n"
           ')"
           jq -n --arg body "$BODY" '{body: $body}' \
@@ -247,6 +260,5 @@ jobs:
       github.event.action != 'closed'
     uses: ./.github/workflows/ci.yml
     with:
-      gradle_tasks: ${{ needs.rules.outputs.tasks }}
       checkout_ref: refs/pull/${{ github.event.pull_request.number }}/head
       compare_baselines: ${{ github.event.pull_request.base.ref }}
