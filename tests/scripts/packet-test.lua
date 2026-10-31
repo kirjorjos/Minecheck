@@ -30,7 +30,7 @@ end
 minecheck.expect(minecheck.side() == "server", "side is server")
 local cfg = minecheck.config()
 minecheck.expect(cfg ~= nil and cfg.script == "packet-test.lua", "config().script is the running server script")
-minecheck.expect(cfg.failMode == "exit" and cfg.defaultTimeout == 60, "config() reports failMode/defaultTimeout")
+minecheck.expect(cfg.failMode == "exit" and cfg.defaultTimeout == 300, "config() reports failMode/defaultTimeout")
 minecheck.expect(cfg.coordinator == nil, "config().coordinator is absent for a plain server script")
 
 minecheck.expect(
