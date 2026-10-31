@@ -3,8 +3,14 @@
 -- wait/sleepUntil, lookAt, the held mouse form, pressCombination, keyPress).
 --
 --   keyboard: hold space to jump from the surface, land again
---   mouse: look straight down, middle-click pick the grass block, left-click break it -> the player falls into the hole: y is 1 lower
---   mouse: look at the floor beside the hole and right-click -> the picked block is placed in the free cell above it
+--   mouse: look straight down, middle-click pick the grass block under the player
+--   mouse: look at the surface block beside the player, left-click break it
+--   mouse: look at the surface block on the other side, right-click -> the picked block is placed in the free cell above it
+--
+-- The player stays on the surface for all of it. A break under its own feet drops it into the hole,
+-- and a tap can be observed on two input passes, so that step digs two deep on some runners — the
+-- camera ends up below the surface plane and every aim at a top face becomes a side-face hit that
+-- places somewhere else. Nowhere here depends on where the player lands.
 --
 -- Creative is deliberate: pick-block (middle click) puts the block type in hand with no drops involved, and breaking/placing are instant single clicks.
 
@@ -41,12 +47,11 @@ minecheck.log("input test: start y = " .. startY)
 
 -- --- keyboard: jump -------------------------------------------------------------
 --
--- On the surface the world spawn put the player on, before anything is broken. Further down the
--- choreography the player breaks the block under itself and falls into the hole, and a jump started
--- while the client's predicted position is being corrected by the server is refused or corrected
--- away: under a loaded runner it leaves no trace on the client at all (measured at one CPU: the
--- client never rose more than 0.25 of a block while the key was held, though a jump did happen on
--- the server). On the settled surface nothing is pending, so the arc is the client's own.
+-- On the surface the world spawn put the player on, before anything is broken. A jump started while
+-- the client's predicted position is being corrected by the server is refused or corrected away:
+-- under a loaded runner it leaves no trace on the client at all (measured at one CPU: the client
+-- never rose more than 0.25 of a block while the key was held, though a jump did happen on the
+-- server). On the settled surface nothing is pending, so the arc is the client's own.
 local function aboveSurface()
   local p = minecheck.getPlayer()
   return p ~= nil and p.pos.y > startY + 0.5
@@ -146,71 +151,74 @@ expect(
   "the crosshair reached the block below (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
 )
 
--- Break it, bounded by the *block* rather than the fall: in creative every press breaks whatever
--- the crosshair then hits, so a press while the player is already falling digs the floor out from
--- under them and the retry loops straight down into the void.
+-- Break the block *beside* the player's column rather than the one under its feet. A tap is only
+-- guaranteed to be observed by one input pass; a runner that observes two breaks the newly exposed
+-- block below as well, which under the player's own feet digs a two-deep pit (measured on CI: the
+-- feet went to startY-2) and drops the camera below the surface. Beside the player the second break
+-- is harmless — its column is never stood on.
+local dugPos = { x = target.x, y = target.y, z = target.z - 1 }
+minecheck.lookAt(dugPos.x + 0.5, dugPos.y + 1.0, dugPos.z + 0.5)
+-- lookAt is dispatched to the client thread; wait for the crosshair to arrive rather than assuming
+-- 0.2 s is enough for the rotation to apply.
+minecheck.waitFor(function()
+  local hit = minecheck.getTargetBlock(minecheck.getPlayer())
+  return hit ~= nil and hit.x == dugPos.x and hit.y == dugPos.y and hit.z == dugPos.z
+end, 5)
+local dugAim = minecheck.getTargetBlock(minecheck.getPlayer())
+expect(
+  dugAim ~= nil and dugAim.x == dugPos.x and dugAim.y == dugPos.y and dugAim.z == dugPos.z,
+  "aimed at the surface block beside the player"
+)
+-- A click acts on the renderer's crosshair, which is refreshed once per frame: wait for the crosshair
+-- itself to carry the block before spending a press on it.
+expect(
+  minecheck.waitFor(function()
+    local hit = minecheck.getCrosshairBlock()
+    return hit ~= nil and hit.x == dugPos.x and hit.y == dugPos.y and hit.z == dugPos.z
+  end, 30),
+  "the crosshair reached the block to break (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
+)
 local broke = false
 for _ = 1, 20 do
-  local b = minecheck.getBlock({ x = target.x, y = target.y, z = target.z })
+  local b = minecheck.getBlock(dugPos)
   if b ~= nil and b.id == "minecraft:air" then
     broke = true
     break
   end
   minecheck.mousePress(0)
 end
-expect(broke, "left-click broke the block below")
+expect(broke, "left-click broke the block beside the player")
+local afterBreak = minecheck.getPlayer()
+expect(
+  math.abs(afterBreak.pos.y - start.pos.y) < 0.05,
+  string.format("player stayed on the surface after the break (y %.2f, was %.2f)", afterBreak.pos.y, start.pos.y)
+)
 
-local fell = minecheck.waitFor(function()
-  local p = minecheck.getPlayer()
-  return p ~= nil and p.pos.y < start.pos.y - 0.5
-end, 5)
-expect(fell, "player fell after breaking the block below")
-local lower = minecheck.getPlayer()
-local lowerY = math.floor(lower.pos.y + 0.5)
-expect(lowerY == startY - 1, "y is 1 lower after the break (got " .. lowerY .. ")")
-
--- --- keyboard: jump --------------------------------------------------------------
-
--- Wait for the landing to be *observed* rather than guessed with a sleep: the fell-wait above
--- passes while the player is still falling. The hole floor is the lowest height reachable, so a
--- sample at that height can only be the landing, never a transit. lowerY is the resting feet
--- height in the hole (startY - 1), which is the deterministic baseline the steps below measure
--- against; lower.pos.y was captured mid-fall and is not.
-local landed = minecheck.waitFor(function()
-  local p = minecheck.getPlayer()
-  return p ~= nil and p.pos.y <= lowerY + 0.05
-end, 5)
-expect(landed, "player landed in the hole")
-
--- The block goes into the free cell above the floor *beside* the hole, not back into the hole: the
--- game refuses any placement that would overlap the player's bounding box, so "place it under your
--- own feet" only works while the player is high enough in a jump arc for it, and the click then has
--- to land in that same tick as the server's copy of the player — a race that loses on a loaded CI
--- runner. Aiming at the top face of the neighbouring floor block targets an empty cell the player
--- does not occupy, with the player standing still.
-local placePos = { x = target.x, y = target.y + 1, z = target.z - 1 }
-minecheck.lookAt(target.x + 0.5, target.y + 1.0, target.z - 0.5)
--- lookAt is dispatched to the client thread; wait for the crosshair to arrive rather than assuming
--- 0.2 s is enough for the rotation to apply.
+-- The block goes into the free cell above the untouched surface block on the *other* side: the game
+-- refuses any placement that would overlap the player's bounding box, and the cell above a block the
+-- player stands beside is both free and outside that box. Aiming at that block's top face from the
+-- surface makes the click's own face UP, which is what picks the cell above it.
+local besidePos = { x = target.x, y = target.y, z = target.z + 1 }
+local placePos = { x = besidePos.x, y = besidePos.y + 1, z = besidePos.z }
+minecheck.lookAt(besidePos.x + 0.5, besidePos.y + 1.0, besidePos.z + 0.5)
 minecheck.waitFor(function()
   local hit = minecheck.getTargetBlock(minecheck.getPlayer())
-  return hit ~= nil and hit.x == placePos.x and hit.y == placePos.y and hit.z == placePos.z
+  return hit ~= nil and hit.x == besidePos.x and hit.y == besidePos.y and hit.z == besidePos.z
 end, 5)
 local besideAim = minecheck.getTargetBlock(minecheck.getPlayer())
 expect(
-  besideAim ~= nil and besideAim.x == target.x and besideAim.y == target.y and besideAim.z == target.z - 1,
-  "aimed at the floor beside the hole"
+  besideAim ~= nil and besideAim.x == besidePos.x and besideAim.y == besidePos.y and besideAim.z == besidePos.z,
+  "aimed at the block the placed block goes beside"
 )
--- Same wait as the break above, and it is the one that decides whether this step can pass at all on
--- a loaded runner: a press acts on the renderer's crosshair, which is only as fresh as the last
--- frame. Waiting for the crosshair to carry the block first makes the press the last step rather
--- than a retry.
+-- The wait that decides whether this step can pass at all on a loaded runner: a press acts on the
+-- renderer's crosshair, which is only as fresh as the last frame. Waiting for the crosshair to carry
+-- the block first makes the press the last step rather than a retry.
 expect(
   minecheck.waitFor(function()
     local hit = minecheck.getCrosshairBlock()
-    return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z - 1
+    return hit ~= nil and hit.x == besidePos.x and hit.y == besidePos.y and hit.z == besidePos.z
   end, 30),
-  "the crosshair reached the floor beside the hole (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
+  "the crosshair reached the block to place beside (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
 )
 
 -- Use is a *held* input, not an edge: the game reads the use button while it is down, so a one-tick
@@ -224,7 +232,6 @@ local function crosshairOn(pos)
   local hit = minecheck.getCrosshairBlock()
   return hit ~= nil and hit.x == pos.x and hit.y == pos.y and hit.z == pos.z
 end
-local besideFloor = { x = target.x, y = target.y, z = target.z - 1 }
 local placedBlock = nil
 for attempt = 1, 20 do
   local b = minecheck.getBlock(placePos)
@@ -233,7 +240,7 @@ for attempt = 1, 20 do
     break
   end
   minecheck.waitFor(function()
-    return crosshairOn(besideFloor)
+    return crosshairOn(besidePos)
   end, 10)
   minecheck.mouse(1, 0.25)
 end
@@ -255,7 +262,7 @@ expect(
 
 local resting = minecheck.getPlayer()
 local restingY = math.floor(resting.pos.y + 0.5)
-expect(restingY == lowerY, "player stayed in the hole after the place (got " .. restingY .. ")")
+expect(restingY == startY, "player stayed on the surface after the place (got " .. restingY .. ")")
 minecheck.log("input test: final y = " .. restingY)
 
 -- --- surface coverage: predicates, config, timing, key taps, held mouse ----------
