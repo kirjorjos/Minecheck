@@ -191,9 +191,22 @@ public class YarnClientPlatform implements ClientPlatform {
     }
   }
 
-  /** A render tick counter that always hands the renderer a delta of 1. */
+  /**
+   * A render tick counter that hands the renderer a delta of 1 without touching the tick count.
+   *
+   * <p>{@code tickDelta} is the renderer's partial tick <em>and</em> vanilla's own accumulator:
+   * {@code beginRenderTick} adds the frame's elapsed time to it, returns the whole ticks and leaves
+   * the fraction behind. Overwriting it outright feeds that {@code 1} back in as the accumulator on
+   * the next frame, so the client runs one tick per rendered frame instead of twenty a second —
+   * harmless on a fast workstation, far too slow on a software-rendered CI runner, where every
+   * timing-sensitive wait then misses. The fraction vanilla computed is kept aside and put back
+   * before the next call, so only the value the renderer reads is pinned.
+   */
   private static final class PinnedRenderTickCounter
       extends net.minecraft.client.render.RenderTickCounter {
+
+    /** The fraction vanilla accumulated, restored before the next {@code beginRenderTick}. */
+    private float accumulatedTickDelta = Float.NaN;
 
     PinnedRenderTickCounter(float fixedTimeStep, long lastTimeMillis) {
       super(fixedTimeStep, lastTimeMillis);
@@ -201,7 +214,11 @@ public class YarnClientPlatform implements ClientPlatform {
 
     @Override
     public int beginRenderTick(long timeMillis) {
+      if (!Float.isNaN(accumulatedTickDelta)) {
+        this.tickDelta = accumulatedTickDelta;
+      }
       int ticks = super.beginRenderTick(timeMillis);
+      accumulatedTickDelta = this.tickDelta;
       this.tickDelta = 1.0f;
       return ticks;
     }

@@ -188,8 +188,17 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
   }
 
-  /** A frame timer that always hands the renderer a partial tick of 1. */
+  /**
+   * A frame timer that hands the renderer a partial tick of 1 without touching the tick count.
+   *
+   * <p>The same hazard as the Yarn counter: the field vanilla uses to accumulate tick time is the
+   * one the renderer reads, so a value written for the renderer would be carried into the next
+   * frame's arithmetic. Whatever vanilla computed is kept aside and restored before each call.
+   */
   private static final class PinnedTimer extends net.minecraft.client.Timer {
+
+    /** The partial tick vanilla computed, restored before the next {@code advanceTime}. */
+    private float accumulatedPartialTick = Float.NaN;
 
     PinnedTimer(float msPerTick, long lastMs) {
       super(msPerTick, lastMs);
@@ -197,7 +206,11 @@ public class ForgeClientPlatform implements ClientPlatform {
 
     @Override
     public int advanceTime(long timeMs) {
+      if (!Float.isNaN(accumulatedPartialTick)) {
+        this.partialTick = accumulatedPartialTick;
+      }
       int ticks = super.advanceTime(timeMs);
+      accumulatedPartialTick = this.partialTick;
       this.partialTick = 1.0f;
       return ticks;
     }

@@ -57,7 +57,11 @@ end
 local settleCount = 0
 local function settle(label)
   local previous
-  for _ = 1, 30 do
+  -- 60 probes, not 30: after a world is created its lighting fades over a few hundred ticks, and at
+  -- the client's real twenty ticks a second that is longer in wall-clock time than it was when the
+  -- tick rate was accidentally driven by the frame rate. The bound is a budget, not a wait — a
+  -- settled frame returns after two probes.
+  for _ = 1, 60 do
     settleCount = settleCount + 1
     local probe = minecheck.captureScreenshot("_settle-" .. label .. "-" .. settleCount)
     if previous ~= nil and probe.sha256 == previous then
