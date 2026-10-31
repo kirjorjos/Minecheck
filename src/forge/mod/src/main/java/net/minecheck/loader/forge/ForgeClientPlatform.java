@@ -835,6 +835,20 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.level == null) {
+      return null;
+    }
+    net.minecraft.world.phys.HitResult hit = mc.hitResult;
+    if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
+      return null;
+    }
+    net.minecraft.core.BlockPos pos = ((net.minecraft.world.phys.BlockHitResult) hit).getBlockPos();
+    return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
+  }
+
+  @Override
   public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
     Minecraft mc = mc();
     net.minecraft.client.multiplayer.ClientLevel level = mc.level;

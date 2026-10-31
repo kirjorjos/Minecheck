@@ -21,6 +21,13 @@ local function expect(cond, name)
   end
 end
 
+local function blockLabel(b)
+  if b == nil then
+    return "nothing"
+  end
+  return b.x .. "," .. b.y .. "," .. b.z
+end
+
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 42 })
 expect(created, "created superflat world")
 
@@ -128,6 +135,17 @@ for _ = 1, 3 do
 end
 expect(picked, "middle-click put the picked block in the hotbar")
 
+-- A press acts on the *renderer's* crosshair, not on the raycast the script can compute: the
+-- crosshair is refreshed once per frame, so waiting for the script's own raycast to carry the block
+-- says nothing about what the next press will hit. Wait for the crosshair itself.
+expect(
+  minecheck.waitFor(function()
+    local hit = minecheck.getCrosshairBlock()
+    return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z
+  end, 30),
+  "the crosshair reached the block below (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
+)
+
 -- Break it, bounded by the *block* rather than the fall: in creative every press breaks whatever
 -- the crosshair then hits, so a press while the player is already falling digs the floor out from
 -- under them and the retry loops straight down into the void.
@@ -182,6 +200,18 @@ local besideAim = minecheck.getTargetBlock(minecheck.getPlayer())
 expect(
   besideAim ~= nil and besideAim.x == target.x and besideAim.y == target.y and besideAim.z == target.z - 1,
   "aimed at the floor beside the hole"
+)
+-- Same wait as the break above, and it is the one that decides whether this step can pass at all on
+-- a loaded runner: if the renderer's crosshair still holds the pre-look block (the cell the player
+-- is standing in), every press below is refused by the game for overlapping the player, so the loop
+-- spends all 40 attempts on the same refusal no matter how many are allowed. Waiting for the
+-- crosshair to carry the block first makes the press the last step rather than a retry.
+expect(
+  minecheck.waitFor(function()
+    local hit = minecheck.getCrosshairBlock()
+    return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z - 1
+  end, 30),
+  "the crosshair reached the floor beside the hole (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
 )
 
 -- One press of the use button is one attempt: the game samples the button as an edge, so a button

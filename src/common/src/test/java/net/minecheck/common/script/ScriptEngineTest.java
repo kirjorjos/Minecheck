@@ -428,6 +428,16 @@ class ScriptEngineTest {
       return aimedBlock;
     }
 
+    @Override
+    public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
+      // The renderer's crosshair lags the same way a real one does: it holds the pre-look block
+      // until a frame has been drawn after the rotation changed.
+      if (aimedBlock == null || aimTicksLeft > 0) {
+        return targetBlock;
+      }
+      return aimedBlock;
+    }
+
     /** Entities the client currently knows about (what the server has synced to it). */
     java.util.List<net.minecheck.platform.api.EntityInfo> clientEntities =
         new java.util.ArrayList<>();

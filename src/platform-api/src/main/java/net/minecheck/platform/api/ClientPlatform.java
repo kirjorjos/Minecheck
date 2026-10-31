@@ -229,6 +229,18 @@ public interface ClientPlatform {
   BlockPosition getTargetBlock(String entityName);
 
   /**
+   * The block the renderer's crosshair is on right now — the target an input click actually acts
+   * on. This is <b>not</b> the same as {@link #getTargetBlock(String)}: that raycasts from the
+   * entity's current rotation on demand, while this returns the game's own crosshair, which the
+   * renderer recomputes once per frame. After a {@link #lookAt(double, double, double)} the two
+   * disagree until a frame has been drawn, and a press in that window acts on the stale block — so
+   * wait on this before asserting that a click changed the world.
+   *
+   * <p>Returns {@code null} when the client is not in a world or the crosshair is on nothing.
+   */
+  BlockPosition getCrosshairBlock();
+
+  /**
    * Query the entities the client currently knows about — the ones the server has synced into our
    * loaded chunks, which is what the local player can actually see and reach (and therefore what is
    * worth aiming at). The client-side counterpart of {@link ServerPlatform#findEntities(String,

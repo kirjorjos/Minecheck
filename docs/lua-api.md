@@ -1088,6 +1088,24 @@ Points the camera at the given world position (eye-to-target).
 
 Raycasts from the named entity's eyes along its look direction and returns the hit block's position `{ x, y, z }`, or `nil` on a miss. Only the local player is resolvable.
 
+### `minecheck.getCrosshairBlock() → table | nil`
+
+The block the **renderer's crosshair** is on — the target a click (`mouse(1)`, `mousePress(1)`, `press("key.use")`, attack) actually acts on. Returns `{ x, y, z }`, or `nil` when the crosshair is on nothing or the client is not in a world.
+
+Unlike [`getTargetBlock`](#minecheckgettargetblockentityname--table--nil), which raycasts from the player's *current* rotation whenever it is called, the crosshair is recomputed by the renderer once per **frame**. Right after a [`lookAt`](#minechecklookatx-y-z--boolean) the two disagree until a frame has been drawn, and a press in that window acts on the stale block — so wait on this before asserting that a press changed the world.
+
+```lua
+minecheck.lookAt(x, y, z)
+local ax, ay, az = x_floor, y_floor, z_floor -- the block the look targets
+minecheck.waitFor(function()
+  local hit = minecheck.getCrosshairBlock()
+  return hit ~= nil and hit.x == ax and hit.y == ay and hit.z == az
+end, 30)
+minecheck.mousePress(1) -- now the click cannot act on anything else
+```
+
+Client-only.
+
 ### `minecheck.getBlock(pos) → table | nil`
 
 Reads the block at integer position `pos` (`{ x = number, y = number, z = number }`) from the **client** world.
@@ -1411,7 +1429,7 @@ Key points:
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getBlock` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
 | `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
@@ -1419,7 +1437,7 @@ Key points:
 | Third-party plugins (`minecheck.ext`, `ServiceLoader` discovery) | ✅ | ✅ | ✅ |
 | Headless client (Xvfb) | ✅ | ✅ | ✅ |
 
-Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, 35 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
+Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.
 

@@ -853,6 +853,21 @@ public class YarnClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
+    MinecraftClient mc = mc();
+    if (mc.player == null || mc.world == null) {
+      return null;
+    }
+    net.minecraft.util.hit.HitResult hit = mc.crosshairTarget;
+    if (hit == null || hit.getType() != net.minecraft.util.hit.HitResult.Type.BLOCK) {
+      return null;
+    }
+    net.minecraft.util.math.BlockPos pos =
+        ((net.minecraft.util.hit.BlockHitResult) hit).getBlockPos();
+    return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
+  }
+
+  @Override
   public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
     MinecraftClient mc = mc();
     net.minecraft.client.world.ClientWorld world = mc.world;
