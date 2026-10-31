@@ -8,7 +8,9 @@ if not joined then
   minecheck.fail("player " .. player .. " never joined the server")
 end
 
-local left = minecheck.waitForPlayerLeave(player, 180)
+-- The client leaves when its own script is done; the ceiling is config.defaultTimeout, staged by
+-- the harness for the whole run, not a number guessed here.
+local left = minecheck.waitForPlayerLeave(player)
 minecheck.expect(left, "player " .. player .. " left the server")
 if not left then
   minecheck.fail("player " .. player .. " never left the server")
