@@ -7,8 +7,9 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
+  pull-requests: write
+  issues: write
+  actions: read
 
 concurrency:
   group: screenshot-sync-${{ github.ref }}
@@ -16,35 +17,62 @@ concurrency:
 
 jobs:
   sync:
-    name: Regenerate the changed baselines
-    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
+    name: Sync the mismatched baselines
     runs-on: ubuntu-22.04
     steps:
+      - name: Stop when this push is the chore's own
+        id: guard
+        env:
+          SUBJECT: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != "workflow_dispatch" ]]; then
+            subject="${SUBJECT%%$'\n'*}"
+            if [[ "$subject" == "chore: sync screenshot baselines"* ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "The head commit is this chore - stopping instead of looping."
+              exit 0
+            fi
+            if [[ "$ACTOR" == *"[bot]" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Pushed by $ACTOR, which is this chore's own identity - stopping."
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
       - name: Mint an app token
         id: app
+        if: steps.guard.outputs.skip == 'false'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Checkout
+        if: steps.guard.outputs.skip == 'false'
         uses: actions/checkout@v7
         with:
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
 
       - name: Set up JDK 17
+        if: steps.guard.outputs.skip == 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Install xvfb
+        if: steps.guard.outputs.skip == 'false'
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
 
       - name: Cache Gradle
+        if: steps.guard.outputs.skip == 'false'
         uses: actions/cache@v4
         with:
           path: |
@@ -54,77 +82,189 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Resolve the merged pull request and the baselines it changed
+      - name: Resolve the merged pull request
         id: plan
+        if: steps.guard.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.after }}
-          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT" == "workflow_dispatch" ]]; then
-            echo "loaders=fabric forge quilt" >> "$GITHUB_OUTPUT"
-            echo "tasks=testFabricShots testForgeShots testQuiltShots" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" \
-            --jq 'map(select(.merged_at != null)) | .[0].number // empty')
+          pr="$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            --jq 'map(select(.merged_at != null)) | .[0] // empty')"
           if [[ -z "$pr" ]]; then
             echo "No merged pull request is associated with $SHA - nothing to do."
-            echo "loaders=" >> "$GITHUB_OUTPUT"
-            echo "tasks=" >> "$GITHUB_OUTPUT"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$(jq -r '.number' <<<"$pr")" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.head.sha' <<<"$pr")" >> "$GITHUB_OUTPUT"
+          head_ref="$(jq -r '.head.ref' <<<"$pr")"
+          echo "issue=$(sed -n 's|.*/development-issue-\([0-9]\+\)$|\1|p' <<<"$head_ref")" \
+            >> "$GITHUB_OUTPUT"
+          # <mc>/development -> <mc>
+          echo "mc=${BRANCH%%/development}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the run's mismatch manifest
+        id: artifacts
+        if: steps.plan.outputs.found == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.plan.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&per_page=50" \
+            --jq '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].id // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "::warning::no CI run for $HEAD_SHA - falling back to a re-render"
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/mismatch"
+          if ! gh run download "$run_id" --repo "$REPO" -n changed-baselines \
+            -D "$RUNNER_TEMP/mismatch"; then
+            echo "::warning::the changed-baselines artifact is gone - falling back to a re-render"
+            exit 1
+          fi
+          if [[ ! -s "$RUNNER_TEMP/mismatch/manifest.jsonl" ]]; then
+            echo "No screenshot mismatches were reported - nothing to sync."
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the manifest to the committed tree
+        id: apply
+        if: >-
+          steps.plan.outputs.found == 'true' &&
+          steps.artifacts.outcome == 'success' &&
+          steps.artifacts.outputs.empty != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.artifacts.outputs.run_id }}
+          MANIFEST: ${{ runner.temp }}/mismatch/manifest.jsonl
+        run: |
+          set -euo pipefail
+          changed=0
+          while IFS=$'\t' read -r loader path kind; do
+            [[ -n "${loader:-}" ]] || continue
+            case "$kind" in
+              deletion)
+                if [[ -f "$path" ]]; then
+                  git rm -f -- "$path" >/dev/null
+                  echo "removed $path"
+                  changed=1
+                fi
+                ;;
+              addition | change)
+                captures="$RUNNER_TEMP/captures/$loader"
+                if [[ ! -d "$captures" ]]; then
+                  gh run download "$RUN_ID" --repo "$REPO" -n "screenshots-$loader" -D "$captures" \
+                    || echo "::warning::no screenshots-$loader artifact in run $RUN_ID"
+                fi
+                name="$(basename "$path")"
+                src="$(find "$captures" -path "*/screenshots/$name" -type f -print -quit 2>/dev/null || true)"
+                if [[ -z "$src" ]]; then
+                  echo "::warning::no capture named $name in the run's artifact"
+                  continue
+                fi
+                mkdir -p "$(dirname "$path")"
+                cp "$src" "$path"
+                echo "wrote $path from $src"
+                changed=1
+                ;;
+              *)
+                echo "::warning::unknown class '$kind' for $path"
+                ;;
+            esac
+          done < <(jq -r '"\(.path | split("/")[2])\t\(.path)\t\(.class)"' "$MANIFEST")
+          if [[ "$changed" == "0" ]]; then
+            echo "The manifest named nothing this tree still needs - nothing to write."
+          fi
+
+      - name: Re-render when the artifacts expired
+        if: >-
+          steps.plan.outputs.found == 'true' &&
+          steps.artifacts.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.plan.outputs.number }}
+        run: |
+          set -euo pipefail
+          # The artifact is the expiry check: a failed download means it is gone, so the pictures
+          # are re-rendered instead. The PR comment names the loaders and the deleted files.
+          gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body' \
+            > "$RUNNER_TEMP/comments.txt" || true
+          loaders="$(grep -oE 'tests/baselines/[a-z]+/' "$RUNNER_TEMP/comments.txt" 2>/dev/null \
+            | cut -d/ -f3 | sort -u | tr '\n' ' ' || true)"
+          if [[ -z "$loaders" ]]; then
+            echo "The pull request reported no baselines - nothing to regenerate."
             exit 0
           fi
 
-          marker='<!-- screenshots-baselines:changed -->'
-          gh api "repos/$REPO/issues/$pr/comments" --paginate > "$RUNNER_TEMP/comments.json"
-          body=$(jq -r --arg marker "$marker" \
-            '[.[] | select(.body | contains($marker)) | .body] | .[0] // empty' \
-            "$RUNNER_TEMP/comments.json")
-          if [[ -z "$body" ]]; then
-            echo "PR #$pr did not report changed baselines - nothing to regenerate."
-            echo "loaders=" >> "$GITHUB_OUTPUT"
-            echo "tasks=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          loaders=$(grep -oE 'tests/baselines/[a-z]+/' <<<"$body" | cut -d/ -f3 | sort -u | tr '\n' ' ')
           tasks=""
           for loader in $loaders; do
-            case "$loader" in
-              fabric) tasks="$tasks testFabricShots" ;;
-              forge) tasks="$tasks testForgeShots" ;;
-              quilt) tasks="$tasks testQuiltShots" ;;
-              *) echo "::warning::Ignoring unexpected baseline path for loader '$loader'" ;;
-            esac
+            cap="$(printf '%s' "${loader:0:1}" | tr '[:lower:]' '[:upper:]')"
+            tasks="$tasks test${cap}${loader:1}Shots"
           done
-          echo "PR #$pr changed baselines for: ${loaders:-none}"
-          echo "loaders=$loaders" >> "$GITHUB_OUTPUT"
-          echo "tasks=$(sed 's/^ *//' <<<"$tasks")" >> "$GITHUB_OUTPUT"
 
-      - name: Regenerate the baselines
-        if: steps.plan.outputs.tasks != ''
-        run: |
-          ./gradlew ${{ steps.plan.outputs.tasks }} --no-daemon --console=plain \
+          # A deleted baseline is removed first: re-rendering must not resurrect it.
+          grep -E '^\|.*\| *(deletion) *\|$' "$RUNNER_TEMP/comments.txt" \
+            | grep -oE '`[^`]+\.png`' | tr -d '`' > "$RUNNER_TEMP/deleted.txt" || true
+          while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            for loader in $loaders; do
+              git rm -f --ignore-unmatch "tests/baselines/$loader/$name" >/dev/null 2>&1 || true
+            done
+          done < "$RUNNER_TEMP/deleted.txt"
+
+          echo "Regenerating:$tasks"
+          ./gradlew $tasks --continue --no-daemon --console=plain \
             -Pminecheck.screenshots.update=true -Pminecheck.baselines=ci \
             -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
             -Dorg.gradle.worker.jvmargs="-Xmx2g"
         timeout-minutes: 90
 
-      - name: Commit the regenerated baselines
-        if: steps.plan.outputs.tasks != ''
+      - name: Commit and push the synced baselines
+        id: commit
+        if: steps.plan.outputs.found == 'true'
         run: |
           set -euo pipefail
           if git diff --quiet -- tests/baselines \
             && [[ -z "$(git ls-files --others --exclude-standard tests/baselines)" ]]; then
-            echo "The CI image produced exactly the committed pictures - nothing to commit."
+            echo "The committed pictures already match what this merge produced - nothing to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git status --porcelain -- tests/baselines
           git add -- tests/baselines
-          git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "chore: regenerate screenshot baselines (${{ steps.plan.outputs.loaders }})"
+          git -c user.name="ci-pipeline-commits[bot]" \
+              -c user.email="ci-pipeline-commits[bot]@users.noreply.github.com" \
+              commit -m "chore: sync screenshot baselines (${{ steps.plan.outputs.mc }})"
           git push origin "HEAD:${{ github.ref_name }}"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment the source issue
+        if: steps.plan.outputs.found == 'true' && steps.plan.outputs.issue != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.plan.outputs.issue }}
+          MC: ${{ steps.plan.outputs.mc }}
+          PR: ${{ steps.plan.outputs.number }}
+        run: |
+          set -euo pipefail
+          body="closed in \`$MC\` by PR #$PR"
+          if gh api "repos/$REPO/issues/$ISSUE/comments" --paginate --jq '.[].body' \
+            | grep -F "$body" >/dev/null; then
+            echo "Issue #$ISSUE already records this merge."
+            exit 0
+          fi
+          jq -n --arg body "$body" '{body: $body}' \
+            | gh api "repos/$REPO/issues/$ISSUE/comments" --input - >/dev/null
+          echo "Commented #$ISSUE: $body"
