@@ -2,7 +2,8 @@
 -- cover the remaining client surface against real game state (side/minecraftVersion/config,
 -- wait/sleepUntil, lookAt, the held mouse form, pressCombination, keyPress).
 --
---   mouse: look straight down, middle-click pick the grass block, left-click break it -> the player falls into the hole: y is 1 lower keyboard: hold space to jump, land again
+--   keyboard: hold space to jump from the surface, land again
+--   mouse: look straight down, middle-click pick the grass block, left-click break it -> the player falls into the hole: y is 1 lower
 --   mouse: look at the floor beside the hole and right-click -> the picked block is placed in the free cell above it
 --
 -- Creative is deliberate: pick-block (middle click) puts the block type in hand with no drops involved, and breaking/placing are instant single clicks.
@@ -30,6 +31,29 @@ local start = minecheck.getPlayer()
 expect(start ~= nil, "player exists")
 local startY = math.floor(start.pos.y + 0.5)
 minecheck.log("input test: start y = " .. startY)
+
+-- --- keyboard: jump -------------------------------------------------------------
+--
+-- On the surface the world spawn put the player on, before anything is broken. Further down the
+-- choreography the player breaks the block under itself and falls into the hole, and a jump started
+-- while the client's predicted position is being corrected by the server is refused or corrected
+-- away: under a loaded runner it leaves no trace on the client at all (measured at one CPU: the
+-- client never rose more than 0.25 of a block while the key was held, though a jump did happen on
+-- the server). On the settled surface nothing is pending, so the arc is the client's own.
+local function aboveSurface()
+  local p = minecheck.getPlayer()
+  return p ~= nil and p.pos.y > startY + 0.5
+end
+local jumped = minecheck.press("key.jump", 5, aboveSurface)
+expect(jumped ~= nil and jumped.pressed, "space jump")
+expect(jumped ~= nil and jumped.released == "cond", "jump observed leaving the ground")
+expect(
+  minecheck.waitFor(function()
+    local p = minecheck.getPlayer()
+    return p ~= nil and p.pos.y <= startY + 0.05
+  end, 10),
+  "player landed back on the surface"
+)
 
 -- --- mouse: pick + break the block under the player -------------------------
 
@@ -139,26 +163,6 @@ local landed = minecheck.waitFor(function()
   return p ~= nil and p.pos.y <= lowerY + 0.05
 end, 5)
 expect(landed, "player landed in the hole")
-
--- Jump is a held key, sampled during movement ticks, so a fixed hold length races the tick: if the
--- whole hold falls inside one task batch, no movement tick ever sees it and the jump silently does
--- nothing. Hold until the jump is *observed* instead — a held key keeps the window open across
--- ticks, so one missed tick no longer loses the jump — and the predicate closing is itself the
--- assertion that the player left the ground. The 5 s bound keeps a real failure fast rather than
--- waiting out the default timeout.
-local leftGround = function()
-  local p = minecheck.getPlayer()
-  return p ~= nil and p.pos.y > lowerY + 0.5
-end
-local jumped = minecheck.press("key.jump", 5, leftGround)
-expect(jumped ~= nil and jumped.pressed, "space jump")
-expect(jumped ~= nil and jumped.released == "cond", "jump observed leaving the ground")
-
-local landedAgain = minecheck.waitFor(function()
-  local p = minecheck.getPlayer()
-  return p ~= nil and p.pos.y <= lowerY + 0.05
-end, 5)
-expect(landedAgain, "player landed back in the hole")
 
 -- The block goes into the free cell above the floor *beside* the hole, not back into the hole: the
 -- game refuses any placement that would overlap the player's bounding box, so "place it under your
