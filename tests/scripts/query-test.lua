@@ -186,7 +186,9 @@ check(
 minecheck.log("query test: all server expects done, cueing the client to punch")
 check(minecheck.sendPacket("punch_ready"), "cued the client over the packet channel")
 
-local left = minecheck.waitForPlayerLeave(player, 180)
+-- The client's punch phase runs in another process and decides when it leaves; the ceiling comes
+-- from config.defaultTimeout rather than a number guessed here.
+local left = minecheck.waitForPlayerLeave(player)
 check(left, "client left after query test")
 -- The client only leaves once the target is gone, so its absence proves a real player attack killed
 -- it (findEntities by tag, the only side where tags exist).

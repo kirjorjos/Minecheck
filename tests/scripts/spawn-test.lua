@@ -61,6 +61,8 @@ local igloo = minecheck.spawnStructure("minecraft:igloo/top", { x = 10, y = 100,
 check(igloo.success, "spawnStructure igloo/top succeeded")
 
 minecheck.log("spawn test: all expects done, waiting for client to leave")
-local left = minecheck.waitForPlayerLeave(player, 60)
+-- How long the client's own script needs is not knowable here (it is another process), so the
+-- ceiling is config.defaultTimeout, which the harness stages for the whole run, not a guess.
+local left = minecheck.waitForPlayerLeave(player)
 check(left, "client left after spawn test")
 minecheck.runCommand("stop")

@@ -1,12 +1,12 @@
 -- Screenshot corpus: the captures that have committed baselines, plus one ad-hoc region capture.
 --
--- Nothing here "waits for the picture to settle": the script makes the picture static instead. The
--- world is a superflat with the daylight and weather cycles off, the time of day is pinned with a
--- command (noon or midnight — the two times where the sky light the lightmap derives is on a flat
--- part of its curve, so a capture a frame later is the same picture), the camera is set and then a
--- few ticks pass so its tick-to-tick interpolation has arrived, and the chat lines are cleared by
--- the capture itself, which reads the first frame drawn after that (see `captureScreenshot` in
--- docs/lua-api.md).
+-- Nothing here "waits N seconds and hopes": the script makes the picture static and then waits for
+-- the frame itself to stop moving. The world is a superflat with the daylight and weather cycles
+-- off, the time of day is pinned with a command (noon or midnight — the two times where the sky
+-- light the lightmap derives is on a flat part of its curve), the camera is set, and a capture is
+-- taken only once two consecutive frames report the same digest (see `settle`), so a slow machine
+-- settles later instead of shooting a different picture. The chat lines are cleared by the capture
+-- itself, which reads the first frame drawn after that (see `captureScreenshot` in docs/lua-api.md).
 
 -- Forge dev clients stop on FML's "mod loading warnings" screen instead of the title screen.
 -- On a loader that never shows that screen this matches nothing and does nothing.
@@ -50,12 +50,39 @@ local function command(cmd)
   minecheck.expect(result.success == true, "ran /" .. cmd)
 end
 
+-- The picture eases for several seconds after a world is created (its lighting is still settling),
+-- and two runs reach the same point after different frame counts, so a fixed wait either shoots
+-- mid-ease or wastes seconds. Settle on the picture instead: capture, wait, capture again, and stop
+-- once two digests agree. The probes are ad-hoc (`_`), so they are uploaded but never baselined.
+local settleCount = 0
+local function settle(label)
+  local previous
+  -- 60 probes, not 30: after a world is created its lighting fades over a few hundred ticks, and at
+  -- the client's real twenty ticks a second that is longer in wall-clock time than it was when the
+  -- tick rate was accidentally driven by the frame rate. The bound is a budget, not a wait — a
+  -- settled frame returns after two probes.
+  for _ = 1, 60 do
+    settleCount = settleCount + 1
+    local probe = minecheck.captureScreenshot("_settle-" .. label .. "-" .. settleCount)
+    if previous ~= nil and probe.sha256 == previous then
+      minecheck.log("settled after " .. settleCount .. " probe(s)")
+      return true
+    end
+    previous = probe.sha256
+    minecheck.wait(0.25)
+  end
+  minecheck.fail("the frame never settled for " .. label)
+  return false
+end
+
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 0 })
 if not minecheck.expect(created, "created the screenshot world") then
   minecheck.fail("createWorld failed")
 end
 minecheck.expect(minecheck.waitFor(minecheck.isInWorld, 60), "joined the world")
-minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled") -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
+minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world generation settled")
+
+-- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
 -- random spot near the world spawn, and two runs standing a block apart see different terrain. The
 -- teleport sets the position and the rotation (yaw 0, pitch 90 = straight down) in one go.
 local function atPinnedSpot()
@@ -77,7 +104,7 @@ end
 -- frame, with the sky's light at the flat top of its curve.
 command("time set 6000")
 stand()
-minecheck.wait(0.5)
+settle("world")
 local world = shot("world-settled")
 minecheck.expect(world.width == frameWidth, "world-settled is " .. frameWidth .. " px wide")
 minecheck.expect(world.height == frameHeight, "world-settled is " .. frameHeight .. " px tall")
@@ -86,22 +113,56 @@ minecheck.expect(world.height == frameHeight, "world-settled is " .. frameHeight
 -- the lightmap derives is at the bottom of its curve here, so a client left to advance its own
 -- clock between server syncs would render a different picture.
 command("time set 18000")
-minecheck.wait(0.5)
+-- The command sets the *server's* time; the client learns it from the sync a tick or two later, and
+-- the sky and lightmap ease to it, so settle on the digest rather than assuming a wait is enough.
+settle("night")
 local night = shot("world-night")
 minecheck.expect(night.width == frameWidth, "world-night is " .. frameWidth .. " px wide")
 
--- 3. A container screen over the world: proves a GUI is captured, not just the terrain.
-command("time set 6000")
-stand()
-local opened = minecheck.openScreen("inventory")
-if minecheck.expect(opened, "opened the inventory") then
-  minecheck.wait(0.1)
-  local inventory = shot("inventory-open")
-  minecheck.expect(inventory.width == frameWidth, "inventory-open is " .. frameWidth .. " px wide")
+-- 3. A container screen over the world: proves a GUI is captured, not just the terrain. A crafting
+-- table rather than the player inventory, because in creative the inventory is
+-- CreativeInventoryScreen and its tabs are item models: the compass and clock needles are
+-- re-derived on every frame, which measured 24-56 pixels moving on *every* consecutive frame — a
+-- picture no amount of settling makes reproducible. A block menu has no such element.
+command("setblock 1 -60 0 minecraft:crafting_table")
+local tablePos = { x = 1, y = -60, z = 0 }
+minecheck.expect(
+  minecheck.waitFor(function()
+    return minecheck.getBlock(tablePos) ~= nil
+  end, 10),
+  "the crafting table reached the client"
+)
+
+-- Aim at the block's centre, not the position that names it: (1, -60, 0) is a corner of the cube, so
+-- a ray to it grazes the edge and the click that opens the menu hits nothing. `openScreen` with a
+-- position aims and clicks in one step, so the aim is confirmed here instead and the click follows
+-- the crosshair.
+local tableCentre = { x = 1.5, y = -59.5, z = 0.5 }
+minecheck.expect(minecheck.lookAt(tableCentre.x, tableCentre.y, tableCentre.z), "aimed at the table")
+minecheck.expect(
+  minecheck.waitFor(function()
+    local hit = minecheck.getTargetBlock(minecheck.getPlayer())
+    return hit ~= nil and hit.x == 1 and hit.y == -60 and hit.z == 0
+  end, 10),
+  "the crosshair is on the table"
+)
+local opened = minecheck.openScreen("crafting", nil, 10)
+if minecheck.expect(opened, "opened the crafting table") then
+  settle("crafting")
+  local crafting = shot("crafting-open")
+  minecheck.expect(crafting.width == frameWidth, "crafting-open is " .. frameWidth .. " px wide")
   minecheck.press("escape")
-  minecheck.wait(0.1)
+  -- The HUD capture below needs the world back, so wait for the screen to be gone rather than
+  -- assuming the keypress was consumed by the next frame.
+  minecheck.expect(
+    minecheck.waitFor(function()
+      return not minecheck.isScreenOpen(nil)
+    end, 5),
+    "the crafting screen closed"
+  )
+  settle("hud")
 else
-  minecheck.fail("openScreen(inventory) failed")
+  minecheck.fail("openScreen(crafting) failed")
 end
 
 -- 4. An ad-hoc crop (a leading `_` keeps it out of the baselines): the bottom strip of the HUD in

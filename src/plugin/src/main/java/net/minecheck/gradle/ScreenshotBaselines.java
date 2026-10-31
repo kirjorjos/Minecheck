@@ -16,32 +16,29 @@ import java.util.TreeSet;
 import java.util.stream.Stream;
 
 /**
- * Compares a run's captures against a baseline tree, within a small per-channel tolerance.
+ * Compares a run's captures against a baseline tree, byte for byte.
  *
  * <p>This is the part of the screenshot suite that decides a verdict, kept free of Gradle so it can
  * be tested with three temp directories instead of a game boot. {@link
  * MinecheckScreenshotBaselines} is only the task wrapper around it.
  *
- * <p><b>Why not exact bytes.</b> The client draws each frame at a <em>partial</em> tick, and that
- * fraction moves the sun angle, the lightmap that modulates every lit pixel and the camera's own
- * interpolation. Two runs of the same scene on the same machine therefore differ even with the
- * clock pinned — as a whole-frame offset of a level or two, plus a longer tail on the texture edges
- * that straddle a rounding step. Measured between two client processes on the ubuntu-22.04 CI
- * runner (llvmpipe, 854x480): offsets of 1–2 levels, a 99.9th percentile of 10 and a worst texel of
- * 14. A byte-for-byte verdict, or a tolerance tuned to a warm local machine, would be red on every
- * other run and teach everyone to ignore it. The tolerance below is set above that measured drift
- * so the noise stays inside it, and is still tight enough that a moved pixel, a missing HUD element
- * or a different GUI (tens of levels) is a failure:
+ * <p><b>Why exact bytes, and what makes them possible.</b> What a client draws is a function of the
+ * render <em>delta</em> — the wall-clock fraction into the tick — because that fraction moves the
+ * sun angle, the lightmap that modulates every lit pixel, the camera's interpolated pose and every
+ * animated model. Left at vanilla's fraction, two runs of a frozen scene differ by a level across
+ * the whole picture, and the verdict can only ever be a tolerance. The client pins that delta to 1
+ * (see {@code ClientPlatform#pinRenderTickDelta}), so the fraction stops being an input and the
+ * remaining variables are the scene and the capture profile:
  *
  * <ul>
- *   <li>a channel may drift by up to {@link #CHANNEL_TOLERANCE} levels;
- *   <li>at most {@link #MAX_OUTLIER_PIXELS} pixels may drift further than that.
+ *   <li>a capture passes only when every pixel is identical to its baseline;
+ *   <li>one changed pixel, one level off anywhere, is a failure.
  * </ul>
  *
  * <p>Semantics (Playwright's, deliberately):
  *
  * <ul>
- *   <li>equal bytes, or within tolerance ⇒ pass;
+ *   <li>identical pixels ⇒ pass;
  *   <li>missing baseline ⇒ write the actual into the active tree, then <b>fail</b> — a baseline is
  *       reviewed by a human or committed by CI, never invented silently;
  *   <li>{@code update} ⇒ write every actual into the active tree and pass;
@@ -56,14 +53,17 @@ public final class ScreenshotBaselines {
   public static final String PROFILE_FILE = "profile.json";
 
   /**
-   * How far one colour channel of one pixel may drift and still be the same picture (of 255). The
-   * run-to-run offset measured in CI peaks at 2 levels and its 99.9th percentile at 10, so this
-   * leaves the drift inside the tolerance while a real change (tens of levels) stays outside it.
+   * How far one colour channel of one pixel may drift and still be the same picture (of 255).
+   *
+   * <p>Zero, deliberately. The render delta is pinned, the scene is static by construction and the
+   * capture profile is fixed, so any difference at all is a change in the picture rather than
+   * noise. The shipped spec has always asked for exact bytes; the tolerance is what hid the
+   * provenance problems it was meant to expose.
    */
-  public static final int CHANNEL_TOLERANCE = 12;
+  public static final int CHANNEL_TOLERANCE = 0;
 
   /** How many pixels may exceed {@link #CHANNEL_TOLERANCE} before the picture is different. */
-  public static final int MAX_OUTLIER_PIXELS = 64;
+  public static final int MAX_OUTLIER_PIXELS = 0;
 
   private ScreenshotBaselines() {}
 
@@ -74,6 +74,7 @@ public final class ScreenshotBaselines {
       List<String> matched,
       List<String> tolerated,
       List<String> skipped,
+      List<String> filtered,
       List<String> unused) {
 
     public boolean failed() {
@@ -95,11 +96,28 @@ public final class ScreenshotBaselines {
    */
   public static Result compare(String loader, Path capturesDir, Path activeDir, boolean update)
       throws IOException {
+    return compare(loader, capturesDir, activeDir, update, Set.of());
+  }
+
+  /**
+   * As {@link #compare(String, Path, Path, boolean)}, restricted to {@code only}: a set of {@code
+   * <loader>/<file>.png} labels, empty meaning every capture.
+   *
+   * <p>This is the determinism pass. The captures that disagreed with the committed tree are the
+   * ones whose reproducibility is being decided, so every other capture the rerun produced is
+   * counted but not compared. A name in {@code only} that the rerun did not produce is a failure:
+   * the picture the first pass took no longer exists.
+   */
+  public static Result compare(
+      String loader, Path capturesDir, Path activeDir, boolean update, Set<String> only)
+      throws IOException {
     List<String> failures = new ArrayList<>();
     List<String> written = new ArrayList<>();
     List<String> matched = new ArrayList<>();
     List<String> tolerated = new ArrayList<>();
     List<String> skipped = new ArrayList<>();
+    List<String> filtered = new ArrayList<>();
+    Set<String> named = normalizeOnly(only);
     List<String> unused = new ArrayList<>();
 
     List<Path> captures = new ArrayList<>();
@@ -123,6 +141,11 @@ public final class ScreenshotBaselines {
         skipped.add(loader + "/" + fileName);
         continue;
       }
+      String label = loader + "/" + fileName;
+      if (!named.isEmpty() && !named.contains(label)) {
+        filtered.add(label);
+        continue;
+      }
       Path baseline = activeDir.resolve(fileName);
       if (update) {
         copy(capture, baseline);
@@ -143,7 +166,6 @@ public final class ScreenshotBaselines {
       }
       byte[] actual = Files.readAllBytes(capture);
       byte[] expected = Files.readAllBytes(baseline);
-      String label = loader + "/" + fileName;
       if (java.util.Arrays.equals(actual, expected)) {
         matched.add(label);
         continue;
@@ -206,7 +228,26 @@ public final class ScreenshotBaselines {
       }
     }
 
-    if (Files.isDirectory(activeDir)) {
+    // A capture the first pass named and the rerun did not produce is the nondeterminism this pass
+    // exists to catch, so it is a failure rather than the "baseline matches no capture" warning.
+    for (String label : named) {
+      String prefix = loader + "/";
+      if (!label.startsWith(prefix) || !label.endsWith(".png")) {
+        continue;
+      }
+      String fileName = label.substring(prefix.length());
+      if (!captureNames.contains(fileName.substring(0, fileName.length() - 4))) {
+        failures.add(
+            "no capture named "
+                + label
+                + " in the rerun — the first pass captured it, so the renderer is not"
+                + " reproducible");
+      }
+    }
+
+    // Skip the warning scan when the run was narrowed: captures outside `only` are expected not to
+    // be compared, and a named one that went missing is already a failure above.
+    if (named.isEmpty() && Files.isDirectory(activeDir)) {
       try (Stream<Path> files = Files.list(activeDir)) {
         files
             .filter(Files::isRegularFile)
@@ -214,7 +255,14 @@ public final class ScreenshotBaselines {
             .forEach(
                 p -> {
                   String name = p.getFileName().toString();
-                  if (!captureNames.contains(name.substring(0, name.length() - 4))) {
+                  String stem = name.substring(0, name.length() - 4);
+                  // An ad-hoc capture is never compared, so an ad-hoc baseline is not a capture
+                  // missing from this run either. This matters in CI's determinism gate, where the
+                  // "baseline" tree is pass 1's captures and the settle probes differ in number.
+                  if (stem.startsWith("_")) {
+                    return;
+                  }
+                  if (!captureNames.contains(stem)) {
                     unused.add(loader + "/" + name);
                   }
                 });
@@ -222,7 +270,27 @@ public final class ScreenshotBaselines {
     }
     unused.sort(String::compareTo);
 
-    return new Result(failures, written, matched, tolerated, skipped, unused);
+    return new Result(failures, written, matched, tolerated, skipped, filtered, unused);
+  }
+
+  /**
+   * The comparison list as labels: {@code <loader>/<file>.png}, from either that spelling or the
+   * {@code tests/baselines/…} paths the report writes. Anything else is dropped — this list decides
+   * a verdict and never touches a file.
+   */
+  private static Set<String> normalizeOnly(Set<String> only) {
+    Set<String> labels = new TreeSet<>();
+    for (String raw : only) {
+      String label = raw.trim();
+      if (label.startsWith("tests/baselines/")) {
+        label = label.substring("tests/baselines/".length());
+      }
+      String[] parts = label.split("/");
+      if (parts.length == 2 && !parts[0].isEmpty() && parts[1].endsWith(".png")) {
+        labels.add(label);
+      }
+    }
+    return labels;
   }
 
   /**

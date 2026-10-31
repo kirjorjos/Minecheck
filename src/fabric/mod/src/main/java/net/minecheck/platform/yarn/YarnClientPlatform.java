@@ -131,6 +131,99 @@ public class YarnClientPlatform implements ClientPlatform {
     }
   }
 
+  /** Set once the pinned counter is installed, or once installation has been given up on. */
+  private static volatile boolean renderTickDeltaPinned;
+
+  private static volatile boolean renderTickDeltaUnavailable;
+
+  /**
+   * Draws every frame at render delta 1 — see {@link ClientPlatform#pinRenderTickDelta()} for why a
+   * capture needs it.
+   *
+   * <p>The counter object is swapped rather than a value written into it: the client recomputes the
+   * delta at the start of every frame, so only an object that keeps reporting 1 survives to the
+   * render. The subclass still returns vanilla's tick count, so ticks are scheduled exactly as
+   * before — only the interpolation fraction changes.
+   */
+  @Override
+  public void pinRenderTickDelta() {
+    if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
+      return;
+    }
+    MinecraftClient mc = mc();
+    java.lang.reflect.Field counterField = null;
+    for (java.lang.reflect.Field field : MinecraftClient.class.getDeclaredFields()) {
+      if (field.getType().getSimpleName().equals("RenderTickCounter")) {
+        counterField = field;
+        break;
+      }
+    }
+    if (counterField == null) {
+      renderTickDeltaUnavailable = true;
+      LOG.warning(
+          "Minecheck: no render tick counter on this client — captures keep the vanilla partial"
+              + " tick and may differ by a level between runs");
+      return;
+    }
+    try {
+      counterField.setAccessible(true);
+      Object current = counterField.get(mc);
+      if (current instanceof PinnedRenderTickCounter) {
+        renderTickDeltaPinned = true;
+        return;
+      }
+      float fixedTimeStep = 0.0f;
+      long lastTimeMillis = 0L;
+      for (java.lang.reflect.Field field : current.getClass().getDeclaredFields()) {
+        field.setAccessible(true);
+        if (field.getType() == float.class && !field.getName().equals("tickDelta")) {
+          fixedTimeStep = field.getFloat(current);
+        } else if (field.getType() == long.class) {
+          lastTimeMillis = field.getLong(current);
+        }
+      }
+      counterField.set(mc, new PinnedRenderTickCounter(fixedTimeStep, lastTimeMillis));
+      renderTickDeltaPinned = true;
+      LOG.info("Minecheck: pinned the render tick delta to 1");
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      renderTickDeltaUnavailable = true;
+      LOG.log(Level.WARNING, "Minecheck: could not pin the render tick delta", e);
+    }
+  }
+
+  /**
+   * A render tick counter that hands the renderer a delta of 1 without touching the tick count.
+   *
+   * <p>{@code tickDelta} is the renderer's partial tick <em>and</em> vanilla's own accumulator:
+   * {@code beginRenderTick} adds the frame's elapsed time to it, returns the whole ticks and leaves
+   * the fraction behind. Overwriting it outright feeds that {@code 1} back in as the accumulator on
+   * the next frame, so the client runs one tick per rendered frame instead of twenty a second —
+   * harmless on a fast workstation, far too slow on a software-rendered CI runner, where every
+   * timing-sensitive wait then misses. The fraction vanilla computed is kept aside and put back
+   * before the next call, so only the value the renderer reads is pinned.
+   */
+  private static final class PinnedRenderTickCounter
+      extends net.minecraft.client.render.RenderTickCounter {
+
+    /** The fraction vanilla accumulated, restored before the next {@code beginRenderTick}. */
+    private float accumulatedTickDelta = Float.NaN;
+
+    PinnedRenderTickCounter(float fixedTimeStep, long lastTimeMillis) {
+      super(fixedTimeStep, lastTimeMillis);
+    }
+
+    @Override
+    public int beginRenderTick(long timeMillis) {
+      if (!Float.isNaN(accumulatedTickDelta)) {
+        this.tickDelta = accumulatedTickDelta;
+      }
+      int ticks = super.beginRenderTick(timeMillis);
+      accumulatedTickDelta = this.tickDelta;
+      this.tickDelta = 1.0f;
+      return ticks;
+    }
+  }
+
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     onClientThread(() -> captureScreenshot(request));
@@ -563,6 +656,25 @@ public class YarnClientPlatform implements ClientPlatform {
     return mc().getOverlay() == null;
   }
 
+  /**
+   * Spawn-region chunk tasks the integrated server still has outstanding while a local world is
+   * loading — the only progress-like number a 1.18.2 client can see before the level is ready.
+   *
+   * <p>Not a percentage, and deliberately not presented as one: the wait only compares samples, so
+   * all this has to do is change while the server is working and stop changing while it is stuck.
+   * Reported as {@code -1} whenever there is nothing to watch (no local server, or already in the
+   * world), which leaves the caller on its plain deadline.
+   */
+  @Override
+  public float worldLoadProgress() {
+    MinecraftClient mc = mc();
+    if (mc.player != null || mc.getServer() == null) {
+      return -1f;
+    }
+    ServerWorld overworld = mc.getServer().getWorld(World.OVERWORLD);
+    return overworld == null ? -1f : overworld.getChunkManager().getPendingTasks();
+  }
+
   @Override
   public boolean isWorldGenSettled() {
     MinecraftServer server = mc().getServer();
@@ -733,6 +845,21 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     net.minecraft.util.hit.HitResult hit = mc.player.raycast(5.0, 1.0F, false);
     if (hit.getType() != net.minecraft.util.hit.HitResult.Type.BLOCK) {
+      return null;
+    }
+    net.minecraft.util.math.BlockPos pos =
+        ((net.minecraft.util.hit.BlockHitResult) hit).getBlockPos();
+    return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
+  }
+
+  @Override
+  public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
+    MinecraftClient mc = mc();
+    if (mc.player == null || mc.world == null) {
+      return null;
+    }
+    net.minecraft.util.hit.HitResult hit = mc.crosshairTarget;
+    if (hit == null || hit.getType() != net.minecraft.util.hit.HitResult.Type.BLOCK) {
       return null;
     }
     net.minecraft.util.math.BlockPos pos =

@@ -495,8 +495,9 @@ val updateScreenshotBaselines =
     .map { it.trim().toBoolean() }
     .orElse(false)
 
-// Report mode: compare and print, but never fail — the PR gate is determinism, run as a second
-// pass with minecheck.screenshots.compareDir pointed at the first pass's captures.
+// Report mode: compare and print, but never fail — the gate is determinism, run as a second pass
+// with minecheck.screenshots.compareDir pointing at the first pass's captures and
+// minecheck.screenshots.only at the captures that pass found divergent.
 val reportScreenshotBaselines =
   providers
     .gradleProperty("minecheck.screenshots.report")
@@ -504,6 +505,9 @@ val reportScreenshotBaselines =
     .orElse(false)
 
 val screenshotCompareDir = providers.gradleProperty("minecheck.screenshots.compareDir")
+
+// The captures the determinism pass compares: exactly the ones the first pass found divergent.
+val screenshotOnly = providers.gradleProperty("minecheck.screenshots.only")
 
 val profileWidth =
   providers.gradleProperty("minecheck.screenshot.width").map(String::toInt).orElse(854)
@@ -571,6 +575,7 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
     screenshotCompareDir.orNull?.let { path ->
       compareDir.set(layout.dir(providers.provider { file(path) }))
     }
+    screenshotOnly.orNull?.let { path -> only.set(layout.file(providers.provider { file(path) })) }
   }
 }
 
