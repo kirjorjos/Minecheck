@@ -40,7 +40,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "1.1.0"
+version = "1.1.1"
 
 group = "net.minecheck"
 
@@ -495,8 +495,9 @@ val updateScreenshotBaselines =
     .map { it.trim().toBoolean() }
     .orElse(false)
 
-// Report mode: compare and print, but never fail — the PR gate is determinism, run as a second
-// pass with minecheck.screenshots.compareDir pointed at the first pass's captures.
+// Report mode: compare and print, but never fail — the gate is determinism, run as a second pass
+// with minecheck.screenshots.compareDir pointing at the first pass's captures and
+// minecheck.screenshots.only at the captures that pass found divergent.
 val reportScreenshotBaselines =
   providers
     .gradleProperty("minecheck.screenshots.report")
@@ -504,6 +505,12 @@ val reportScreenshotBaselines =
     .orElse(false)
 
 val screenshotCompareDir = providers.gradleProperty("minecheck.screenshots.compareDir")
+
+// The mismatch manifest: report mode writes it, the determinism pass reads the classes it records.
+val screenshotManifest = providers.gradleProperty("minecheck.screenshots.manifest")
+
+// The captures the determinism pass compares: exactly the ones the first pass found divergent.
+val screenshotOnly = providers.gradleProperty("minecheck.screenshots.only")
 
 val profileWidth =
   providers.gradleProperty("minecheck.screenshot.width").map(String::toInt).orElse(854)
@@ -571,6 +578,10 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
     screenshotCompareDir.orNull?.let { path ->
       compareDir.set(layout.dir(providers.provider { file(path) }))
     }
+    screenshotOnly.orNull?.let { path -> only.set(layout.file(providers.provider { file(path) })) }
+    screenshotManifest.orNull?.let { path ->
+      manifestFile.set(layout.file(providers.provider { file(path) }))
+    }
   }
 }
 
@@ -580,41 +591,117 @@ registerScreenshotsLifecycle("testForgeShots", "forge")
 
 registerScreenshotsLifecycle("testQuiltShots", "quilt")
 
+/**
+ * Every lifecycle suite for one loader, as one task. CI runs one of these per loader in its own
+ * job, so the workflow never has to enumerate task families — adding a suite means adding it here
+ * and to the loader's aggregate.
+ */
+fun registerLoaderAggregate(loader: String, vararg taskNames: String) {
+  tasks.register("test${loader.replaceFirstChar { it.uppercase() }}All") {
+    group = "minecheck"
+    description = "Runs every lifecycle suite for the $loader loader"
+    dependsOn(*taskNames)
+  }
+}
+
+registerLoaderAggregate(
+  "fabric",
+  "testFabric",
+  "testFabricFail",
+  "testFabricInput",
+  "testFabricLive",
+  "testFabricSpawn",
+  "testFabricQuery",
+  "testFabricBeacon",
+  "testFabricPacket",
+  "testFabricWorldHandoff",
+  "testFabricShots",
+)
+
+registerLoaderAggregate(
+  "forge",
+  "testForge",
+  "testForgeFail",
+  "testForgeInput",
+  "testForgeLive",
+  "testForgeSpawn",
+  "testForgeQuery",
+  "testForgeBeacon",
+  "testForgePacket",
+  "testForgePacketTap",
+  "testForgeWorldHandoff",
+  "testForgeShots",
+)
+
+registerLoaderAggregate(
+  "quilt",
+  "testQuilt",
+  "testQuiltFail",
+  "testQuiltInput",
+  "testQuiltLive",
+  "testQuiltSpawn",
+  "testQuiltQuery",
+  "testQuiltBeacon",
+  "testQuiltPacket",
+  "testQuiltWorldHandoff",
+  "testQuiltShots",
+)
+
+val loadersFile = layout.projectDirectory.file(".github/loaders.jsonl")
+
+/**
+ * Validates the loader list CI reads. The file is the single source of truth for which loaders
+ * exist, and it decides how many jobs a PR runs, so a typo here must fail locally instead of
+ * silently dropping a loader from CI.
+ *
+ * <p>Only typos are rejected: a module with no entry in the file is allowed, so dropping a loader
+ * from CI stays a one-line change rather than a module deletion.
+ */
+val checkLoaders =
+  tasks.register("checkLoaders") {
+    group = "minecheck"
+    description =
+      "Validates .github/loaders.jsonl against the modules, aggregate tasks and baselines"
+    val file = loadersFile.asFile
+    inputs.file(file)
+    doLast {
+      fun fail(message: String): Nothing =
+        throw GradleException("Minecheck: ${file.relativeTo(projectDir)}: $message")
+
+      if (!file.isFile) fail("missing")
+      val ids = mutableListOf<String>()
+      file.readLines().forEachIndexed { index, raw ->
+        val line = raw.trim()
+        if (line.isEmpty()) return@forEachIndexed
+        val parsed =
+          try {
+            groovy.json.JsonSlurper().parseText(line)
+          } catch (e: Exception) {
+            fail("line ${index + 1} is not valid JSON: ${e.message}")
+          }
+        val id = ((parsed as? Map<*, *>)?.get("id") as? String)?.trim()
+        if (id.isNullOrEmpty()) fail("line ${index + 1} has no string \"id\"")
+        if (!Regex("[a-z0-9][a-z0-9-]*").matches(id)) {
+          fail("loader id \"$id\" must match [a-z0-9][a-z0-9-]*")
+        }
+        if (ids.contains(id)) fail("loader id \"$id\" is listed twice")
+        ids.add(id)
+      }
+      if (ids.isEmpty()) fail("lists no loaders")
+      ids.forEach { id ->
+        val aggregate = "test${id.replaceFirstChar { it.uppercase() }}All"
+        if (findProject(":$id-mod") == null) fail("loader \"$id\" has no :$id-mod module")
+        if (!tasks.names.contains(aggregate)) fail("loader \"$id\" has no $aggregate task")
+        if (!file("tests/baselines/$id").isDirectory) {
+          fail("loader \"$id\" has no tests/baselines/$id tree")
+        }
+      }
+      logger.lifecycle("Loaders: ${ids.joinToString(", ")}")
+    }
+  }
+
 tasks.named("test") {
-  dependsOn(
-    "testFabric",
-    "testForge",
-    "testQuilt",
-    "testFabricFail",
-    "testForgeFail",
-    "testQuiltFail",
-    "testFabricInput",
-    "testForgeInput",
-    "testQuiltInput",
-    "testFabricLive",
-    "testForgeLive",
-    "testQuiltLive",
-    "testFabricSpawn",
-    "testForgeSpawn",
-    "testQuiltSpawn",
-    "testFabricQuery",
-    "testForgeQuery",
-    "testQuiltQuery",
-    "testFabricBeacon",
-    "testForgeBeacon",
-    "testQuiltBeacon",
-    "testFabricPacket",
-    "testForgePacket",
-    "testForgePacketTap",
-    "testQuiltPacket",
-    "testFabricWorldHandoff",
-    "testForgeWorldHandoff",
-    "testQuiltWorldHandoff",
-    "testFabricShots",
-    "testForgeShots",
-    "testQuiltShots",
-    "spotlessCheck",
-  )
+  dependsOn(checkLoaders, "testFabricAll", "testForgeAll", "testQuiltAll", "spotlessCheck")
 }
 
 subprojects {
@@ -640,6 +727,13 @@ tasks.named("spotlessApply") { dependsOn(pluginBuild.task(":spotlessApply")) }
 tasks.named("spotlessCheck") { dependsOn(pluginBuild.task(":spotlessCheck")) }
 
 tasks.named("test") { dependsOn(pluginBuild.task(":test")) }
+
+// Formatting and the plugin's own tests, once per run instead of once per loader job.
+tasks.register("checkModule") {
+  group = "minecheck"
+  description = "Runs formatting and the Gradle plugin's tests"
+  dependsOn("spotlessCheck", pluginBuild.task(":test"))
+}
 
 val styluaVersion = "2.5.2"
 val styluaOs =

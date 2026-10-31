@@ -1,10 +1,13 @@
 package net.minecheck.gradle;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.DirectoryProperty;
@@ -20,8 +23,8 @@ import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 
 /**
- * Verifies one loader's screenshot captures against its baseline tree, within a small per-channel
- * tolerance (see {@link ScreenshotBaselines} for why exact bytes cannot work).
+ * Verifies one loader's screenshot captures against its baseline tree, byte for byte (see {@link
+ * ScreenshotBaselines} for why pixels can be compared exactly).
  *
  * <p>Runs after the loader's {@code run*Shots} lifecycle task, which writes the PNGs. The verdict
  * is the {@link ScreenshotBaselines comparison}; this class is only the Gradle surface around it.
@@ -66,11 +69,11 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
   /**
    * True ⇒ compare and *report* but never fail on a mismatch or a missing baseline.
    *
-   * <p>This is the pull-request half of the baseline flow: a PR compares its own captures against
-   * the base branch's pictures, and a difference there is expected — it is what the PR reports and
-   * what the post-merge chore then regenerates on the base branch. The gate that must actually be
-   * enforced on a PR is determinism (the same code capturing twice), which the workflow runs as a
-   * second pass against the first pass's captures.
+   * <p>This is step 1 of the baseline flow, on every gated run: a PR compares its own captures
+   * against the base branch's pictures and a push against the branch's own committed tree, and a
+   * difference there is expected — it is what the run reports and what the post-merge chore then
+   * regenerates. The gate that is actually enforced is determinism (the same code capturing twice),
+   * which the workflow runs as step 2, against exactly these divergent captures.
    */
   @Input
   @Optional
@@ -93,6 +96,27 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
    */
   @Internal
   public abstract RegularFileProperty getReportFile();
+
+  /**
+   * The mismatch manifest: one JSON object per line, {@code {"path":"tests/baselines/…",
+   * "class":"addition"|"change"|"deletion"}}.
+   *
+   * <p>Report mode writes it; the determinism pass reads it. The classes are what make the second
+   * pass a verdict: an addition or change must reproduce byte for byte, a deletion must stay
+   * absent. Without it a deletion is indistinguishable from a capture that vanished.
+   */
+  @Internal
+  public abstract RegularFileProperty getManifestFile();
+
+  /**
+   * When set, a file naming the captures to compare — one {@code tests/baselines/<loader>/<file>}
+   * or {@code <loader>/<file>} per line. Anything else the run captured is counted but ignored.
+   *
+   * <p>Used by the determinism pass, which reruns a suite and compares only the captures the first
+   * pass found divergent: those are the pictures whose reproducibility decides the check.
+   */
+  @Internal
+  public abstract RegularFileProperty getOnly();
 
   /**
    * The captures, as a file tree rather than a directory property, so a run that produced nothing
@@ -122,17 +146,24 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
     Path captures = getCapturesDir().get().getAsFile().toPath();
     Path active = activeBaselineDirectory(loader);
     boolean update = getUpdate().getOrElse(false);
+    Set<String> only = readOnlyList();
 
     getLogger()
         .lifecycle(
             "Minecheck: verifying {} screenshots against {}{}",
             loader,
             active,
-            update ? " (update mode: writing instead of comparing)" : "");
+            update
+                ? " (update mode: writing instead of comparing)"
+                : only.isEmpty()
+                    ? ""
+                    : " (only the " + only.size() + " capture(s) the first pass named)");
+
+    java.util.Map<String, String> classes = readManifest();
 
     ScreenshotBaselines.Result result;
     try {
-      result = ScreenshotBaselines.compare(loader, captures, active, update);
+      result = ScreenshotBaselines.compare(loader, captures, active, update, only, classes);
     } catch (IOException e) {
       throw new GradleException("Minecheck: could not compare the " + loader + " screenshots", e);
     }
@@ -149,8 +180,15 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
     for (String unused : result.unused()) {
       getLogger().warn("Minecheck: baseline {} matches no capture in this run", unused);
     }
+    if (!result.filtered().isEmpty()) {
+      getLogger()
+          .lifecycle(
+              "Minecheck: {} {} capture(s) are not named by the rerun list — not compared",
+              result.filtered().size(),
+              loader);
+    }
 
-    if (result.total() == 0) {
+    if (result.total() == 0 && !result.failed()) {
       throw new GradleException(
           "Minecheck: the "
               + loader
@@ -177,17 +215,44 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
                 loader,
                 REPORT_HINT);
         writeReport(result.failures(), active);
+        writeManifest(result, active);
       } else {
         throw new GradleException(message);
       }
     }
     getLogger()
         .lifecycle(
-            "Minecheck: {} of {} {} capture(s) match their baseline (tolerance {} levels)",
+            "Minecheck: {} of {} {} capture(s) match their baseline (byte for byte)",
             result.matched().size(),
             result.total(),
-            loader,
-            ScreenshotBaselines.CHANNEL_TOLERANCE);
+            loader);
+  }
+
+  /**
+   * The capture names to compare, from {@link #getOnly()}; empty means every capture. Both the
+   * {@code tests/baselines/<loader>/<file>} and the {@code <loader>/<file>} spelling are accepted —
+   * {@link ScreenshotBaselines#compare} normalizes them, and drops anything that is not a baseline
+   * path, so a list meant for a verdict never becomes a file operation.
+   */
+  private Set<String> readOnlyList() {
+    if (!getOnly().isPresent()) {
+      return Set.of();
+    }
+    Path file = getOnly().get().getAsFile().toPath();
+    Set<String> labels = new TreeSet<>();
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new GradleException(
+          "Minecheck: could not read the screenshot comparison list " + file, e);
+    }
+    for (String line : lines) {
+      if (!line.isBlank()) {
+        labels.add(line.trim());
+      }
+    }
+    return labels;
   }
 
   /**
@@ -230,6 +295,85 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
         throw new GradleException("Minecheck: could not write the screenshot report " + file, e);
       }
     }
+  }
+
+  /**
+   * Writes the mismatch classes the determinism pass reads: one JSON line per mismatch, {@code
+   * tests/baselines/<loader>/<file>.png} plus {@code addition}, {@code change} or {@code deletion}.
+   *
+   * <p>A missing baseline is an addition, a differing picture is a change, and a baseline no
+   * capture produced is a deletion. The three are deliberately kept apart: the rerun's verdict
+   * depends on which one it is looking at.
+   */
+  private void writeManifest(ScreenshotBaselines.Result result, Path active) {
+    if (!getManifestFile().isPresent()) {
+      return;
+    }
+    Path file = getManifestFile().get().getAsFile().toPath();
+    java.util.Map<String, String> kinds = new java.util.TreeMap<>();
+    for (String failure : result.failures()) {
+      boolean addition = failure.startsWith("no baseline for ");
+      for (String path : divergedBaselines(List.of(failure))) {
+        kinds.put(path, addition ? "addition" : "change");
+      }
+    }
+    if (kinds.isEmpty()
+        && result.failures().stream().anyMatch(f -> f.startsWith("capture profile changed"))) {
+      for (String path : allBaselines(active)) {
+        kinds.put(path, "change");
+      }
+    }
+    for (String unused : result.unused()) {
+      kinds.put("tests/baselines/" + unused, "deletion");
+    }
+    List<String> lines = new ArrayList<>();
+    for (java.util.Map.Entry<String, String> entry : kinds.entrySet()) {
+      lines.add("{\"path\":\"" + entry.getKey() + "\",\"class\":\"" + entry.getValue() + "\"}");
+    }
+    try {
+      Files.createDirectories(file.getParent());
+      Files.write(file, lines);
+    } catch (IOException e) {
+      throw new GradleException("Minecheck: could not write the screenshot manifest " + file, e);
+    }
+  }
+
+  /**
+   * The classes a previous pass recorded, keyed by {@code <loader>/<file>.png}. Absent or
+   * unreadable manifest ⇒ empty, which makes the pass behave like a plain comparison.
+   */
+  private java.util.Map<String, String> readManifest() {
+    if (!getManifestFile().isPresent()) {
+      return java.util.Map.of();
+    }
+    Path file = getManifestFile().get().getAsFile().toPath();
+    if (!Files.isRegularFile(file)) {
+      return java.util.Map.of();
+    }
+    java.util.Map<String, String> classes = new java.util.HashMap<>();
+    java.util.regex.Pattern pathPattern =
+        java.util.regex.Pattern.compile("\"path\"\\s*:\\s*\"([^\"]+)\"");
+    java.util.regex.Pattern classPattern =
+        java.util.regex.Pattern.compile("\"class\"\\s*:\\s*\"([^\"]+)\"");
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new GradleException("Minecheck: could not read the screenshot manifest " + file, e);
+    }
+    for (String line : lines) {
+      java.util.regex.Matcher path = pathPattern.matcher(line);
+      java.util.regex.Matcher kind = classPattern.matcher(line);
+      if (!path.find() || !kind.find()) {
+        continue;
+      }
+      String label = path.group(1);
+      if (label.startsWith("tests/baselines/")) {
+        label = label.substring("tests/baselines/".length());
+      }
+      classes.put(label, kind.group(1));
+    }
+    return classes;
   }
 
   /** Every {@code tests/baselines/<loader>/<png>} in a baseline directory, sorted. */

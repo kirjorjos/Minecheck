@@ -22,5 +22,7 @@ local function markerPresent()
 end
 check(minecheck.waitFor(markerPresent, 90), "server is running the world the client generated (marker block present)")
 
-check(minecheck.waitForPlayerLeave(player, 120), "client left after the handoff check")
+-- No explicit timeout: the client's own script decides when it leaves, so the wait's ceiling is
+-- config.defaultTimeout (staged by the harness for the run), not a guess made here.
+check(minecheck.waitForPlayerLeave(player), "client left after the handoff check")
 minecheck.runCommand("stop")
