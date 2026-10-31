@@ -202,10 +202,9 @@ expect(
   "aimed at the floor beside the hole"
 )
 -- Same wait as the break above, and it is the one that decides whether this step can pass at all on
--- a loaded runner: if the renderer's crosshair still holds the pre-look block (the cell the player
--- is standing in), every press below is refused by the game for overlapping the player, so the loop
--- spends all 40 attempts on the same refusal no matter how many are allowed. Waiting for the
--- crosshair to carry the block first makes the press the last step rather than a retry.
+-- a loaded runner: a press acts on the renderer's crosshair, which is only as fresh as the last
+-- frame. Waiting for the crosshair to carry the block first makes the press the last step rather
+-- than a retry.
 expect(
   minecheck.waitFor(function()
     local hit = minecheck.getCrosshairBlock()
@@ -214,19 +213,41 @@ expect(
   "the crosshair reached the floor beside the hole (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
 )
 
--- One press of the use button is one attempt: the game samples the button as an edge, so a button
--- held down is *not* repeated and a refused attempt is simply lost. Press once per tick until the
--- block reads back instead — a tap is a released attempt, so the next one is independent.
+-- Use is a *held* input, not an edge: the game reads the use button while it is down, so a one-tick
+-- tap is only a real attempt if a tick's input pass happens to fall inside that tick — the same
+-- shape of race the jump above avoids by holding its key. Hold the button for a quarter second per
+-- attempt instead, which is several ticks of down state and several of the game's own repeats, and
+-- re-check the crosshair before each one: a press acts on the crosshair as it stands at that tick,
+-- so an attempt spent on a frame that raycast a different block places where this loop is not
+-- looking. A refusal then costs a tick rather than the attempt.
+local function crosshairOn(pos)
+  local hit = minecheck.getCrosshairBlock()
+  return hit ~= nil and hit.x == pos.x and hit.y == pos.y and hit.z == pos.z
+end
+local besideFloor = { x = target.x, y = target.y, z = target.z - 1 }
 local placedBlock = nil
-for attempt = 1, 40 do
+for attempt = 1, 20 do
   local b = minecheck.getBlock(placePos)
   if b ~= nil and b.id ~= "minecraft:air" then
     placedBlock = b
     break
   end
-  minecheck.mousePress(1)
+  minecheck.waitFor(function()
+    return crosshairOn(besideFloor)
+  end, 10)
+  minecheck.mouse(1, 0.25)
 end
-expect(placedBlock ~= nil, "right-click placed the block (40 attempts)")
+local restingAfterPlace = minecheck.getPlayer()
+expect(
+  placedBlock ~= nil,
+  "right-click placed the block (20 holds; crosshair on "
+    .. blockLabel(minecheck.getCrosshairBlock())
+    .. ", target cell "
+    .. blockLabel(placePos)
+    .. ", player at "
+    .. string.format("%.2f,%.2f,%.2f", restingAfterPlace.pos.x, restingAfterPlace.pos.y, restingAfterPlace.pos.z)
+    .. ")"
+)
 expect(
   placedBlock ~= nil and placedBlock.id == pickedBlock.id,
   "the placed block is the picked block (got " .. tostring(placedBlock and placedBlock.id) .. ")"
