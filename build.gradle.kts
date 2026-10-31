@@ -506,6 +506,9 @@ val reportScreenshotBaselines =
 
 val screenshotCompareDir = providers.gradleProperty("minecheck.screenshots.compareDir")
 
+// The mismatch manifest: report mode writes it, the determinism pass reads the classes it records.
+val screenshotManifest = providers.gradleProperty("minecheck.screenshots.manifest")
+
 // The captures the determinism pass compares: exactly the ones the first pass found divergent.
 val screenshotOnly = providers.gradleProperty("minecheck.screenshots.only")
 
@@ -576,6 +579,9 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
       compareDir.set(layout.dir(providers.provider { file(path) }))
     }
     screenshotOnly.orNull?.let { path -> only.set(layout.file(providers.provider { file(path) })) }
+    screenshotManifest.orNull?.let { path ->
+      manifestFile.set(layout.file(providers.provider { file(path) }))
+    }
   }
 }
 
