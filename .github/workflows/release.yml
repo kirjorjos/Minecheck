@@ -518,14 +518,18 @@ jobs:
         run: |
           set -euo pipefail
           # Abort everything on the first failure: versions are processed in the input order and a
-          # later version is not touched once one fails. A line whose main was just created has no
-          # PR to merge - its main already carries development's head.
-          # A version whose main this run created has no PR, and an empty field cannot survive the
-          # split: tab is IFS whitespace, so read collapses the run and the version lands in PR (it
-          # tried to merge "1.1.1"). The absent PR is a sentinel instead.
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr // "-")\t\(.version)"' <<<"$PLAN")
+          # later version is not touched once one fails. A version whose main this run created has
+          # no PR to merge - its main already carries development's head.
+          #
+          # Every row stays JSON and each field is read back with jq. Splitting a rendered line in
+          # the shell is what lost the absent PR (tab is IFS whitespace, so read collapsed the run
+          # and merged "1.1.1" instead) and what made a trailing newline decide whether an issue got
+          # closed. jq is on every runner, so nothing here needs to count fields or delimiters.
+          mapfile -t ROWS < <(jq -c '.[] | {mc, pr, version}' <<<"$PLAN")
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC PR VERSION <<<"$row"
+            MC="$(jq -r '.mc' <<<"$row")"
+            PR="$(jq -r '.pr // "-"' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
             if [[ "$PR" == "-" ]]; then
               echo "$MC/main was created from development - nothing to merge"
               continue
@@ -544,10 +548,11 @@ jobs:
           PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
           set -euo pipefail
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.version)"' <<<"$PLAN")
+          mapfile -t ROWS < <(jq -c '.[] | {mc, version}' <<<"$PLAN")
 
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC VERSION <<<"$row"
+            MC="$(jq -r '.mc' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
             git fetch --force --prune --tags origin
             DECLARED="$(git show "origin/$MC/main:build.gradle.kts" \
               | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' | head -1)"
@@ -558,7 +563,8 @@ jobs:
           done
 
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC VERSION <<<"$row"
+            MC="$(jq -r '.mc' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
             TAG="$MC/v$VERSION"
 
             echo "::group::Release $TAG"
@@ -623,7 +629,7 @@ jobs:
           REPO = os.environ["REPO"]
           MC = os.environ["MC"]
           VERSION = os.environ["VERSION"]
-          EDITED = "/tmp/edited.txt"
+          EDITED = "/tmp/edited.json"
           MARK = f"closed in `{MC}` by PR #"
           FIXED = f"minecheck-fixed-in:{MC}"
 
@@ -640,7 +646,7 @@ jobs:
           edited = set()
           if os.path.exists(EDITED):
               with open(EDITED, encoding="utf-8") as handle:
-                  edited = {int(line) for line in handle.read().split() if line.strip()}
+                  edited = {int(number) for number in json.load(handle)}
           for issue in issues:
               number = issue["number"]
               comments = json.loads(
@@ -665,7 +671,7 @@ jobs:
                   edited.add(number)
                   print(f"marked #{number} released in {VERSION}")
           with open(EDITED, "w", encoding="utf-8") as handle:
-              handle.write("\n".join(str(number) for number in sorted(edited)))
+              json.dump(sorted(edited), handle)
           PY
 
             echo "| $MC | $VERSION | $TAG | released |" >> "$GITHUB_STEP_SUMMARY"
@@ -680,14 +686,15 @@ jobs:
           set -euo pipefail
           # Runs only after every version succeeded: the step above aborts otherwise, so an issue is
           # never closed for a release that did not finish.
-          [[ -f /tmp/edited.txt ]] || { echo "No issue was marked released."; exit 0; }
-          while IFS= read -r number; do
+          [[ -f /tmp/edited.json ]] || { echo "No issue was marked released."; exit 0; }
+          mapfile -t NUMBERS < <(jq -r '.[]' /tmp/edited.json)
+          for number in "${NUMBERS[@]}"; do
             [[ -n "$number" ]] || continue
             jq -n --arg body "Closing: every affected Minecraft version this branch names has been released." \
               '{body: $body}' | gh api "repos/$REPO/issues/$number/comments" --input - >/dev/null
             gh api "repos/$REPO/issues/$number" -X PATCH -f state=closed >/dev/null
             echo "closed #$number"
-          done < /tmp/edited.txt
+          done
 
       # development is PR-only, so resetting the scratchpad needs a token that can bypass the
       # `Version development` ruleset: the CI App is the bypass actor. The reset lands on
