@@ -110,12 +110,19 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `screenshotGuiScale` | int | `2` | GUI scale the HUD is laid out at, 1–4. Pinned rather than auto, so HUD geometry does not depend on the window. |
 | `screenshotScale` | number | `1.0` | Encode-time downscale for smaller artifacts, `0.25`–`1.0`. Part of a baseline's identity. |
 | `screenshotChatVisible` | boolean | `false` | Whether chat may appear in a capture. See [the capture profile](#the-capture-profile-why-a-shot-is-reproducible). |
+| `viewWindow` | boolean | `false` | Show the client in a view-only window (a "video feed" of a run whose game window nobody can see). Never required, and never fatal: a headless JVM logs why and runs without it. |
+| `restoreVanillaCamera` | boolean | `false` | Leave the camera and render path completely untouched — no render-delta pin, no capture readback. Scripting keeps working; every `captureScreenshot` fails. |
 
 The mod also accepts a JVM system property `-Dminecheck.script=<name>` to override the entry script at launch time. It wins over whatever the file names — `script` or `coordinator` — and it works on a config that names neither, so a one-off run needs no edit to `config.json`. The name is resolved against the same `minecheck/scripts` directory; a name with no matching file starts nothing.
 
 A missing field, and an explicit JSON `null`, both mean "use the default". A file that is not a JSON object, or whose fields have the wrong type (e.g. `"defaultTimeout": "sixty"`), is an error that names the file and the field and **leaves the file alone** — it is not silently replaced by the defaults, because the defaults run no script at all and the resulting "wrote no run-result.json" hides the real cause. Delete the file to regenerate the template.
 
 A `defaultTimeout` the field cannot hold is reported the same way rather than being altered: it must be a **whole number that fits in a 32-bit int**, so `0.5`, `3.9`, `2147483648` and `9223372036854775807` are all errors naming the field and quoting the value. `0` and a negative number *are* accepted — both are representable, and both mean every wait expires at once (a `timeout` argument at the call site still overrides it).
+
+Two fields are about the client the run drives rather than about a script, and both default off:
+
+- **`viewWindow`** opens a window that shows the client's frames — a video feed of a run whose game window nobody can see. It is **view only**: it installs no mouse listener and never grabs the pointer, so clicking it does nothing, and the keys typed into it are dispatched through Minecheck's own virtual keyboard. `F2` there writes a screenshot and `F3` opens the debug screen exactly like pressing them in the game. A headless JVM, or a machine with no display at all, logs why and runs without it: turning it on can never break a headless run.
+- **`restoreVanillaCamera`** leaves the camera and the render path completely untouched, for a setup where another mod core-mods the camera or the renderer and conflicts with Minecheck's injections. World entry, input, commands and assertions all keep working; every capture fails with the sentence in [the capture errors](#capture-errors) table, and `-Pminecheck.screenshots.update=true` fails too — a mode that cannot produce pixels must never write baselines.
 
 ---
 
@@ -643,6 +650,7 @@ Every failure is a Lua error naming the action:
 |-----------|---------|
 | A dedicated server calls it | `client-only function called on dedicated server` |
 | No framebuffer | `captureScreenshot: no client framebuffer — is the client in a world?` |
+| Vanilla camera restored | `captureScreenshot: screenshots are unavailable: the vanilla camera is in effect (restoreVanillaCamera = true)` |
 | Duplicate name in one run | `captureScreenshot: "world-settled" was already captured in this run` |
 | Bad name | `captureScreenshot: invalid capture name "a/b"` |
 | Bad region | `captureScreenshot: region needs numeric x, y, w, h` / `… has no overlap with the 854x480 frame` |

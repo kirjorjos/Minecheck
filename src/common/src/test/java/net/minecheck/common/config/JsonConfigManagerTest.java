@@ -113,6 +113,28 @@ class JsonConfigManagerTest {
     assertEquals("phase.lua", manager().load().entryScript());
   }
 
+  /**
+   * Both client switches are off unless the file asks for them, and a switch is a boolean: {@code
+   * "yes"} is not one, and is reported by name like every other wrong type.
+   */
+  @Test
+  void theClientSwitchesDefaultOffAndComeFromTheFile() throws Exception {
+    ConfigData defaults = manager().load();
+    assertFalse(defaults.viewWindow(), "a view window is opt-in");
+    assertFalse(defaults.restoreVanillaCamera(), "the vanilla camera is restored only on request");
+
+    writeConfig("{\"viewWindow\": true, \"restoreVanillaCamera\": true}");
+    ConfigData both = manager().load();
+    assertTrue(both.viewWindow());
+    assertTrue(both.restoreVanillaCamera());
+
+    writeConfig("{\"restoreVanillaCamera\": \"yes\"}");
+    IOException thrown = assertThrows(IOException.class, () -> manager().load());
+    assertTrue(
+        thrown.getMessage().contains("restoreVanillaCamera"),
+        "the error must name the field, got: " + thrown.getMessage());
+  }
+
   @Test
   void exitOnFailIsOptOutAndCaseInsensitive() throws Exception {
     writeConfig("{\"failMode\": \"exit\"}");
