@@ -64,6 +64,21 @@ public final class MinecheckBootstrap {
         return null;
       }
 
+      // Run-level client switches, read once before the engine starts so nothing in a tick can
+      // disagree with the config the run was given.
+      if (services.client() != null) {
+        services.client().setVanillaCameraRestored(config.restoreVanillaCamera());
+        if (config.viewWindow()) {
+          net.minecheck.platform.api.ViewWindow window =
+              net.minecheck.platform.api.ViewWindow.open(
+                  String.format("Minecheck — %s", services.minecraftVersion()),
+                  services.client()::virtualKey);
+          if (window != null) {
+            services.client().setViewWindow(window);
+          }
+        }
+      }
+
       // Discover other mods' script actions/wait conditions once per engine (see MinecheckPlugin).
       // Logged even when the count is 0: that line is what tells a plugin author whether their
       // ServiceLoader provider file was seen at all.

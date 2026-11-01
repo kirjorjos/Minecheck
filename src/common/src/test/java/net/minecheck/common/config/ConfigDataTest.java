@@ -29,6 +29,10 @@ class ConfigDataTest {
     assertEquals("exit", defaults.failMode());
     assertEquals(30, defaults.defaultTimeout());
 
+    assertFalse(defaults.viewWindow(), "the view window is opt-in");
+    assertFalse(
+        defaults.restoreVanillaCamera(), "the camera/render path is Minecheck's by default");
+
     assertFalse(defaults.isCoordinator());
     assertEquals("", defaults.entryScript());
     assertTrue(defaults.exitOnFail(), "the default is to stop on failure");

@@ -368,6 +368,56 @@ public interface ClientPlatform {
   default void pinRenderTickDelta() {}
 
   /**
+   * The sentence every capture fails with while {@code restoreVanillaCamera} is on. One constant so
+   * the loaders, the Lua error and the docs cannot drift apart.
+   */
+  String SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA =
+      "screenshots are unavailable: the vanilla camera is in effect (restoreVanillaCamera = true)";
+
+  /**
+   * Tell the platform whether the run asked for the vanilla camera ({@code restoreVanillaCamera}),
+   * read once from the config before the engine starts.
+   *
+   * <p>When {@code restored} is true the client is left exactly as a player without Minecheck would
+   * have it: {@link #pinRenderTickDelta()} becomes a no-op and {@link
+   * #requestScreenshot(ScreenshotRequest)} fails every request with {@link
+   * #SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA} instead of reading a frame. Everything else — world
+   * entry, input, commands, assertions — is unaffected. The switch exists for a setup where another
+   * mod core-mods the camera or the renderer and conflicts with Minecheck's injections; it turns a
+   * crash into a configuration choice.
+   *
+   * <p>Called before any script action can run, so a platform may cache it.
+   */
+  default void setVanillaCameraRestored(boolean restored) {}
+
+  /**
+   * Attach the run's view-only window (see {@link ViewWindow}) — {@code viewWindow} was on and one
+   * was opened. The platform pushes frames to it from {@link #pumpViewWindow()} and routes its keys
+   * to {@link #virtualKey(int, boolean)}; a window is never required for a run to work.
+   */
+  default void setViewWindow(ViewWindow window) {}
+
+  /**
+   * Push the client's latest frame to the attached view window, if there is one. Called once per
+   * client tick from the loader entrypoint, next to {@link #pinRenderTickDelta()}.
+   *
+   * <p>Must be cheap when nothing is attached (a field read) and must never throw: a frame for a
+   * human to watch cannot be allowed to fail a run. Implementations read at a reduced rate and
+   * simply skip ticks — the window shows the newest frame it was given.
+   */
+  default void pumpViewWindow() {}
+
+  /**
+   * Dispatch a key typed into the view window, as {@link ViewWindow.KeySink} defines it: {@code
+   * glfwKey} is a GLFW key code, {@code down} a press or a release.
+   *
+   * <p>The platform sends it through its own virtual keyboard — the path a {@code press} action
+   * takes — and marks it with {@link InjectedInput}, so the window is an input surface of the
+   * harness rather than a second, unmarked source of input. Called from the AWT event thread.
+   */
+  default void virtualKey(int glfwKey, boolean down) {}
+
+  /**
    * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on
    * the render thread, hands the pixels to its PNG encoder, resolves the output path against the
    * run directory ({@code <run>/screenshots/<name>.png}) and reports progress through the request's

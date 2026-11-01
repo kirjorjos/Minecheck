@@ -90,6 +90,127 @@ public class YarnClientPlatform implements ClientPlatform {
   /** GL_RENDERER of the client, recorded in profile.json so renderer drift is diagnosable. */
   private static volatile String screenshotRenderer;
 
+  /** Set while {@code restoreVanillaCamera} is in effect: no render-path work, and no captures. */
+  private volatile boolean vanillaCameraRestored;
+
+  /** The view-only window the run asked for, or {@code null} (see {@link #pumpViewWindow()}). */
+  private volatile net.minecheck.platform.api.ViewWindow viewWindow;
+
+  /** Client ticks between frames pushed to the view window (~10 fps at 20 ticks a second). */
+  private static final int VIEW_WINDOW_TICK_INTERVAL = 2;
+
+  private int viewWindowTicks;
+
+  @Override
+  public void setVanillaCameraRestored(boolean restored) {
+    vanillaCameraRestored = restored;
+    if (restored) {
+      LOG.warning(
+          "Minecheck: restoreVanillaCamera is on — the camera/render path is left untouched and"
+              + " every capture fails: "
+              + ClientPlatform.SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
+    }
+  }
+
+  @Override
+  public void setViewWindow(net.minecheck.platform.api.ViewWindow window) {
+    viewWindow = window;
+  }
+
+  /**
+   * Pushes the client's latest frame to the view window, if the run opened one.
+   *
+   * <p>Read on every second tick rather than every tick: a {@code glReadPixels} is a pipeline
+   * stall, and a feed a human is watching does not need twenty frames a second. A run without a
+   * window never gets past the null check, so the option costs nothing when it is off.
+   */
+  @Override
+  public void pumpViewWindow() {
+    net.minecheck.platform.api.ViewWindow window = viewWindow;
+    if (window == null || !window.visible()) {
+      return;
+    }
+    if (viewWindowTicks++ % VIEW_WINDOW_TICK_INTERVAL != 0) {
+      return;
+    }
+    net.minecraft.client.gl.Framebuffer framebuffer = mc().getFramebuffer();
+    if (framebuffer == null || framebuffer.textureWidth <= 0 || framebuffer.textureHeight <= 0) {
+      return;
+    }
+    try {
+      window.offerFrame(
+          readViewFrame(framebuffer.fbo, framebuffer.textureWidth, framebuffer.textureHeight),
+          framebuffer.textureWidth,
+          framebuffer.textureHeight);
+    } catch (RuntimeException e) {
+      LOG.log(Level.WARNING, "Minecheck: could not read a frame for the view window", e);
+      window.close();
+      viewWindow = null;
+    }
+  }
+
+  /**
+   * Reads {@code fbo} into ARGB pixels, top row first.
+   *
+   * <p>Its own readback rather than {@code ScreenshotRecorder}: a capture has to be byte-exact and
+   * goes through the profile's own path, while a live frame only has to look right — and reading
+   * {@code GL_RGBA} here leaves no question about the channel order a {@code NativeImage} uses
+   * internally.
+   */
+  private static int[] readViewFrame(int fbo, int width, int height) {
+    java.nio.ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(width * height * 4);
+    int previous = org.lwjgl.opengl.GL30.glGetInteger(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_BINDING);
+    org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, fbo);
+    try {
+      org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_PACK_ALIGNMENT, 1);
+      org.lwjgl.opengl.GL11.glReadPixels(
+          0,
+          0,
+          width,
+          height,
+          org.lwjgl.opengl.GL11.GL_RGBA,
+          org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE,
+          buffer);
+    } finally {
+      org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, previous);
+    }
+    int[] argb = new int[width * height];
+    for (int row = 0; row < height; row++) {
+      int from = (height - 1 - row) * width * 4; // GL's origin is the bottom-left
+      int to = row * width;
+      for (int column = 0; column < width; column++) {
+        int pixel = from + column * 4;
+        argb[to + column] =
+            (buffer.get(pixel + 3) & 0xFF) << 24
+                | (buffer.get(pixel) & 0xFF) << 16
+                | (buffer.get(pixel + 1) & 0xFF) << 8
+                | (buffer.get(pixel + 2) & 0xFF);
+      }
+    }
+    return argb;
+  }
+
+  /**
+   * Dispatches a key typed into the view window through vanilla's keyboard handler — the same path
+   * {@code press()} takes, so the window is a virtual keyboard rather than a second input source.
+   * Marked with {@link net.minecheck.platform.api.InjectedInput} for the same reason every
+   * synthetic key is: a mod that owns the human's physical keys must be able to ignore it.
+   */
+  @Override
+  public void virtualKey(int glfwKey, boolean down) {
+    onClientThread(
+        () ->
+            net.minecheck.platform.api.InjectedInput.run(
+                () ->
+                    mc().keyboard
+                        .onKey(
+                            mc().getWindow().getHandle(),
+                            glfwKey,
+                            0,
+                            down ? GLFW_PRESS : GLFW_RELEASE,
+                            0)));
+  }
+
   /**
    * Points the client's clock back at the integrated server's. See {@link
    * ClientPlatform#pinClientClock()} for why the drift is invisible live but not in a capture.
@@ -137,6 +258,9 @@ public class YarnClientPlatform implements ClientPlatform {
    */
   @Override
   public void pinRenderTickDelta() {
+    if (vanillaCameraRestored) {
+      return;
+    }
     if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
       return;
     }
@@ -216,6 +340,12 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+    if (vanillaCameraRestored) {
+      // Nothing in the render path was touched, so there is no picture to compare against a
+      // baseline. Say so instead of capturing whatever the client happens to be drawing.
+      request.fail(SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
+      return;
+    }
     onClientThread(() -> captureScreenshot(request));
   }
 
@@ -678,7 +808,10 @@ public class YarnClientPlatform implements ClientPlatform {
     boolean scancode = key.getCategory() == InputUtil.Type.SCANCODE;
     int code = scancode ? -1 : key.getCode();
     int scan = scancode ? key.getCode() : 0;
-    onClientThread(() -> keyboard.onKey(handle, code, scan, action, 0));
+    onClientThread(
+        () ->
+            net.minecheck.platform.api.InjectedInput.run(
+                () -> keyboard.onKey(handle, code, scan, action, 0)));
   }
 
   @Override
@@ -713,7 +846,12 @@ public class YarnClientPlatform implements ClientPlatform {
                 Mouse.class.getDeclaredMethod(
                     "onMouseButton", long.class, int.class, int.class, int.class);
             m.setAccessible(true);
-            m.invoke(mouse, handle, button, action, 0);
+            net.minecheck.platform.api.InjectedInput.begin();
+            try {
+              m.invoke(mouse, handle, button, action, 0);
+            } finally {
+              net.minecheck.platform.api.InjectedInput.end();
+            }
           } catch (ReflectiveOperationException e) {
             LOG.log(Level.SEVERE, String.format("mouse: failed to dispatch button %s", button), e);
           }
