@@ -622,6 +622,7 @@ jobs:
           VERSION = os.environ["VERSION"]
           EDITED = "/tmp/edited.txt"
           MARK = f"closed in `{MC}` by PR #"
+          FIXED = f"minecheck-fixed-in:{MC}"
 
 
           def gh(*args):
@@ -644,7 +645,11 @@ jobs:
               )
               for comment in comments:
                   body = comment.get("body") or ""
-                  if MARK not in body or f"closed in release `{VERSION}`" in body:
+                  # Two workflows record that work merged into <mc>: the post-merge chore writes
+                  # "closed in `<mc>` by PR #n", and PR validation writes
+                  # "<!-- minecheck-fixed-in:<mc> -->". Either is something a release can close
+                  # from, so an issue whose chore comment failed is not stranded open.
+                  if (MARK not in body and FIXED not in body) or f"closed in release `{VERSION}`" in body:
                       continue
                   updated = body + f"\n\nclosed in release `{VERSION}`"
                   with open("/tmp/comment.json", "w", encoding="utf-8") as handle:
