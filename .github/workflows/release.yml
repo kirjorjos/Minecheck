@@ -76,6 +76,7 @@ jobs:
           import re
           import subprocess
           import sys
+          import time
 
           REPO = os.environ["REPO"]
           RAW = os.environ["VERSIONS_RAW"]
@@ -161,6 +162,48 @@ jobs:
           def head_sha(branch):
               result = run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], check=False)
               return result.stdout.split()[0] if result.stdout.strip() else None
+
+
+          CHORE_WORKFLOW = "post-merge-screenshot-sync.yml"
+
+
+          def active_chore(mc):
+              runs = json.loads(
+                  gh(
+                      "run", "list", "--repo", REPO, "--workflow", CHORE_WORKFLOW,
+                      "--branch", f"{mc}/development", "--limit", "20",
+                      "--json", "databaseId,status,conclusion,url",
+                  ).stdout
+              )
+              return [run for run in runs if run["status"] != "completed"]
+
+
+          def wait_for_chore(mc, timeout_minutes=60):
+              # The post-merge chore is the only other writer on <mc>/development, and it writes the
+              # "closed in `<mc>` by PR #" comment the issue step below looks for. Reading the
+              # version, bumping it or promoting it while the chore runs would race its commit (the
+              # contents API write fails against a stale sha) or promote a tree it is about to
+              # change, so a version's work waits for it to finish first.
+              deadline = time.monotonic() + timeout_minutes * 60
+              announced = set()
+              while True:
+                  running = active_chore(mc)
+                  if not running:
+                      return True
+                  for run in running:
+                      if run["databaseId"] not in announced:
+                          announced.add(run["databaseId"])
+                          print(
+                              f"::notice::waiting for the post-merge chore on {mc}/development "
+                              f"(run {run['databaseId']}, {run['status']}): {run['url']}"
+                          )
+                  if time.monotonic() >= deadline:
+                      print(
+                          f"::error::the post-merge chore on {mc}/development was still running "
+                          f"after {timeout_minutes} minutes"
+                      )
+                      return False
+                  time.sleep(15)
 
 
           def project_version(ref):
@@ -306,6 +349,10 @@ jobs:
                   if not branch_exists(dev):
                       print(f"::notice::{dev} does not exist - skipping this version")
                       rows.append({"mc": mc, "status": "skipped: no development branch"})
+                      continue
+                  if not wait_for_chore(mc):
+                      errors.append(f"{dev}: the post-merge chore did not finish in 60 minutes")
+                      rows.append({"mc": mc, "status": "blocked: chore still running"})
                       continue
                   main_exists = branch_exists(f"{mc}/main")
                   current = project_version(dev)
