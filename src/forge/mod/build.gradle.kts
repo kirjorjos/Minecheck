@@ -67,7 +67,9 @@ dependencies {
 
 tasks.shadowJar {
   configurations = listOf(project.configurations.runtimeClasspath.get())
-  archiveClassifier.set("")
+  // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
+  // and writing mixins, never loaded by a game.
+  archiveClassifier.set("deobf")
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
@@ -104,7 +106,24 @@ tasks.named("jar") {
   enabled = false
 }
 
-tasks.named("assemble") { dependsOn(tasks.named("shadowJar")) }
+// The published jar has to be in the loader's *production* namespace. A Forge jar built against
+// Mojang names loads fine in the Gradle plugin's dev runtime and dies on a real client's first tick
+// with `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'` (issue #23), because production
+// Forge resolves members by SRG name. unimined's own remap task targets the plain `jar`, which this
+// module disables because the shadowJar is the mod, so the remap is registered against the shadow
+// jar instead: shadow -> remap -> the one jar this loader ships.
+val minecraftConfig =
+  extensions
+    .getByType(xyz.wagyourtail.unimined.api.UniminedExtension::class.java)
+    .minecrafts[sourceSets.main.get()]
+    ?: error("unimined registered no minecraft config for the main source set")
+
+val productionJar =
+  minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
+    asJar { archiveClassifier.set("") }
+  }
+
+tasks.named("assemble") { dependsOn(productionJar) }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
 

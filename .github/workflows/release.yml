@@ -607,11 +607,13 @@ jobs:
           print("\n".join(lines[index:]).strip())
           PY
 
-            find build/artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-production.jar' -print0 \
+            # Both jars per loader are attached on purpose: the remapped jar is the mod, and its
+            # `-deobf` twin is the same code in development names, for reading stack traces.
+            find build/artifacts -maxdepth 1 -type f -name '*.jar' -print0 \
               | sort -z | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
             mapfile -t ASSETS < <(
               find build/artifacts -maxdepth 1 -type f \
-                \( -name '*.jar' ! -name '*-production.jar' -o -name 'SHA256SUMS.txt' \) -print
+                \( -name '*.jar' -o -name 'SHA256SUMS.txt' \) -print
             )
             if (( ${#ASSETS[@]} == 0 )); then
               echo "::error::no release artifacts found in build/artifacts"
