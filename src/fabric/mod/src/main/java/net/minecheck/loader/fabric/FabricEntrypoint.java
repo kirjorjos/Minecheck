@@ -118,6 +118,7 @@ public class FabricEntrypoint implements ModInitializer {
                 c -> {
                   client.pinClientClock();
                   client.pinRenderTickDelta();
+                  client.pumpViewWindow();
                   if (!engine.isFinished() && client.isBootComplete()) {
                     engine.tick();
                   }

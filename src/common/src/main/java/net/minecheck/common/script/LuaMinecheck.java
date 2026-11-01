@@ -2767,6 +2767,8 @@ public final class LuaMinecheck {
       t.set("screenshotGuiScale", config.screenshotGuiScale());
       t.set("screenshotScale", config.screenshotScale());
       t.set("screenshotChatVisible", LuaValue.valueOf(config.screenshotChatVisible()));
+      t.set("viewWindow", LuaValue.valueOf(config.viewWindow()));
+      t.set("restoreVanillaCamera", LuaValue.valueOf(config.restoreVanillaCamera()));
       return t;
     }
   }
