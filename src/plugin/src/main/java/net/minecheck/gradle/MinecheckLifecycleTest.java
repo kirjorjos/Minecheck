@@ -146,6 +146,37 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<String> getLevelSeed();
 
+  /**
+   * Directory holding one already-generated copy of the server's world, reused instead of
+   * regenerating the same seeded world for every suite.
+   *
+   * <p>Every dedicated-server suite pins the same {@code levelSeed} and {@code worldName} and the
+   * staging step deletes the level first, so each of them used to pay for the full spawn-region
+   * prep (measured 57-72 s on the CI runners) to rebuild a world identical to the one the previous
+   * suite had just built and thrown away — about a quarter of a loader's CI job.
+   *
+   * <p>The first suite that needs it launches one dedicated server with {@link
+   * #getServerWorldScript()} and copies the level that run leaves behind into this directory; every
+   * later suite copies that pristine copy into its own run dir. Copying is what keeps the suites
+   * honest: a suite that started from a world <em>another suite had played in</em> would begin with
+   * leftover blocks and entities, so the template is only ever produced by a server that ran no
+   * test script.
+   *
+   * <p>Unset means {@code <build dir>/minecheck/server-world-template/<world>}. Set it to a blank
+   * string to switch reuse off and let every suite generate its own world again.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getServerWorldTemplate();
+
+  /**
+   * Lua script the template-generating server runs. It must stop the server as soon as the world is
+   * up: that run exists for the world it leaves behind, not for anything it asserts.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getServerWorldScript();
+
   /** Whether to prepend {@code xvfb-run -a} (headless no-display environments). */
   @Input
   @Optional
@@ -541,7 +572,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     deleteRecursively(setup);
     // A dedicated server keeps its level at `<run dir>/<level-name>`, not under `saves/` (that is
     // the singleplayer layout), so the setup dir mirrors the server's run dir, not the client's.
-    Path target = setup.resolve(world());
+    copyWorld(source, setup.resolve(world()));
+    getLogger().lifecycle("Minecheck: staged the client-generated world {} into {}", source, setup);
+    return setup;
+  }
+
+  /**
+   * Copies a world tree, skipping {@code session.lock}: it is the lock file of whichever server had
+   * the world open, meaningless (and actively misleading) in another run dir. Everything else,
+   * {@code level.dat} first among them, is what makes it the same world.
+   */
+  private static void copyWorld(Path source, Path target) throws IOException {
     try (var stream = Files.walk(source)) {
       for (Iterator<Path> it = stream.iterator(); it.hasNext(); ) {
         Path p = it.next();
@@ -557,8 +598,84 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
         }
       }
     }
-    getLogger().lifecycle("Minecheck: staged the client-generated world {} into {}", source, setup);
-    return setup;
+  }
+
+  /** The directory holding the shared server world, or {@code null} when reuse is switched off. */
+  private Path serverWorldTemplate() {
+    String configured = getServerWorldTemplate().getOrNull();
+    if (configured != null && configured.isBlank()) {
+      return null;
+    }
+    if (configured != null) {
+      return Path.of(configured);
+    }
+    return getProject()
+        .getLayout()
+        .getBuildDirectory()
+        .dir("minecheck/server-world-template")
+        .get()
+        .getAsFile()
+        .toPath()
+        .resolve(world());
+  }
+
+  private String serverWorldScript() {
+    return getServerWorldScript().getOrElse("server-generate-world.lua");
+  }
+
+  /**
+   * Generates the shared world once, with a server that runs no test script, and copies the level
+   * it leaves behind into {@code template}.
+   */
+  private void generateServerWorldTemplate(Path template) throws IOException {
+    Path serverRunDir = Path.of(getServerRunDir().get());
+    Path serverResult = serverRunDir.resolve("config/minecheck/run-result.json");
+    String script = serverWorldScript();
+
+    Files.createDirectories(serverRunDir);
+    deleteRecursively(serverRunDir.resolve(world()));
+    Files.writeString(serverRunDir.resolve("eula.txt"), "eula=true\n");
+    Files.writeString(serverRunDir.resolve("server.properties"), serverProperties());
+    stage(serverRunDir.resolve("config/minecheck"), script, false);
+
+    Files.deleteIfExists(serverResult);
+    getLogger()
+        .lifecycle(
+            "Minecheck: [server] generating the shared world once (script={}) -> {}",
+            script,
+            template);
+    long started = System.currentTimeMillis();
+    Process server =
+        start(
+            launcherBuilder(
+                getServerLoaderTask().get(),
+                List.of(),
+                descriptorPath(getServerLaunchFile()),
+                false),
+            "server-generate");
+    RunResultDto verdict = awaitVerdict(serverResult, Duration.ofMinutes(20), server);
+    int exit = waitExit(server, Duration.ofSeconds(60));
+    // Never the suite's `expectFailure` inversion: this run has to succeed on its own terms.
+    RunVerdict outcome = RunVerdict.of(verdict, false);
+    if (outcome.isFailure()) {
+      throw new GradleException(
+          "Minecheck: generating the shared server world FAILED: " + outcome.detail());
+    }
+    requireCleanExit(exit, "server generate");
+
+    Path generated = serverRunDir.resolve(world());
+    if (!Files.isRegularFile(generated.resolve("level.dat"))) {
+      throw new GradleException(
+          "Minecheck: the world generator server left no world at " + generated);
+    }
+    deleteRecursively(template);
+    Files.createDirectories(template.getParent());
+    copyWorld(generated, template);
+    getLogger()
+        .lifecycle(
+            "Minecheck: generated the shared world once in {}s -> {}",
+            (System.currentTimeMillis() - started) / 1000,
+            template);
   }
 
   /**
@@ -573,12 +690,24 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path serverResult = serverRunDir.resolve("config/minecheck/run-result.json");
     String serverScript = getServerScript().get();
 
+    // A handoff run boots a world the client generated, so it has nothing to reuse.
+    Path template = serverSetupDir == null ? serverWorldTemplate() : null;
     try {
       Files.createDirectories(serverRunDir);
+      if (template != null && !Files.isRegularFile(template.resolve("level.dat"))) {
+        generateServerWorldTemplate(template);
+      }
       deleteRecursively(serverRunDir.resolve(world()));
       Files.writeString(serverRunDir.resolve("eula.txt"), "eula=true\n");
       Files.writeString(serverRunDir.resolve("server.properties"), serverProperties());
       stage(serverRunDir.resolve("config/minecheck"), serverScript, false);
+      if (template != null) {
+        copyWorld(template, serverRunDir.resolve(world()));
+        getLogger()
+            .lifecycle(
+                "Minecheck: [server] reusing the generated world {} instead of regenerating it",
+                template);
+      }
     } catch (IOException e) {
       throw new GradleException("Minecheck: failed to stage the server run dir", e);
     }
