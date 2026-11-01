@@ -111,6 +111,25 @@ public final class ScreenshotBaselines {
   public static Result compare(
       String loader, Path capturesDir, Path activeDir, boolean update, Set<String> only)
       throws IOException {
+    return compare(loader, capturesDir, activeDir, update, only, java.util.Map.of());
+  }
+
+  /**
+   * As {@link #compare(String, Path, Path, boolean, Set)}, with the mismatch classes the first pass
+   * recorded, keyed by {@code <loader>/<file>.png}.
+   *
+   * <p>The determinism pass needs them: an <b>addition</b> or <b>change</b> must be captured again
+   * and reproduce byte for byte, while a <b>deletion</b> is the opposite claim — the suite must not
+   * produce it at all. Without the classes a deletion looks exactly like a capture that vanished.
+   */
+  public static Result compare(
+      String loader,
+      Path capturesDir,
+      Path activeDir,
+      boolean update,
+      Set<String> only,
+      java.util.Map<String, String> classes)
+      throws IOException {
     List<String> failures = new ArrayList<>();
     List<String> written = new ArrayList<>();
     List<String> matched = new ArrayList<>();
@@ -144,6 +163,14 @@ public final class ScreenshotBaselines {
       String label = loader + "/" + fileName;
       if (!named.isEmpty() && !named.contains(label)) {
         filtered.add(label);
+        continue;
+      }
+      if ("deletion".equals(classes.get(label))) {
+        failures.add(
+            "deletion generated: "
+                + label
+                + " — the first pass had no capture for this baseline, so the rerun must not"
+                + " produce one");
         continue;
       }
       Path baseline = activeDir.resolve(fileName);
@@ -236,7 +263,8 @@ public final class ScreenshotBaselines {
         continue;
       }
       String fileName = label.substring(prefix.length());
-      if (!captureNames.contains(fileName.substring(0, fileName.length() - 4))) {
+      if (!captureNames.contains(fileName.substring(0, fileName.length() - 4))
+          && !"deletion".equals(classes.get(label))) {
         failures.add(
             "no capture named "
                 + label

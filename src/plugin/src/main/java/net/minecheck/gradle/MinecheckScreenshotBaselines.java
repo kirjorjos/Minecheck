@@ -98,6 +98,17 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
   public abstract RegularFileProperty getReportFile();
 
   /**
+   * The mismatch manifest: one JSON object per line, {@code {"path":"tests/baselines/…",
+   * "class":"addition"|"change"|"deletion"}}.
+   *
+   * <p>Report mode writes it; the determinism pass reads it. The classes are what make the second
+   * pass a verdict: an addition or change must reproduce byte for byte, a deletion must stay
+   * absent. Without it a deletion is indistinguishable from a capture that vanished.
+   */
+  @Internal
+  public abstract RegularFileProperty getManifestFile();
+
+  /**
    * When set, a file naming the captures to compare — one {@code tests/baselines/<loader>/<file>}
    * or {@code <loader>/<file>} per line. Anything else the run captured is counted but ignored.
    *
@@ -148,9 +159,11 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
                     ? ""
                     : " (only the " + only.size() + " capture(s) the first pass named)");
 
+    java.util.Map<String, String> classes = readManifest();
+
     ScreenshotBaselines.Result result;
     try {
-      result = ScreenshotBaselines.compare(loader, captures, active, update, only);
+      result = ScreenshotBaselines.compare(loader, captures, active, update, only, classes);
     } catch (IOException e) {
       throw new GradleException("Minecheck: could not compare the " + loader + " screenshots", e);
     }
@@ -202,6 +215,7 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
                 loader,
                 REPORT_HINT);
         writeReport(result.failures(), active);
+        writeManifest(result, active);
       } else {
         throw new GradleException(message);
       }
@@ -281,6 +295,85 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
         throw new GradleException("Minecheck: could not write the screenshot report " + file, e);
       }
     }
+  }
+
+  /**
+   * Writes the mismatch classes the determinism pass reads: one JSON line per mismatch, {@code
+   * tests/baselines/<loader>/<file>.png} plus {@code addition}, {@code change} or {@code deletion}.
+   *
+   * <p>A missing baseline is an addition, a differing picture is a change, and a baseline no
+   * capture produced is a deletion. The three are deliberately kept apart: the rerun's verdict
+   * depends on which one it is looking at.
+   */
+  private void writeManifest(ScreenshotBaselines.Result result, Path active) {
+    if (!getManifestFile().isPresent()) {
+      return;
+    }
+    Path file = getManifestFile().get().getAsFile().toPath();
+    java.util.Map<String, String> kinds = new java.util.TreeMap<>();
+    for (String failure : result.failures()) {
+      boolean addition = failure.startsWith("no baseline for ");
+      for (String path : divergedBaselines(List.of(failure))) {
+        kinds.put(path, addition ? "addition" : "change");
+      }
+    }
+    if (kinds.isEmpty()
+        && result.failures().stream().anyMatch(f -> f.startsWith("capture profile changed"))) {
+      for (String path : allBaselines(active)) {
+        kinds.put(path, "change");
+      }
+    }
+    for (String unused : result.unused()) {
+      kinds.put("tests/baselines/" + unused, "deletion");
+    }
+    List<String> lines = new ArrayList<>();
+    for (java.util.Map.Entry<String, String> entry : kinds.entrySet()) {
+      lines.add("{\"path\":\"" + entry.getKey() + "\",\"class\":\"" + entry.getValue() + "\"}");
+    }
+    try {
+      Files.createDirectories(file.getParent());
+      Files.write(file, lines);
+    } catch (IOException e) {
+      throw new GradleException("Minecheck: could not write the screenshot manifest " + file, e);
+    }
+  }
+
+  /**
+   * The classes a previous pass recorded, keyed by {@code <loader>/<file>.png}. Absent or
+   * unreadable manifest ⇒ empty, which makes the pass behave like a plain comparison.
+   */
+  private java.util.Map<String, String> readManifest() {
+    if (!getManifestFile().isPresent()) {
+      return java.util.Map.of();
+    }
+    Path file = getManifestFile().get().getAsFile().toPath();
+    if (!Files.isRegularFile(file)) {
+      return java.util.Map.of();
+    }
+    java.util.Map<String, String> classes = new java.util.HashMap<>();
+    java.util.regex.Pattern pathPattern =
+        java.util.regex.Pattern.compile("\"path\"\\s*:\\s*\"([^\"]+)\"");
+    java.util.regex.Pattern classPattern =
+        java.util.regex.Pattern.compile("\"class\"\\s*:\\s*\"([^\"]+)\"");
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new GradleException("Minecheck: could not read the screenshot manifest " + file, e);
+    }
+    for (String line : lines) {
+      java.util.regex.Matcher path = pathPattern.matcher(line);
+      java.util.regex.Matcher kind = classPattern.matcher(line);
+      if (!path.find() || !kind.find()) {
+        continue;
+      }
+      String label = path.group(1);
+      if (label.startsWith("tests/baselines/")) {
+        label = label.substring("tests/baselines/".length());
+      }
+      classes.put(label, kind.group(1));
+    }
+    return classes;
   }
 
   /** Every {@code tests/baselines/<loader>/<png>} in a baseline directory, sorted. */
