@@ -50,7 +50,9 @@ dependencies {
 tasks.shadowJar {
   dependsOn(project(":fabric-mod").tasks.named("classes"))
   configurations = listOf(project.configurations.runtimeClasspath.get())
-  archiveClassifier.set("")
+  // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
+  // and writing mixins, never loaded by a game.
+  archiveClassifier.set("deobf")
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
@@ -68,7 +70,22 @@ tasks.named("jar") {
   enabled = false
 }
 
-tasks.named("assemble") { dependsOn(tasks.named("shadowJar")) }
+// The published jar has to be in the loader's *production* namespace (intermediary for Quilt), for
+// the same reason as Fabric: a jar built against Yarn names loads in the dev runtime and dies in a
+// production instance (issue #23). The remap is registered against the shadow jar because this
+// module disables the plain `jar`: shadow -> remap -> the one jar this loader ships.
+val minecraftConfig =
+  extensions
+    .getByType(xyz.wagyourtail.unimined.api.UniminedExtension::class.java)
+    .minecrafts[sourceSets.main.get()]
+    ?: error("unimined registered no minecraft config for the main source set")
+
+val productionJar =
+  minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
+    asJar { archiveClassifier.set("") }
+  }
+
+tasks.named("assemble") { dependsOn(productionJar) }
 
 tasks.withType<JavaCompile>().configureEach {
   dependsOn(project(":fabric-mod").tasks.named("classes"))
