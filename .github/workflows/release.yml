@@ -37,6 +37,8 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
+      # Reading the post-merge chore's runs before a version's work starts.
+      actions: read
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
     steps:
