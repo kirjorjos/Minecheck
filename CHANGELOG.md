@@ -11,6 +11,15 @@ Release, so this file never accumulates version sections.
 Suggested shape, delete what you do not use:
 
 ## Added
+-
+
+## Changed
+-
+
+## Fixed
+-->
+
+## Added
 - `viewWindow` (default `false`): a view-only window showing the client's frames, for watching a run
   whose game window nobody can see. It installs no mouse listener and never takes focus on its own,
   and the keys typed into it are dispatched through Minecheck's virtual keyboard (`F2` captures,
@@ -22,13 +31,3 @@ Suggested shape, delete what you do not use:
   `screenshots are unavailable: the vanilla camera is in effect (restoreVanillaCamera = true)`.
 - `net.minecheck.platform.api.InjectedInput`: the marker raised around every synthetic key/mouse
   dispatch, so a mod that owns the human's input can tell Minecheck's virtual input from it.
-
-## Changed
--
-
-## Changed
--
-
-## Fixed
--
--->
