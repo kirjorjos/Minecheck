@@ -18,3 +18,9 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
+
+## Fixed
+
+- The Forge jar ships a `pack.mcmeta`. Forge treats every mod file as a resource pack and put
+  `failed to load a valid ResourcePackInfo` on its "Warning while loading mods" screen, which no
+  headless run can dismiss, so no script ever started (#45).
