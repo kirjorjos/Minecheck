@@ -70,6 +70,9 @@ tasks.shadowJar {
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
   // and writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
+  // Forge's mixin loader is started from this manifest attribute, not from mods.toml: it is what
+  // tells FML to apply minecheck.mixins.json before the client constructs its window.
+  manifest.attributes["MixinConfigs"] = "minecheck.mixins.json"
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
