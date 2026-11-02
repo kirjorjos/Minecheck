@@ -822,7 +822,7 @@ fun loaderJarDir(module: String): File =
 tasks.register("buildAll") {
   group = "minecheck"
   description =
-    "Builds every loader's distributable jar (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
+    "Builds every loader's local -dev jar and its -deobf twin (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -840,10 +840,19 @@ tasks.register<Copy>("collectArtifacts") {
   // up attached to a release — the same class of mistake as shipping the un-remapped jar (#23).
   loaderModules.forEach { module ->
     val name = "MineCheck-${module.removeSuffix("-mod")}-$artifactsVersion"
+    // The jar a game loads. Locally it carries a `-dev-<tag>` suffix so a couple of builds can sit
+    // side by side in a mods folder; a release ships the same bytes under the release name, and this
+    // copy is the only place the suffix comes off. A plain `./gradlew build` never writes the
+    // release-named file.
     from(loaderJarDir(module)) {
-      // The loadable jar and its deobfuscated twin, and nothing else: the plain and sources jars
-      // are Maven-only, and an older build sitting in `build/libs` never belongs in a release.
-      include("$name.jar", "$name-deobf.jar")
+      include("$name-dev-*.jar")
+      rename { "$name.jar" }
+    }
+    from(loaderJarDir(module)) {
+      // The same code in development names, attached to the release for reading stack traces. The
+      // plain and sources jars are Maven-only, and an older build sitting in `build/libs` never
+      // belongs in a release.
+      include("$name-deobf.jar")
     }
   }
 
