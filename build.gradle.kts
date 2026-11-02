@@ -850,6 +850,12 @@ tasks.register<Copy>("collectArtifacts") {
   val artifactsDir = layout.buildDirectory.dir("artifacts").get().asFile
   into(artifactsDir)
 
+  // A `Copy` only ever adds files: whatever an earlier build left in here — another Minecraft
+  // version, an older project version, a stale SHA256SUMS.txt — stays put and would be attached to
+  // the release. Starting from an empty directory makes the staged tree describe exactly what this
+  // invocation collected, which is what the release's asset check relies on (#52).
+  doFirst { delete(artifactsDir) }
+
   doLast {
     logger.lifecycle(
       "Minecheck: collected {} jar(s) into {}",
