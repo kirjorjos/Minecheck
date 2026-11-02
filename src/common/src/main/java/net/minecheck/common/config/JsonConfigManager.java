@@ -68,7 +68,9 @@ public class JsonConfigManager implements ConfigManager {
           rangedDoubleField(obj, "screenshotScale", ConfigData.DEFAULT_SCREENSHOT_SCALE, 0.25, 1.0),
           booleanField(obj, "screenshotChatVisible", ConfigData.DEFAULT_SCREENSHOT_CHAT_VISIBLE),
           booleanField(obj, "viewWindow", ConfigData.DEFAULT_VIEW_WINDOW),
-          booleanField(obj, "restoreVanillaCamera", ConfigData.DEFAULT_RESTORE_VANILLA_CAMERA));
+          booleanField(obj, "restoreVanillaCamera", ConfigData.DEFAULT_RESTORE_VANILLA_CAMERA),
+          booleanField(obj, "hideGameWindow", ConfigData.DEFAULT_HIDE_GAME_WINDOW),
+          booleanField(obj, "muteAudio", ConfigData.DEFAULT_MUTE_AUDIO));
     } catch (RuntimeException e) {
       throw new IOException(
           String.format(

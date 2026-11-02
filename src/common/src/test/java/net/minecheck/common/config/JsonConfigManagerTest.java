@@ -117,6 +117,20 @@ class JsonConfigManagerTest {
    * Both client switches are off unless the file asks for them, and a switch is a boolean: {@code
    * "yes"} is not one, and is reported by name like every other wrong type.
    */
+  /**
+   * Audio is the one client switch that is on by default, and it comes from the file like the rest.
+   */
+  @Test
+  void audioIsMutedByDefaultAndCanBeTurnedBackOn() throws Exception {
+    assertTrue(manager().load().muteAudio(), "a run does not open an audio device by default");
+
+    writeConfig("{\"muteAudio\": false}");
+    assertFalse(manager().load().muteAudio(), "the file can give sound back");
+
+    writeConfig("{\"muteAudio\": true}");
+    assertTrue(manager().load().muteAudio());
+  }
+
   @Test
   void theClientSwitchesDefaultOffAndComeFromTheFile() throws Exception {
     ConfigData defaults = manager().load();
@@ -132,6 +146,27 @@ class JsonConfigManagerTest {
     IOException thrown = assertThrows(IOException.class, () -> manager().load());
     assertTrue(
         thrown.getMessage().contains("restoreVanillaCamera"),
+        "the error must name the field, got: " + thrown.getMessage());
+  }
+
+  /**
+   * The game window is hidden unless the file asks otherwise — the one switch whose default is on,
+   * because a run exists to be scripted rather than watched.
+   */
+  @Test
+  void theGameWindowIsHiddenUnlessTheFileSaysOtherwise() throws Exception {
+    assertTrue(manager().load().hideGameWindow(), "hidden by default");
+
+    writeConfig("{\"hideGameWindow\": false}");
+    assertFalse(manager().load().hideGameWindow());
+
+    writeConfig("{\"hideGameWindow\": null}");
+    assertTrue(manager().load().hideGameWindow(), "an explicit null falls back to the default");
+
+    writeConfig("{\"hideGameWindow\": \"yes\"}");
+    IOException thrown = assertThrows(IOException.class, () -> manager().load());
+    assertTrue(
+        thrown.getMessage().contains("hideGameWindow"),
         "the error must name the field, got: " + thrown.getMessage());
   }
 
