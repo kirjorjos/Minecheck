@@ -87,6 +87,9 @@ dependencies {
 tasks.shadowJar {
   configurations = listOf(project.configurations.runtimeClasspath.get())
   archiveClassifier.set("")
+  // Forge's mixin loader is started from this manifest attribute, not from mods.toml: it is what
+  // tells FML to apply minecheck.mixins.json before the client constructs its window.
+  manifest.attributes["MixinConfigs"] = "minecheck.mixins.json"
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")

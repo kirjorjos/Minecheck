@@ -12,6 +12,9 @@
       }
     },
     "intermediate_mappings": "net.fabricmc:intermediary",
+    "mixin": [
+      "minecheck.mixins.json"
+    ],
     "entrypoints": {
       "init": [
         "net.minecheck.loader.quilt.QuiltEntrypoint"

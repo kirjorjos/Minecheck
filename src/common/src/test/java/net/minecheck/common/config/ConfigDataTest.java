@@ -32,6 +32,12 @@ class ConfigDataTest {
     assertFalse(defaults.viewWindow(), "the view window is opt-in");
     assertFalse(
         defaults.restoreVanillaCamera(), "the camera/render path is Minecheck's by default");
+    assertTrue(
+        defaults.hideGameWindow(),
+        "the game's own window is hidden by default: a run is watched through a feed, not the game");
+    assertTrue(
+        defaults.muteAudio(),
+        "audio is off by default: no device is opened, so nothing mixes sound for nobody");
 
     assertFalse(defaults.isCoordinator());
     assertEquals("", defaults.entryScript());
