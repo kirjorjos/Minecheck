@@ -166,6 +166,7 @@ public class ForgeEntrypoint {
     }
     client.pinClientClock();
     client.pinRenderTickDelta();
+    client.pumpViewWindow();
     ScriptEngine e = engine;
     if (e != null && !e.isFinished() && client.isBootComplete()) {
       e.tick();
