@@ -93,6 +93,16 @@ tasks.withType<JavaCompile>().configureEach {
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
 
+// The mixin config is declared as `quilt_loader.mixin`, which is the key Quilt Loader reads into a
+// mod's mixin list — a `mixin` *entrypoint* parses fine but registers nothing. Loader 0.20.2's
+// strict metadata parser does not list that key among the ones it accepts, so it refuses the mod
+// outright and no test can start. This is the relaxation the loader's own error suggests, and the
+// 1.18.2 module already passes it for the same reason (QFAPI ships metadata the parser rejects).
+// It only loosens how strictly mod metadata is parsed.
+tasks.withType<JavaExec>().configureEach {
+  jvmArgs("-Dloader.workaround.disable_strict_parsing=true")
+}
+
 tasks.register("printServerClasspath") {
   doLast { println(configurations.runtimeClasspath.get().asPath) }
 }
