@@ -112,6 +112,8 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `screenshotChatVisible` | boolean | `false` | Whether chat may appear in a capture. See [the capture profile](#the-capture-profile-why-a-shot-is-reproducible). |
 | `viewWindow` | boolean | `false` | Show the client in a view-only window (a "video feed" of a run whose game window nobody can see). Never required, and never fatal: a headless JVM logs why and runs without it. |
 | `restoreVanillaCamera` | boolean | `false` | Leave the camera and render path completely untouched — no render-delta pin, no capture readback. Scripting keeps working; every `captureScreenshot` fails. |
+| `hideGameWindow` | boolean | `true` | Keep the client's own window from ever appearing: it is created visible never, not hidden afterwards. Set `false` for the ordinary window. |
+| `muteAudio` | boolean | `true` | Never open an audio device: no ALC context, source set or mixer thread is created. Set `false` to give the run sound back. |
 
 The mod also accepts a JVM system property `-Dminecheck.script=<name>` to override the entry script at launch time. It wins over whatever the file names — `script` or `coordinator` — and it works on a config that names neither, so a one-off run needs no edit to `config.json`. The name is resolved against the same `minecheck/scripts` directory; a name with no matching file starts nothing.
 
@@ -119,8 +121,25 @@ A missing field, and an explicit JSON `null`, both mean "use the default". A fil
 
 A `defaultTimeout` the field cannot hold is reported the same way rather than being altered: it must be a **whole number that fits in a 32-bit int**, so `0.5`, `3.9`, `2147483648` and `9223372036854775807` are all errors naming the field and quoting the value. `0` and a negative number *are* accepted — both are representable, and both mean every wait expires at once (a `timeout` argument at the call site still overrides it).
 
-Two fields are about the client the run drives rather than about a script, and both default off:
+Four fields are about the client the run drives rather than about a script:
 
+- **`hideGameWindow`** keeps the game's own window from ever appearing — the hook runs inside the
+  client's window constructor, immediately after it resets the GLFW hints and before it creates the
+  window, so nothing is ever mapped on screen: there is nothing that flashes up and nothing to hide
+  afterwards. The window still exists and still carries the GL context, so rendering, input,
+  commands and captures are all unaffected. It defaults to **on**; set it to `false` to get the
+  ordinary client window back, and pair `viewWindow` with it when a run should be watchable at all.
+  A config that cannot be read leaves the window visible rather than hiding it.
+- **`muteAudio`** keeps the sound engine from ever opening an audio device. The hook runs inside the
+  device open itself and refuses the handle, which is the path a machine with no sound card takes:
+  `SoundSystem` already catches it, and vanilla's existing no-audio state is what the rest of the
+  engine sees. Nothing after the device open happens — no ALC context, no source sets, no mixer
+  thread — because a scripted run has nobody to listen. It defaults to **on**; set it to `false` for
+  an audible client, which also brings the mixing work back. A config that cannot be read leaves
+  audio off, since nothing in a run checks sound and silence is the cheaper mistake. Vanilla
+  reports the refused device once at startup as `Error starting SoundSystem. Turning off sounds &
+  music`; that line is this setting doing its job, not a fault, and Minecheck logs the same decision
+  as `muteAudio is on — no audio device will be opened` just above it.
 - **`viewWindow`** opens a window that shows the client's frames — a video feed of a run whose game window nobody can see. It is **view only**: it installs no mouse listener and never grabs the pointer, so clicking it does nothing, and the keys typed into it are dispatched through Minecheck's own virtual keyboard. `F2` there writes a screenshot and `F3` opens the debug screen exactly like pressing them in the game. A headless JVM, or a machine with no display at all, logs why and runs without it: turning it on can never break a headless run.
 - **`restoreVanillaCamera`** leaves the camera and the render path completely untouched, for a setup where another mod core-mods the camera or the renderer and conflicts with Minecheck's injections. World entry, input, commands and assertions all keep working; every capture fails with the sentence in [the capture errors](#capture-errors) table, and `-Pminecheck.screenshots.update=true` fails too — a mode that cannot produce pixels must never write baselines.
 

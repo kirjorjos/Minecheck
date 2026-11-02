@@ -5,6 +5,9 @@
   "name": "Minecheck",
   "description": "Scripted automation of the Minecraft client and server for mod development",
   "environment": "*",
+  "mixins": [
+    "minecheck.mixins.json"
+  ],
   "entrypoints": {
     "main": [
       "net.minecheck.loader.fabric.FabricEntrypoint"
