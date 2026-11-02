@@ -9,10 +9,11 @@ package net.minecheck.common.config;
  * run-level on purpose — one run has one profile, otherwise a baseline has no fixed picture to
  * compare against.
  *
- * <p>Two more fields are about the client the run drives rather than about a script: {@code
- * viewWindow} shows the instance to a human, and {@code restoreVanillaCamera} keeps Minecheck out
- * of the camera/render path entirely. Both default to {@code false}, so a run that names neither
- * behaves exactly as it did before they existed.
+ * <p>Four more fields are about the client the run drives rather than about a script: {@code
+ * hideGameWindow} keeps the game's own window from ever appearing (the default), {@code muteAudio}
+ * keeps the sound engine from ever opening an audio device (also the default), {@code viewWindow}
+ * shows the instance's frames in a window of Minecheck's own instead, and {@code
+ * restoreVanillaCamera} keeps Minecheck out of the camera/render path entirely.
  *
  * @param script single-phase boot script file name; empty = passive
  * @param coordinator optional coordinator file that declares the order of phases (long-lived
@@ -27,6 +28,8 @@ package net.minecheck.common.config;
  * @param viewWindow whether to open a view-only window onto the client's frames (default: off)
  * @param restoreVanillaCamera whether to leave the camera/render path untouched — scripting keeps
  *     working, every capture fails (default: off)
+ * @param hideGameWindow whether to keep the game's own window from appearing at all (default: on)
+ * @param muteAudio whether the sound engine may open an audio device at all (default: no)
  */
 public record ConfigData(
     String script,
@@ -39,7 +42,9 @@ public record ConfigData(
     double screenshotScale,
     boolean screenshotChatVisible,
     boolean viewWindow,
-    boolean restoreVanillaCamera) {
+    boolean restoreVanillaCamera,
+    boolean hideGameWindow,
+    boolean muteAudio) {
 
   public static final int DEFAULT_SCREENSHOT_WIDTH = 854;
 
@@ -55,7 +60,11 @@ public record ConfigData(
 
   public static final boolean DEFAULT_RESTORE_VANILLA_CAMERA = false;
 
-  /** Every field of the capture profile and both client switches at their documented defaults. */
+  public static final boolean DEFAULT_HIDE_GAME_WINDOW = true;
+
+  public static final boolean DEFAULT_MUTE_AUDIO = true;
+
+  /** Every field of the capture profile and the client switches at their documented defaults. */
   public ConfigData(String script, String coordinator, String failMode, int defaultTimeout) {
     this(
         script,
@@ -68,7 +77,9 @@ public record ConfigData(
         DEFAULT_SCREENSHOT_SCALE,
         DEFAULT_SCREENSHOT_CHAT_VISIBLE,
         DEFAULT_VIEW_WINDOW,
-        DEFAULT_RESTORE_VANILLA_CAMERA);
+        DEFAULT_RESTORE_VANILLA_CAMERA,
+        DEFAULT_HIDE_GAME_WINDOW,
+        DEFAULT_MUTE_AUDIO);
   }
 
   public static ConfigData defaults() {

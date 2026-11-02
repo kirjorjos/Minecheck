@@ -44,6 +44,19 @@ public final class MinecheckBootstrap {
           new JsonConfigManager(services.configDir().getConfigDirectory());
       ConfigData config = configManager.load();
 
+      // The window was created (or not) before this ran — the mixin read the same file, because on
+      // Fabric the client's window exists before any entrypoint is called. Said out loud here, and
+      // not before a script is configured, because "the client is running and I cannot see it" is
+      // exactly the state worth naming in the log.
+      if (services.client() != null && config.hideGameWindow()) {
+        LOG.info(
+            config.viewWindow()
+                ? "Minecheck: hideGameWindow is on — the client's window is created hidden;"
+                    + " viewWindow shows its frames"
+                : "Minecheck: hideGameWindow is on — the client's window is created hidden;"
+                    + " set viewWindow or hideGameWindow to see the client");
+      }
+
       // Resolved before the "nothing configured" guard on purpose: -Dminecheck.script is itself a
       // configuration, so it selects a script even when config.json names none (which otherwise
       // means passive mode). Reading it after the guard would make the documented launch-time
