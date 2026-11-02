@@ -37,6 +37,8 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
+      # Reading the post-merge chore's runs before a version's work starts.
+      actions: read
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
     steps:
@@ -76,6 +78,7 @@ jobs:
           import re
           import subprocess
           import sys
+          import time
 
           REPO = os.environ["REPO"]
           RAW = os.environ["VERSIONS_RAW"]
@@ -161,6 +164,48 @@ jobs:
           def head_sha(branch):
               result = run(["git", "ls-remote", "origin", f"refs/heads/{branch}"], check=False)
               return result.stdout.split()[0] if result.stdout.strip() else None
+
+
+          CHORE_WORKFLOW = "post-merge-screenshot-sync.yml"
+
+
+          def active_chore(mc):
+              runs = json.loads(
+                  gh(
+                      "run", "list", "--repo", REPO, "--workflow", CHORE_WORKFLOW,
+                      "--branch", f"{mc}/development", "--limit", "20",
+                      "--json", "databaseId,status,conclusion,url",
+                  ).stdout
+              )
+              return [run for run in runs if run["status"] != "completed"]
+
+
+          def wait_for_chore(mc, timeout_minutes=60):
+              # The post-merge chore is the only other writer on <mc>/development, and it writes the
+              # "closed in `<mc>` by PR #" comment the issue step below looks for. Reading the
+              # version, bumping it or promoting it while the chore runs would race its commit (the
+              # contents API write fails against a stale sha) or promote a tree it is about to
+              # change, so a version's work waits for it to finish first.
+              deadline = time.monotonic() + timeout_minutes * 60
+              announced = set()
+              while True:
+                  running = active_chore(mc)
+                  if not running:
+                      return True
+                  for run in running:
+                      if run["databaseId"] not in announced:
+                          announced.add(run["databaseId"])
+                          print(
+                              f"::notice::waiting for the post-merge chore on {mc}/development "
+                              f"(run {run['databaseId']}, {run['status']}): {run['url']}"
+                          )
+                  if time.monotonic() >= deadline:
+                      print(
+                          f"::error::the post-merge chore on {mc}/development was still running "
+                          f"after {timeout_minutes} minutes"
+                      )
+                      return False
+                  time.sleep(15)
 
 
           def project_version(ref):
@@ -306,6 +351,10 @@ jobs:
                   if not branch_exists(dev):
                       print(f"::notice::{dev} does not exist - skipping this version")
                       rows.append({"mc": mc, "status": "skipped: no development branch"})
+                      continue
+                  if not wait_for_chore(mc):
+                      errors.append(f"{dev}: the post-merge chore did not finish in 60 minutes")
+                      rows.append({"mc": mc, "status": "blocked: chore still running"})
                       continue
                   main_exists = branch_exists(f"{mc}/main")
                   current = project_version(dev)
@@ -469,12 +518,19 @@ jobs:
         run: |
           set -euo pipefail
           # Abort everything on the first failure: versions are processed in the input order and a
-          # later version is not touched once one fails. A line whose main was just created has no
-          # PR to merge - its main already carries development's head.
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.pr // "")\t\(.version)"' <<<"$PLAN")
+          # later version is not touched once one fails. A version whose main this run created has
+          # no PR to merge - its main already carries development's head.
+          #
+          # Every row stays JSON and each field is read back with jq. Splitting a rendered line in
+          # the shell is what lost the absent PR (tab is IFS whitespace, so read collapsed the run
+          # and merged "1.1.1" instead) and what made a trailing newline decide whether an issue got
+          # closed. jq is on every runner, so nothing here needs to count fields or delimiters.
+          mapfile -t ROWS < <(jq -c '.[] | {mc, pr, version}' <<<"$PLAN")
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC PR VERSION <<<"$row"
-            if [[ -z "$PR" ]]; then
+            MC="$(jq -r '.mc' <<<"$row")"
+            PR="$(jq -r '.pr // "-"' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
+            if [[ "$PR" == "-" ]]; then
               echo "$MC/main was created from development - nothing to merge"
               continue
             fi
@@ -492,10 +548,11 @@ jobs:
           PLAN: ${{ needs.prepare.outputs.plan }}
         run: |
           set -euo pipefail
-          mapfile -t ROWS < <(jq -r '.[] | "\(.mc)\t\(.version)"' <<<"$PLAN")
+          mapfile -t ROWS < <(jq -c '.[] | {mc, version}' <<<"$PLAN")
 
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC VERSION <<<"$row"
+            MC="$(jq -r '.mc' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
             git fetch --force --prune --tags origin
             DECLARED="$(git show "origin/$MC/main:build.gradle.kts" \
               | sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' | head -1)"
@@ -506,7 +563,8 @@ jobs:
           done
 
           for row in "${ROWS[@]}"; do
-            IFS=$'\t' read -r MC VERSION <<<"$row"
+            MC="$(jq -r '.mc' <<<"$row")"
+            VERSION="$(jq -r '.version' <<<"$row")"
             TAG="$MC/v$VERSION"
 
             echo "::group::Release $TAG"
@@ -549,11 +607,13 @@ jobs:
           print("\n".join(lines[index:]).strip())
           PY
 
-            find build/artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-production.jar' -print0 \
+            # Both jars per loader are attached on purpose: the remapped jar is the mod, and its
+            # `-deobf` twin is the same code in development names, for reading stack traces.
+            find build/artifacts -maxdepth 1 -type f -name '*.jar' -print0 \
               | sort -z | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
             mapfile -t ASSETS < <(
               find build/artifacts -maxdepth 1 -type f \
-                \( -name '*.jar' ! -name '*-production.jar' -o -name 'SHA256SUMS.txt' \) -print
+                \( -name '*.jar' -o -name 'SHA256SUMS.txt' \) -print
             )
             if (( ${#ASSETS[@]} == 0 )); then
               echo "::error::no release artifacts found in build/artifacts"
@@ -571,8 +631,9 @@ jobs:
           REPO = os.environ["REPO"]
           MC = os.environ["MC"]
           VERSION = os.environ["VERSION"]
-          EDITED = "/tmp/edited.txt"
+          EDITED = "/tmp/edited.json"
           MARK = f"closed in `{MC}` by PR #"
+          FIXED = f"minecheck-fixed-in:{MC}"
 
 
           def gh(*args):
@@ -587,7 +648,7 @@ jobs:
           edited = set()
           if os.path.exists(EDITED):
               with open(EDITED, encoding="utf-8") as handle:
-                  edited = {int(line) for line in handle.read().split() if line.strip()}
+                  edited = {int(number) for number in json.load(handle)}
           for issue in issues:
               number = issue["number"]
               comments = json.loads(
@@ -595,7 +656,11 @@ jobs:
               )
               for comment in comments:
                   body = comment.get("body") or ""
-                  if MARK not in body or f"closed in release `{VERSION}`" in body:
+                  # Two workflows record that work merged into <mc>: the post-merge chore writes
+                  # "closed in `<mc>` by PR #n", and PR validation writes
+                  # "<!-- minecheck-fixed-in:<mc> -->". Either is something a release can close
+                  # from, so an issue whose chore comment failed is not stranded open.
+                  if (MARK not in body and FIXED not in body) or f"closed in release `{VERSION}`" in body:
                       continue
                   updated = body + f"\n\nclosed in release `{VERSION}`"
                   with open("/tmp/comment.json", "w", encoding="utf-8") as handle:
@@ -608,7 +673,7 @@ jobs:
                   edited.add(number)
                   print(f"marked #{number} released in {VERSION}")
           with open(EDITED, "w", encoding="utf-8") as handle:
-              handle.write("\n".join(str(number) for number in sorted(edited)))
+              json.dump(sorted(edited), handle)
           PY
 
             echo "| $MC | $VERSION | $TAG | released |" >> "$GITHUB_STEP_SUMMARY"
@@ -623,14 +688,15 @@ jobs:
           set -euo pipefail
           # Runs only after every version succeeded: the step above aborts otherwise, so an issue is
           # never closed for a release that did not finish.
-          [[ -f /tmp/edited.txt ]] || { echo "No issue was marked released."; exit 0; }
-          while IFS= read -r number; do
+          [[ -f /tmp/edited.json ]] || { echo "No issue was marked released."; exit 0; }
+          mapfile -t NUMBERS < <(jq -r '.[]' /tmp/edited.json)
+          for number in "${NUMBERS[@]}"; do
             [[ -n "$number" ]] || continue
             jq -n --arg body "Closing: every affected Minecraft version this branch names has been released." \
               '{body: $body}' | gh api "repos/$REPO/issues/$number/comments" --input - >/dev/null
             gh api "repos/$REPO/issues/$number" -X PATCH -f state=closed >/dev/null
             echo "closed #$number"
-          done < /tmp/edited.txt
+          done
 
       # development is PR-only, so resetting the scratchpad needs a token that can bypass the
       # `Version development` ruleset: the CI App is the bypass actor. The reset lands on

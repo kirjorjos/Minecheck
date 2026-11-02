@@ -9,6 +9,11 @@ package net.minecheck.common.config;
  * run-level on purpose — one run has one profile, otherwise a baseline has no fixed picture to
  * compare against.
  *
+ * <p>Two more fields are about the client the run drives rather than about a script: {@code
+ * viewWindow} shows the instance to a human, and {@code restoreVanillaCamera} keeps Minecheck out
+ * of the camera/render path entirely. Both default to {@code false}, so a run that names neither
+ * behaves exactly as it did before they existed.
+ *
  * @param script single-phase boot script file name; empty = passive
  * @param coordinator optional coordinator file that declares the order of phases (long-lived
  *     session; wins over {@code script} when set)
@@ -19,6 +24,9 @@ package net.minecheck.common.config;
  * @param screenshotGuiScale pinned GUI scale, 1–4 (never auto, so HUD geometry is stable)
  * @param screenshotScale encode-time downscale, 0.25–1.0
  * @param screenshotChatVisible whether chat may appear in a capture (default: hidden)
+ * @param viewWindow whether to open a view-only window onto the client's frames (default: off)
+ * @param restoreVanillaCamera whether to leave the camera/render path untouched — scripting keeps
+ *     working, every capture fails (default: off)
  */
 public record ConfigData(
     String script,
@@ -29,7 +37,9 @@ public record ConfigData(
     int screenshotHeight,
     int screenshotGuiScale,
     double screenshotScale,
-    boolean screenshotChatVisible) {
+    boolean screenshotChatVisible,
+    boolean viewWindow,
+    boolean restoreVanillaCamera) {
 
   public static final int DEFAULT_SCREENSHOT_WIDTH = 854;
 
@@ -41,6 +51,11 @@ public record ConfigData(
 
   public static final boolean DEFAULT_SCREENSHOT_CHAT_VISIBLE = false;
 
+  public static final boolean DEFAULT_VIEW_WINDOW = false;
+
+  public static final boolean DEFAULT_RESTORE_VANILLA_CAMERA = false;
+
+  /** Every field of the capture profile and both client switches at their documented defaults. */
   public ConfigData(String script, String coordinator, String failMode, int defaultTimeout) {
     this(
         script,
@@ -51,7 +66,9 @@ public record ConfigData(
         DEFAULT_SCREENSHOT_HEIGHT,
         DEFAULT_SCREENSHOT_GUI_SCALE,
         DEFAULT_SCREENSHOT_SCALE,
-        DEFAULT_SCREENSHOT_CHAT_VISIBLE);
+        DEFAULT_SCREENSHOT_CHAT_VISIBLE,
+        DEFAULT_VIEW_WINDOW,
+        DEFAULT_RESTORE_VANILLA_CAMERA);
   }
 
   public static ConfigData defaults() {

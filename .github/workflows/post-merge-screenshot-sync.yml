@@ -252,7 +252,11 @@ jobs:
       - name: Comment the source issue
         if: steps.plan.outputs.found == 'true' && steps.plan.outputs.issue != ''
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The job token, not the app token: commenting needs `issues: write`, which this job
+          # declares, while the app token is minted for `contents` only. It answered
+          # "Resource not accessible by integration" here, which is why the release that followed
+          # found no marker and left its issue open.
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ steps.plan.outputs.issue }}
           MC: ${{ steps.plan.outputs.mc }}

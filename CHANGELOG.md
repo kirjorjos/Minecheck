@@ -17,12 +17,17 @@ Suggested shape, delete what you do not use:
 -
 
 ## Fixed
--
 -->
 
 ## Added
-- `minecheck.getCrosshairBlock()`: the block the renderer's crosshair is on, which is the target a click actually acts on. `getTargetBlock` raycasts on demand and so cannot tell you what a press will hit until a frame has redrawn the crosshair.
-
-## Changed
-- `test<Loader>Shots` compares captures byte for byte: the client pins the render tick delta, so a frozen scene is reproducible instead of drifting a level between runs, and one changed pixel is a failure. A stale committed picture is a reported finding rather than a red build, and CI regenerates it after merge.
-- Suites wait on the condition itself instead of sleeping for a fixed number of seconds. A click waits for the renderer's own crosshair, and client departures and world loads are bounded by `config.defaultTimeout` rather than per-script guesses.
+- `viewWindow` (default `false`): a view-only window showing the client's frames, for watching a run
+  whose game window nobody can see. It installs no mouse listener and never takes focus on its own,
+  and the keys typed into it are dispatched through Minecheck's virtual keyboard (`F2` captures,
+  `F3` opens the debug screen). A headless JVM, or a machine with no display, logs why and runs
+  without it.
+- `restoreVanillaCamera` (default `false`): leaves the camera and render path untouched — no
+  render-delta pin, no capture readback — for a setup where another mod core-mods the camera and
+  conflicts with Minecheck's injections. Scripting keeps working; every `captureScreenshot` fails with
+  `screenshots are unavailable: the vanilla camera is in effect (restoreVanillaCamera = true)`.
+- `net.minecheck.platform.api.InjectedInput`: the marker raised around every synthetic key/mouse
+  dispatch, so a mod that owns the human's input can tell Minecheck's virtual input from it.
