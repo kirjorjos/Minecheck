@@ -611,6 +611,19 @@ jobs:
           print("\n".join(lines[index:]).strip())
           PY
 
+            # Where this repository publishes, from its own registry entry in kirjorjos/ci: `gh`
+            # today, `cf` and `modrinth` once those are wired. A target the array omits runs
+            # nothing, so adding one is a registry change rather than an edit here.
+            mapfile -t TARGETS < <(
+              gh api "repos/kirjorjos/ci/contents/consumers.jsonl" --jq .content \
+                | tr -d '\n' | base64 -d \
+                | jq -r --arg repo "$REPO" 'select(.repo == $repo) | .release[]?'
+            )
+            if (( ${#TARGETS[@]} == 0 )); then
+              echo "::error::$REPO lists no release targets in kirjorjos/ci consumers.jsonl"
+              exit 1
+            fi
+
             # Both jars per loader are attached on purpose: the remapped jar is the mod, and its
             # `-deobf` twin is the same code in development names, for reading stack traces.
             #
@@ -649,8 +662,37 @@ jobs:
               exit 1
             fi
 
-            gh release create "$TAG" --repo "$REPO" --verify-tag \
-              --title "$TAG" --notes-file /tmp/release-notes.md "${ASSETS[@]}"
+            # The staging directory, from the same metadata file the asset check reads. Falls back to
+            # the historical path for a `<mc>/main` that predates the file.
+            ARTIFACTS="$(jq -er '.release.artifactsDir' .github/metadata.json 2>/dev/null \
+              || echo build/artifacts)"
+
+            for target in "${TARGETS[@]}"; do
+              case "$target" in
+                gh)
+                  # Both jars per loader are attached on purpose: the remapped jar is the mod, and
+                  # its `-deobf` twin is the same code in development names, for reading stack
+                  # traces.
+                  find "$ARTIFACTS" -maxdepth 1 -type f -name '*.jar' -print0 \
+                    | sort -z | xargs -0 sha256sum > "$ARTIFACTS/SHA256SUMS.txt"
+                  mapfile -t ASSETS < <(
+                    find "$ARTIFACTS" -maxdepth 1 -type f \
+                      \( -name '*.jar' -o -name 'SHA256SUMS.txt' \) -print
+                  )
+                  if (( ${#ASSETS[@]} == 0 )); then
+                    echo "::error::no release artifacts found in $ARTIFACTS"
+                    exit 1
+                  fi
+                  gh release create "$TAG" --repo "$REPO" --verify-tag \
+                    --title "$TAG" --notes-file /tmp/release-notes.md "${ASSETS[@]}"
+                  ;;
+                *)
+                  # Deliberately fatal: a typo in the registry must not silently publish nowhere.
+                  echo "::error::unknown release target '$target' for $REPO"
+                  exit 1
+                  ;;
+              esac
+            done
 
             MC="$MC" VERSION="$VERSION" python3 - <<'PY'
           import json

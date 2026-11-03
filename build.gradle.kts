@@ -814,10 +814,54 @@ tasks.named("spotlessApply") { dependsOn(styluaApply) }
 
 tasks.named("spotlessCheck") { dependsOn(styluaCheck) }
 
+// The licence identifier is declared once, in gradle.properties, and substituted into the three
+// loader metadata files here. Literal copies in each file are what drift: Forge ended up saying
+// `GPLv3` while the other two said nothing at all.
+subprojects {
+  tasks.withType<ProcessResources>().configureEach {
+    val licence = providers.gradleProperty("licence")
+    inputs.property("licence", licence)
+    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "**/mods.toml")) {
+      filter { line: String -> line.replace("\${licence}", licence.get()) }
+    }
+  }
+}
+
 val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
+
+/**
+ * The `<n>` of a `-dev-<n>` jar name built from [version], or null for anything else.
+ *
+ * Scoping on the version is what resets the counter: bump major, minor or patch and no jar matches,
+ * so the next local build starts at 1 again instead of continuing a number that belonged to the
+ * previous release.
+ */
+fun devTagOf(name: String, version: String): Int? =
+  Regex("-${Regex.escape(version)}-dev-(\\d+)\\.jar$").find(name)?.groupValues?.get(1)?.toInt()
+
+/**
+ * The tag this build's drop-in jars carry, or 0 in CI.
+ *
+ * `-dev-<n>` is local-only and auto-incrementing: CI builds unclassified so a release asset name
+ * stays stable, while a local build takes the next free number across every loader's `build/libs`,
+ * so several local builds can sit in one mods folder at once and one build pairs all three of its
+ * jars under the same tag. Reading the outputs is what makes the number increment, and it is also
+ * why a local remap is never up to date from one build to the next.
+ */
+val localDevTag: Int =
+  if (providers.environmentVariable("CI").orNull?.isNotBlank() == true) 0
+  else
+    (loaderModules
+      .map(::loaderJarDir)
+      .filter { it.isDirectory }
+      .flatMap { dir -> dir.listFiles()?.toList().orEmpty() }
+      .mapNotNull { devTagOf(it.name, project.version.toString()) }
+      .maxOrNull() ?: 0) + 1
+
+extra["localDevTag"] = localDevTag
 
 tasks.register("buildAll") {
   group = "minecheck"
@@ -845,14 +889,11 @@ tasks.register<Copy>("collectArtifacts") {
     // this copy is the only place the suffix comes off. A plain `./gradlew build` never writes the
     // release-named file.
     from(loaderJarDir(module)) {
-      include("$name-dev-*.jar")
-      rename { "$name.jar" }
-    }
-    from(loaderJarDir(module)) {
-      // The same code in development names, attached to the release for reading stack traces. The
-      // plain and sources jars are Maven-only, and an older build sitting in `build/libs` never
-      // belongs in a release.
-      include("$name-deobf.jar")
+      // The loadable jar and its deobfuscated twin, and nothing else: the plain and sources jars
+      // are Maven-only, and an older build sitting in `build/libs` never belongs in a release.
+      // `-dev-*` is here for a local `collectArtifacts`: CI builds unclassified, so a release never
+      // matches it.
+      include("$name.jar", "$name-deobf.jar", "$name-dev-*.jar")
     }
   }
 
