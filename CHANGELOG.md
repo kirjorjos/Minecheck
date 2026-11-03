@@ -26,3 +26,6 @@ Suggested shape, delete what you do not use:
   the release refuses to publish unless the staged set is exactly two jars per loader plus
   `SHA256SUMS.txt` — the `1.19.2/v2.0.0` and `1.18.2/v1.1.2` releases each carried the other
   version's jars (#52).
+- The Forge jar ships a `pack.mcmeta`. Forge treats every mod file as a resource pack and put
+  `failed to load a valid ResourcePackInfo` on its "Warning while loading mods" screen, which no
+  headless run can dismiss, so no script ever started (#45).
