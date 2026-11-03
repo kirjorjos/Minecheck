@@ -42,14 +42,24 @@ jobs:
         id: read
         run: |
           set -euo pipefail
-          file=.github/loaders.jsonl
-          if [[ ! -f "$file" ]]; then
-            echo "::error::$file is missing"
-            exit 1
-          fi
-          # JSON Lines: jq -s reads one object per line into one array of them.
-          if ! ids="$(jq -s -c '[.[] | .id]' "$file" 2>/dev/null)"; then
-            echo "::error::$file is not valid JSON Lines"
+          # One file per repository names its loaders: `.loaders` in `.github/metadata.json`. A
+          # version line that still carries the older `loaders.jsonl` keeps working until it is
+          # migrated; this fallback goes once every line has the metadata file.
+          if [[ -f .github/metadata.json ]]; then
+            file=.github/metadata.json
+            if ! ids="$(jq -c '.loaders' "$file" 2>/dev/null)"; then
+              echo "::error::$file is not valid JSON"
+              exit 1
+            fi
+          elif [[ -f .github/loaders.jsonl ]]; then
+            file=.github/loaders.jsonl
+            # JSON Lines: jq -s reads one object per line into one array of them.
+            if ! ids="$(jq -s -c '[.[] | .id]' "$file" 2>/dev/null)"; then
+              echo "::error::$file is not valid JSON Lines"
+              exit 1
+            fi
+          else
+            echo "::error::no .github/metadata.json or .github/loaders.jsonl"
             exit 1
           fi
           if [[ "$ids" == "[]" ]]; then
