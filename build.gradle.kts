@@ -1,5 +1,6 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import java.net.URI
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import net.minecheck.gradle.MinecheckLifecyclePlugin
 import net.minecheck.gradle.MinecheckLifecycleTest
@@ -890,6 +891,73 @@ tasks.register<Copy>("collectArtifacts") {
   }
 }
 
+/**
+ * The regression test for issue #23: a distributable jar must carry its loader's *production*
+ * member names. Building against development names (Mojang for Forge, Yarn for Fabric/Quilt) is
+ * invisible in the Gradle dev runtime and fatal in a production instance — the released Forge jar
+ * died on a real client's first tick with `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'`
+ * because production Forge resolves members by SRG name.
+ *
+ * The check is a namespace probe rather than a bytecode reference walk: the production namespaces
+ * are exactly the machine-generated ones (`method_1234` / `field_5678` for intermediary, `m_12345_`
+ * / `f_12345_` for SRG), so a remapped jar contains those tokens and a dev jar contains none. No
+ * member id is hardcoded, so it holds across Minecraft versions.
+ */
+val productionNamespaces =
+  mapOf(
+    "fabric" to Regex("(?:method|field)_[0-9]+"),
+    "quilt" to Regex("(?:method|field)_[0-9]+"),
+    "forge" to Regex("[mf]_[0-9]+_"),
+  )
+
+val checkProductionJars =
+  tasks.register("checkProductionJars") {
+    group = "minecheck"
+    description =
+      "Asserts each distributable loader jar is remapped into its production namespace (issue #23)"
+    dependsOn(loaderModules.map { ":$it:productionJar" })
+    doLast {
+      val loaders = mapOf("fabric-mod" to "fabric", "quilt-mod" to "quilt", "forge-mod" to "forge")
+      loaders.forEach { (module, loader) ->
+        // The task's own output, not a directory scan: `build/libs` also holds jars from earlier
+        // versions of the same loader, and "the newest file there" is exactly the guess that lets a
+        // stale artifact pass for the one being shipped.
+        val jar = project(":$module").tasks.named("productionJar").get().outputs.files.singleFile
+        val pattern = productionNamespaces.getValue(loader)
+        val classes =
+          ZipFile(jar).use { zip ->
+            zip
+              .entries()
+              .asSequence()
+              .filter { it.name.endsWith(".class") }
+              .joinToString("\n") { entry ->
+                zip.getInputStream(entry).use { String(it.readBytes(), Charsets.ISO_8859_1) }
+              }
+          }
+        if (!pattern.containsMatchIn(classes)) {
+          throw GradleException(
+            "Minecheck: ${jar.name} is not remapped into the $loader production namespace (no " +
+              "${pattern.pattern} member name in its classes). A jar built against development " +
+              "names loads in the dev runtime and dies in a production instance — see issue #23."
+          )
+        }
+        logger.lifecycle("Minecheck: {} carries {} production names", jar.name, loader)
+        // A release attaches the pair: the loadable jar and the same code in development names.
+        // A missing deobf jar is a silent half release, so it is checked here too.
+        val deobf = project(":$module").tasks.named("shadowJar").get().outputs.files.singleFile
+        if (!deobf.isFile || !deobf.name.contains("-deobf")) {
+          throw GradleException(
+            "Minecheck: expected a deobfuscated jar beside ${jar.name}, found ${deobf.name}; " +
+              "the release attaches both the remapped and the -deobf jar."
+          )
+        }
+        logger.lifecycle("Minecheck: {} ships beside {}", jar.name, deobf.name)
+      }
+    }
+  }
+
+tasks.named("checkModule") { dependsOn(checkProductionJars) }
+
 // ---------------------------------------------------------------------------------------------
 // Publishing (spec §8): MineCheck-<loader>-<mc>-<project version>.jar, published to GitHub
 // Packages as net.minecheck:minecheck-<loader>-<mc>:<project version>. Driven by
@@ -911,8 +979,8 @@ subprojects {
     withJavadocJar()
   }
 
-  // Applies to shadowJar, sourcesJar, javadocJar and the (disabled) plain jar, so the file name
-  // and the Maven coordinate always agree.
+  // Applies to productionJar, shadowJar, sourcesJar, javadocJar and the (disabled) plain jar, so
+  // the file name and the Maven coordinate always agree.
   tasks.withType<Jar>().configureEach {
     archiveBaseName.set("MineCheck-$loader")
     archiveVersion.set("$mcVersion-${project.version}")
@@ -931,8 +999,13 @@ subprojects {
           groupId = "net.minecheck"
           artifactId = "minecheck-$loader-$mcVersion"
           version = project.version.toString()
-          // The shadow jar is the mod; the plain jar is empty and the reobf jar never ships.
-          artifact(tasks.named("shadowJar")) { classifier = "" }
+          // The remapped shadow jar is the mod: the plain jar is empty, and this one carries the
+          // loader's production names.
+          artifact(tasks.named("productionJar")) { classifier = "" }
+          // Its deobfuscated twin, published under the `deobf` classifier so the Maven coordinate
+          // matches the release asset: same code in development names, for reading stack traces
+          // and writing mixins against.
+          artifact(tasks.named("shadowJar")) { classifier = "deobf" }
           artifact(tasks.named("sourcesJar")) { classifier = "sources" }
           artifact(tasks.named("javadocJar")) { classifier = "javadoc" }
           pom {
