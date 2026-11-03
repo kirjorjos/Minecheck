@@ -819,6 +819,37 @@ val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
+/**
+ * The `<n>` of a `-dev-<n>` jar name built from [version], or null for anything else.
+ *
+ * Scoping on the version is what resets the counter: bump major, minor or patch and no jar matches,
+ * so the next local build starts at 1 again instead of continuing a number that belonged to the
+ * previous release.
+ */
+fun devTagOf(name: String, version: String): Int? =
+  Regex("-${Regex.escape(version)}-dev-(\\d+)\\.jar$").find(name)?.groupValues?.get(1)?.toInt()
+
+/**
+ * The tag this build's drop-in jars carry, or 0 in CI.
+ *
+ * `-dev-<n>` is local-only and auto-incrementing: CI builds unclassified so a release asset name
+ * stays stable, while a local build takes the next free number across every loader's `build/libs`,
+ * so several local builds can sit in one mods folder at once and one build pairs all three of its
+ * jars under the same tag. Reading the outputs is what makes the number increment, and it is also
+ * why a local remap is never up to date from one build to the next.
+ */
+val localDevTag: Int =
+  if (providers.environmentVariable("CI").orNull?.isNotBlank() == true) 0
+  else
+    (loaderModules
+      .map(::loaderJarDir)
+      .filter { it.isDirectory }
+      .flatMap { dir -> dir.listFiles()?.toList().orEmpty() }
+      .mapNotNull { devTagOf(it.name, project.version.toString()) }
+      .maxOrNull() ?: 0) + 1
+
+extra["localDevTag"] = localDevTag
+
 tasks.register("buildAll") {
   group = "minecheck"
   description =
@@ -843,7 +874,9 @@ tasks.register<Copy>("collectArtifacts") {
     from(loaderJarDir(module)) {
       // The loadable jar and its deobfuscated twin, and nothing else: the plain and sources jars
       // are Maven-only, and an older build sitting in `build/libs` never belongs in a release.
-      include("$name.jar", "$name-deobf.jar")
+      // `-dev-*` is here for a local `collectArtifacts`: CI builds unclassified, so a release never
+      // matches it.
+      include("$name.jar", "$name-deobf.jar", "$name-dev-*.jar")
     }
   }
 

@@ -134,9 +134,14 @@ val minecraftConfig =
     .minecrafts[sourceSets.main.get()]
     ?: error("unimined registered no minecraft config for the main source set")
 
+// The jar a standard instance is handed: unclassified in CI, `-dev-<n>` in a local build. The tag
+// comes from the root project, which takes the next free number across every loader, so one build
+// pairs its three jars under one tag and the next build never overwrites them.
+val localDevTag = rootProject.extra["localDevTag"] as Int
+
 val productionJar =
   minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
-    asJar { archiveClassifier.set("") }
+    asJar { archiveClassifier.set(if (localDevTag == 0) "" else "dev-$localDevTag") }
   }
 
 tasks.named("assemble") { dependsOn(productionJar) }
