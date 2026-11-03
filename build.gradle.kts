@@ -41,7 +41,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "2.0.0"
+version = "2.0.1"
 
 group = "net.minecheck"
 
