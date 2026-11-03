@@ -814,6 +814,19 @@ tasks.named("spotlessApply") { dependsOn(styluaApply) }
 
 tasks.named("spotlessCheck") { dependsOn(styluaCheck) }
 
+// The licence identifier is declared once, in gradle.properties, and substituted into the three
+// loader metadata files here. Literal copies in each file are what drift: Forge ended up saying
+// `GPLv3` while the other two said nothing at all.
+subprojects {
+  tasks.withType<ProcessResources>().configureEach {
+    val licence = providers.gradleProperty("licence")
+    inputs.property("licence", licence)
+    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "**/mods.toml")) {
+      filter { line: String -> line.replace("\${licence}", licence.get()) }
+    }
+  }
+}
+
 val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
 
 fun loaderJarDir(module: String): File =
@@ -822,37 +835,41 @@ fun loaderJarDir(module: String): File =
 tasks.register("buildAll") {
   group = "minecheck"
   description =
-    "Builds every loader's local -dev jar and its -deobf twin (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
+    "Builds every loader's distributable jar (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
-// Resolved on the project, not inside the Copy task (where `property` would look for a task
-// property and fail): the release attaches exactly these files.
-val artifactsVersion = "${property("minecraft_version")}-${project.version}"
+/** The `<n>` of a `-dev-<n>` jar name built from [version], or null for anything else. */
+fun devTagOf(name: String, version: String): Int? =
+  Regex("-${Regex.escape(version)}-dev-(\\d+)\\.jar$").find(name)?.groupValues?.get(1)?.toInt()
+
+// `-dev-<n>` is local-only and auto-incrementing: CI builds unclassified so a release asset name
+// stays stable, while a local build takes the next free number for this version, so bumping major,
+// minor or patch resets the counter on its own.
+val localDevTag: Int =
+  if (providers.environmentVariable("CI").orNull?.isNotBlank() == true) 0
+  else
+    (loaderModules
+      .map(::loaderJarDir)
+      .filter { it.isDirectory }
+      .flatMap { dir -> dir.listFiles()?.toList().orEmpty() }
+      .mapNotNull { devTagOf(it.name, project.version.toString()) }
+      .maxOrNull() ?: 0) + 1
+
+extra["localDevTag"] = localDevTag
 
 tasks.register<Copy>("collectArtifacts") {
   group = "minecheck"
   description = "Builds every loader jar and copies them into build/artifacts"
   dependsOn("buildAll")
 
-  // Exactly the jar this build produced, named by loader and version: `build/libs` also keeps jars
-  // from earlier versions, and copying whatever happens to be in there is how a stale artifact ends
-  // up attached to a release — the same class of mistake as shipping the un-remapped jar (#23).
+  val artifactsVersion = "${property("minecraft_version")}-${project.version}"
   loaderModules.forEach { module ->
     val name = "MineCheck-${module.removeSuffix("-mod")}-$artifactsVersion"
-    // The jar a game loads. Locally it carries a `-dev-<tag>` suffix so a couple of builds can sit
-    // side by side in a mods folder; a release ships the same bytes under the release name, and
-    // this copy is the only place the suffix comes off. A plain `./gradlew build` never writes the
-    // release-named file.
     from(loaderJarDir(module)) {
-      include("$name-dev-*.jar")
-      rename { "$name.jar" }
-    }
-    from(loaderJarDir(module)) {
-      // The same code in development names, attached to the release for reading stack traces. The
-      // plain and sources jars are Maven-only, and an older build sitting in `build/libs` never
-      // belongs in a release.
-      include("$name-deobf.jar")
+      // The loadable jar and its deobfuscated twin, and nothing else: sources and javadoc are
+      // Maven-only, and an older build sitting in `build/libs` never belongs in a release.
+      include("$name.jar", "$name-deobf.jar", "$name-dev-*.jar")
     }
   }
 

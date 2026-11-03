@@ -128,27 +128,24 @@ tasks.named("jar") {
   enabled = false
 }
 
-// The published jar has to be in the loader's *production* namespace. A Forge jar built against
-// Mojang names loads fine in the Gradle plugin's dev runtime and dies on a real client's first tick
-// with `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'` (issue #23), because production
-// Forge resolves members by SRG name. unimined's own remap task targets the plain `jar`, which this
-// module disables because the shadowJar is the mod, so the remap is registered against the shadow
-// jar instead: shadow -> remap -> the one jar this loader ships.
+// The published jar has to be in the loader's *production* namespace, or it dies in a production
+// instance (issue #23). unimined's own remap targets the plain `jar`, which this module disables
+// because the shadowJar is the mod, so the remap is registered against the shadow jar instead:
+// shadow (-deobf) -> remap -> the jar a launcher gets.
 val minecraftConfig =
   extensions
     .getByType(xyz.wagyourtail.unimined.api.UniminedExtension::class.java)
     .minecrafts[sourceSets.main.get()]
     ?: error("unimined registered no minecraft config for the main source set")
 
-// `-dev-<tag>`, never a bare `-dev`: several local builds get compared side by side, and the
-// suffix is what keeps them apart in a launcher's mods folder. `-Pminecheck.devtag=2` names the
-// second one; the default keeps a single build reproducible. `collectArtifacts` renames this jar
-// back to the release name, so the file a user downloads is unchanged.
-val devTag = providers.gradleProperty("minecheck.devtag").getOrElse("1")
+// The jar a standard instance is handed: unclassified in CI, `-dev-<n>` in a local build. The tag
+// comes from the root project, which takes the next free number across every loader, so one build
+// pairs its three jars under one tag and the next build never overwrites them.
+val localDevTag = rootProject.extra["localDevTag"] as Int
 
 val productionJar =
   minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
-    asJar { archiveClassifier.set("dev-$devTag") }
+    asJar { archiveClassifier.set(if (localDevTag == 0) "" else "dev-$localDevTag") }
   }
 
 tasks.named("assemble") { dependsOn(productionJar) }
