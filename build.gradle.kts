@@ -841,8 +841,8 @@ tasks.register<Copy>("collectArtifacts") {
   loaderModules.forEach { module ->
     val name = "MineCheck-${module.removeSuffix("-mod")}-$artifactsVersion"
     // The jar a game loads. Locally it carries a `-dev-<tag>` suffix so a couple of builds can sit
-    // side by side in a mods folder; a release ships the same bytes under the release name, and this
-    // copy is the only place the suffix comes off. A plain `./gradlew build` never writes the
+    // side by side in a mods folder; a release ships the same bytes under the release name, and
+    // this copy is the only place the suffix comes off. A plain `./gradlew build` never writes the
     // release-named file.
     from(loaderJarDir(module)) {
       include("$name-dev-*.jar")
