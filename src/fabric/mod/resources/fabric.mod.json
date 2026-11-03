@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "name": "Minecheck",
   "description": "Scripted automation of the Minecraft client and server for mod development",
-  "license": "GPL-3.0-only",
+  "license": "${licence}",
   "environment": "*",
   "mixins": [
     "minecheck.mixins.json"
