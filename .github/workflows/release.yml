@@ -569,6 +569,10 @@ jobs:
 
             echo "::group::Release $TAG"
             git switch --force-create "release-$MC" "origin/$MC/main"
+            # `git switch` rewrites tracked files only, so the gitignored build directory of the
+            # version processed before this one is still here. Empty the staging tree so this
+            # version cannot inherit another version's jars; the asset check below proves it (#52).
+            rm -rf build/artifacts
 
             ./gradlew buildAll collectArtifacts --no-daemon --console=plain \
               -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
@@ -617,6 +621,44 @@ jobs:
             )
             if (( ${#TARGETS[@]} == 0 )); then
               echo "::error::$REPO lists no release targets in kirjorjos/ci consumers.jsonl"
+              exit 1
+            fi
+
+            # Both jars per loader are attached on purpose: the remapped jar is the mod, and its
+            # `-deobf` twin is the same code in development names, for reading stack traces.
+            #
+            # The staged set is checked before anything is published. One dispatch releases several
+            # versions on one runner in one checkout, and the glob below decides what a user
+            # downloads, so a directory holding another version's jar fails the release instead of
+            # shipping it (#52).
+            mapfile -t LOADER_IDS < <(jq -r 'select(.id != null) | .id' .github/loaders.jsonl)
+            for id in "${LOADER_IDS[@]}"; do
+              for suffix in "" "-deobf"; do
+                expected="build/artifacts/MineCheck-$id-$MC-$VERSION$suffix.jar"
+                if [[ ! -f "$expected" ]]; then
+                  echo "::error::$TAG is missing $(basename "$expected")"
+                  exit 1
+                fi
+              done
+            done
+            for staged in build/artifacts/*.jar; do
+              name="$(basename "$staged")"
+              if [[ "$name" != MineCheck-*-"$MC-$VERSION.jar" && \
+                    "$name" != MineCheck-*-"$MC-$VERSION-deobf.jar" ]]; then
+                echo "::error::$name in build/artifacts does not belong to $TAG"
+                exit 1
+              fi
+            done
+
+            find build/artifacts -maxdepth 1 -type f -name '*.jar' -print0 \
+              | sort -z | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
+            mapfile -t ASSETS < <(
+              find build/artifacts -maxdepth 1 -type f \
+                \( -name '*.jar' -o -name 'SHA256SUMS.txt' \) -print
+            )
+            expected_count=$(( ${#LOADER_IDS[@]} * 2 + 1 ))
+            if (( ${#ASSETS[@]} != expected_count )); then
+              echo "::error::$TAG staged ${#ASSETS[@]} asset(s), expected $expected_count (two jars per loader plus SHA256SUMS.txt)"
               exit 1
             fi
 
