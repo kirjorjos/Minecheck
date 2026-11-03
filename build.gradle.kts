@@ -813,6 +813,19 @@ tasks.named("spotlessApply") { dependsOn(styluaApply) }
 
 tasks.named("spotlessCheck") { dependsOn(styluaCheck) }
 
+// The licence identifier is declared once, in gradle.properties, and substituted into the three
+// loader metadata files here. Literal copies in each file are what drift: Forge ended up saying
+// `GPLv3` while the other two said nothing at all.
+subprojects {
+  tasks.withType<ProcessResources>().configureEach {
+    val licence = providers.gradleProperty("licence")
+    inputs.property("licence", licence)
+    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "mods.toml")) {
+      filter { line: String -> line.replace("\${licence}", licence.get()) }
+    }
+  }
+}
+
 val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
 
 fun loaderJarDir(module: String): File =
