@@ -121,9 +121,15 @@ val minecraftConfig =
     .minecrafts[sourceSets.main.get()]
     ?: error("unimined registered no minecraft config for the main source set")
 
+// `-dev-<tag>`, never a bare `-dev`: several local builds get compared side by side, and the
+// suffix is what keeps them apart in a launcher's mods folder. `-Pminecheck.devtag=2` names the
+// second one; the default keeps a single build reproducible. `collectArtifacts` renames this jar
+// back to the release name, so the file a user downloads is unchanged.
+val devTag = providers.gradleProperty("minecheck.devtag").getOrElse("1")
+
 val productionJar =
   minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
-    asJar { archiveClassifier.set("") }
+    asJar { archiveClassifier.set("dev-$devTag") }
   }
 
 tasks.named("assemble") { dependsOn(productionJar) }
