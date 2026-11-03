@@ -820,7 +820,7 @@ subprojects {
   tasks.withType<ProcessResources>().configureEach {
     val licence = providers.gradleProperty("licence")
     inputs.property("licence", licence)
-    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "mods.toml")) {
+    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "**/mods.toml")) {
       filter { line: String -> line.replace("\${licence}", licence.get()) }
     }
   }
