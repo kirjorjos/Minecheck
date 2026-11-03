@@ -821,21 +821,41 @@ fun loaderJarDir(module: String): File =
 tasks.register("buildAll") {
   group = "minecheck"
   description =
-    "Builds every loader's distributable jar (:fabric-mod:shadowJar, :quilt-mod:shadowJar, :forge-mod:shadowJar)"
-  dependsOn(loaderModules.map { ":$it:shadowJar" })
+    "Builds every loader's distributable jar (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
+  dependsOn(loaderModules.map { ":$it:productionJar" })
 }
+
+/** The `<n>` of a `-dev-<n>` jar name built from [version], or null for anything else. */
+fun devTagOf(name: String, version: String): Int? =
+  Regex("-${Regex.escape(version)}-dev-(\\d+)\\.jar$").find(name)?.groupValues?.get(1)?.toInt()
+
+// `-dev-<n>` is local-only and auto-incrementing: CI builds unclassified so a release asset name
+// stays stable, while a local build takes the next free number for this version, so bumping major,
+// minor or patch resets the counter on its own.
+val localDevTag: Int =
+  if (providers.environmentVariable("CI").orNull?.isNotBlank() == true) 0
+  else
+    (loaderModules
+      .map(::loaderJarDir)
+      .filter { it.isDirectory }
+      .flatMap { dir -> dir.listFiles()?.toList().orEmpty() }
+      .mapNotNull { devTagOf(it.name, project.version.toString()) }
+      .maxOrNull() ?: 0) + 1
+
+extra["localDevTag"] = localDevTag
 
 tasks.register<Copy>("collectArtifacts") {
   group = "minecheck"
   description = "Builds every loader jar and copies them into build/artifacts"
   dependsOn("buildAll")
 
+  val artifactsVersion = "${property("minecraft_version")}-${project.version}"
   loaderModules.forEach { module ->
+    val name = "MineCheck-${module.removeSuffix("-mod")}-$artifactsVersion"
     from(loaderJarDir(module)) {
-      include("*.jar")
-      // Sources/javadoc ship to Maven, not to the GitHub Release; the Forge reobf jar is never
-      // distributed at all (spec decision 25).
-      exclude("*-sources.jar", "*-javadoc.jar", "*-production.jar")
+      // The loadable jar and its deobfuscated twin, and nothing else: sources and javadoc are
+      // Maven-only, and an older build sitting in `build/libs` never belongs in a release.
+      include("$name.jar", "$name-deobf.jar", "$name-dev-*.jar")
     }
   }
 

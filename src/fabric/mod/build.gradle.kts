@@ -99,7 +99,9 @@ dependencies {
 
 tasks.shadowJar {
   configurations = listOf(project.configurations.runtimeClasspath.get())
-  archiveClassifier.set("")
+  // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
+  // and writing mixins, never loaded by a game.
+  archiveClassifier.set("deobf")
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
@@ -135,7 +137,27 @@ tasks.named("jar") {
   enabled = false
 }
 
-tasks.named("assemble") { dependsOn(tasks.named("shadowJar")) }
+// The published jar has to be in the loader's *production* namespace, or it dies in a production
+// instance (issue #23). unimined's own remap targets the plain `jar`, which this module disables
+// because the shadowJar is the mod, so the remap is registered against the shadow jar instead:
+// shadow (-deobf) -> remap -> the jar a launcher gets.
+val minecraftConfig =
+  extensions
+    .getByType(xyz.wagyourtail.unimined.api.UniminedExtension::class.java)
+    .minecrafts[sourceSets.main.get()]
+    ?: error("unimined registered no minecraft config for the main source set")
+
+// The jar a standard instance is handed: unclassified in CI, `-dev-<n>` in a local build. The tag
+// comes from the root project, which takes the next free number across every loader, so one build
+// pairs its three jars under one tag and the next build never overwrites them.
+val localDevTag = rootProject.extra["localDevTag"] as Int
+
+val productionJar =
+  minecraftConfig.remap(tasks.shadowJar.get(), "productionJar") {
+    asJar { archiveClassifier.set(if (localDevTag == 0) "" else "dev-$localDevTag") }
+  }
+
+tasks.named("assemble") { dependsOn(productionJar) }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
 
