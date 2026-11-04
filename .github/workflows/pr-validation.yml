@@ -2,7 +2,7 @@ name: PR validation
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, closed]
+    types: [opened, reopened, synchronize, ready_for_review, closed]
 
 permissions:
   contents: read
@@ -259,14 +259,113 @@ jobs:
               || echo "::notice::head branch $SOURCE was already deleted"
           fi
 
-  ci:
-    name: Build + tests
+  # The slot: one matrix at a time per version line. This job is the *wait*, not the launcher.
+  # The matrix has to run inside this pull request's own `pull_request_target` run, because that is
+  # the only run whose checks attach to the PR head — a dispatched run reports on the default
+  # branch's sha and could never satisfy the required context on the pull request.
+  slot:
+    name: Wait for the slot
     needs: rules
     if: >-
       needs.rules.outputs.valid == 'true' &&
       needs.rules.outputs.run_ci == 'true' &&
-      github.event.action != 'closed'
+      github.event.action != 'closed' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      checks: write
+      pull-requests: write
+    outputs:
+      mc: ${{ steps.take.outputs.mc }}
+    steps:
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout the base branch
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      # The run's own `pull_requests` array is empty for this event, so the only reliable way to
+      # tell a downstream workflow which pull request this run belongs to is an artifact written
+      # here, before the (possibly 90-minute) wait.
+      - name: Publish the slot context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/slot-context"
+          jq -n --arg pr "$PR_NUMBER" --arg sha "$SHA" --arg target "$BASE" --arg mc "${BASE%%/*}" \
+            '{pr: ($pr | tonumber), sha: $sha, target: $target, mc: $mc}' \
+            > "$RUNNER_TEMP/slot-context/pr.json"
+          cat "$RUNNER_TEMP/slot-context/pr.json"
+
+      - name: Upload the slot context
+        uses: actions/upload-artifact@v4
+        with:
+          name: slot-context
+          path: ${{ runner.temp }}/slot-context/pr.json
+          retention-days: 7
+
+      - name: Take a place in the queue and wait for the grant
+        id: take
+        uses: kirjorjos/ci/minecraft-mods/types/slot/run@minecraft-mods/v1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          mode: take
+          pr: ${{ github.event.pull_request.number }}
+          sha: ${{ github.event.pull_request.head.sha }}
+          target: ${{ github.event.pull_request.base.ref }}
+          compare: ${{ github.event.pull_request.base.ref }}
+          fork: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          head-repo: ${{ github.event.pull_request.head.repo.full_name }}
+
+  ci:
+    name: Build + tests
+    needs: [rules, slot]
+    if: needs.slot.result == 'success'
     uses: ./.github/workflows/ci.yml
     with:
       checkout_ref: refs/pull/${{ github.event.pull_request.number }}/head
       compare_baselines: ${{ github.event.pull_request.base.ref }}
+
+  # `always()` so a failed or cancelled matrix still hands the slot on; the lease is only the
+  # backstop for a run that dies outright.
+  release:
+    name: Release the slot
+    needs: [slot, ci]
+    if: always() && needs.slot.result == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      checks: write
+    steps:
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout the base branch
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Give the slot back
+        uses: kirjorjos/ci/minecraft-mods/types/slot/run@minecraft-mods/v1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          mode: release
+          pr: ${{ github.event.pull_request.number }}
+          sha: ${{ github.event.pull_request.head.sha }}
+          target: ${{ github.event.pull_request.base.ref }}

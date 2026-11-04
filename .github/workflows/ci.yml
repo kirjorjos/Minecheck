@@ -1,14 +1,9 @@
 name: CI
 
+# Called only from a pull request's own validation run, which waits for its version line's slot
+# first (`.github/workflows/pr-validation.yml`). A `push` trigger here would be a second, unslotted
+# writer on the same line, which is what the slot exists to prevent.
 on:
-  push:
-  workflow_dispatch:
-    inputs:
-      compare_baselines:
-        description: Branch whose tests/baselines/ to compare screenshots against. Empty means the checked-out ref.
-        required: false
-        type: string
-        default: ''
   workflow_call:
     inputs:
       checkout_ref:
@@ -185,7 +180,7 @@ jobs:
           # only screenshot verdict this job owns.
           REPORT=""
           MANIFEST=""
-          if [[ -n "${{ inputs.compare_baselines }}" || "${{ github.event_name }}" == "push" ]]; then
+          if [[ -n "${{ inputs.compare_baselines }}" ]]; then
             REPORT="-Pminecheck.screenshots.report=true"
             MANIFEST="-Pminecheck.screenshots.manifest=build/minecheck/shots-report/${{ matrix.loader }}.jsonl"
           fi
@@ -198,7 +193,7 @@ jobs:
         timeout-minutes: 120
 
       - name: Save the first pass's captures
-        if: always() && (github.event_name == 'push' || inputs.compare_baselines != '')
+        if: always() && inputs.compare_baselines != ''
         run: |
           set -euo pipefail
           src="src/${{ matrix.loader }}/mod/run/client/screenshots"
@@ -208,7 +203,7 @@ jobs:
 
       - name: List the baselines this loader disagrees with
         id: changed
-        if: always() && (github.event_name == 'push' || inputs.compare_baselines != '')
+        if: always() && inputs.compare_baselines != ''
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/changed-baselines"
@@ -268,7 +263,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload the changed baseline list
-        if: always() && (github.event_name == 'push' || inputs.compare_baselines != '')
+        if: always() && inputs.compare_baselines != ''
         uses: actions/upload-artifact@v4
         with:
           name: changed-baselines-${{ matrix.loader }}
@@ -281,7 +276,7 @@ jobs:
   collect:
     name: Collect
     needs: test
-    if: always() && (github.event_name == 'push' || inputs.compare_baselines != '')
+    if: always() && inputs.compare_baselines != ''
     runs-on: ubuntu-22.04
     steps:
       - name: Download the per-loader lists
