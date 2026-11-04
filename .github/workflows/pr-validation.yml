@@ -50,11 +50,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # `<caller> / Validate PR rules` - matched by suffix, because the caller's workflow name is
-          # the consumer's own ("Shared CI" in the synced entry file) and not worth pinning here.
+          # Matched by suffix: the check reports as `Validate PR rules` here, because the caller is
+          # this repository's synced entry file and the name keeps only the innermost job - but a
+          # deeper nesting would arrive as `<job> / Validate PR rules`, and neither shape is worth
+          # pinning. An earlier `/ Validate PR rules` test matched nothing at all.
           for _ in $(seq 1 60); do
             runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-              --jq '[.check_runs[] | select(.name | endswith("/ Validate PR rules"))]' 2> /dev/null || echo '[]')
+              --jq '[.check_runs[] | select(.name | endswith("Validate PR rules"))]' 2> /dev/null || echo '[]')
             [[ -n "$runs" ]] || runs='[]'
 
             if jq -e 'any(.[]; .status == "completed" and .conclusion != "success")' <<<"$runs" > /dev/null; then
