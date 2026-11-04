@@ -15,13 +15,7 @@
       "tier": 0
     }
   ],
-  "holder": {
-    "id": "e-3",
-    "kind": "chore",
-    "lease_until": "2026-11-04T06:27:35Z",
-    "pr": "",
-    "sha": "f1abc31ada73a0be137ab41c91785dbb31bb078c"
-  },
+  "holder": null,
   "last_runs": {},
   "mc": "1.18.2",
   "seq": 4
