@@ -1,12 +1,6 @@
 {
   "entries": [],
-  "holder": {
-    "id": "h-1793759912",
-    "kind": "release",
-    "lease_until": "2026-11-04T04:38:32Z",
-    "pr": "verify",
-    "sha": ""
-  },
+  "holder": null,
   "last_runs": {},
   "mc": "1.19.2",
   "seq": 0
