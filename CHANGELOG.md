@@ -41,3 +41,7 @@ Suggested shape, delete what you do not use:
   names loads in the Gradle dev runtime and dies in a production instance — the Forge jar with
   `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'` (#23). `checkProductionJars` now fails
   the build if any loader's jar is not remapped.
+- `collectArtifacts` read `minecraft_version` inside the `Copy` task, where `property` resolves
+  against the task instead of the project, so `publish` — and with it the whole release — died
+  while configuring the root project. The version is now resolved on the project, as it already
+  was on 1.19.2. `1.19.2/v2.0.1` shipped without this line; `1.18.2` could not publish at all.
