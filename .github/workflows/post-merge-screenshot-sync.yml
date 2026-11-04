@@ -16,8 +16,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The chore contends for the same per-version slot as a test matrix: it rewrites
+  # `tests/baselines`, and a matrix that fetched the base branch mid-rewrite would compare against
+  # pictures that are moving. Tier -1, so it is granted before any waiting pull request.
+  slot:
+    name: Wait for the slot
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      checks: write
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Stop when this push is the chore's own
+        id: guard
+        env:
+          SUBJECT: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != "workflow_dispatch" ]]; then
+            subject="${SUBJECT%%$'\n'*}"
+            if [[ "$subject" == "chore: sync screenshot baselines"* ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "The head commit is this chore - stopping instead of looping."
+              exit 0
+            fi
+            if [[ "$ACTOR" == *"[bot]"* ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Pushed by $ACTOR, which is this chore's own identity - stopping."
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Mint an app token
+        id: app
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Wait for the grant
+        if: steps.guard.outputs.skip == 'false'
+        uses: kirjorjos/ci/minecraft-mods/types/slot/run@minecraft-mods/v1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          mode: take-chore
+          sha: ${{ github.sha }}
+          target: ${{ github.ref_name }}
+
   sync:
     name: Sync the mismatched baselines
+    needs: slot
+    if: needs.slot.outputs.skip != 'true'
     runs-on: ubuntu-22.04
     steps:
       - name: Stop when this push is the chore's own
@@ -119,9 +180,9 @@ jobs:
         run: |
           set -euo pipefail
           run_id="$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&per_page=50" \
-            --jq '[.workflow_runs[] | select(.name == "CI")] | sort_by(.created_at) | reverse | .[0].id // empty')"
+            --jq '[.workflow_runs[] | select(.name == "PR validation")] | sort_by(.created_at) | reverse | .[0].id // empty')"
           if [[ -z "$run_id" ]]; then
-            echo "::warning::no CI run for $HEAD_SHA - falling back to a re-render"
+            echo "::warning::no PR validation run for $HEAD_SHA - falling back to a re-render"
             exit 1
           fi
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
@@ -272,3 +333,34 @@ jobs:
           jq -n --arg body "$body" '{body: $body}' \
             | gh api "repos/$REPO/issues/$ISSUE/comments" --input - >/dev/null
           echo "Commented #$ISSUE: $body"
+
+  # `always()`: a failed sync must still hand the slot on.
+  release:
+    name: Release the slot
+    needs: [slot, sync]
+    if: always() && needs.slot.outputs.skip == 'false'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      checks: write
+    steps:
+      - name: Mint an app token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Give the slot back
+        uses: kirjorjos/ci/minecraft-mods/types/slot/run@minecraft-mods/v1
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        with:
+          mode: release
+          sha: ${{ github.sha }}
+          target: ${{ github.ref_name }}
