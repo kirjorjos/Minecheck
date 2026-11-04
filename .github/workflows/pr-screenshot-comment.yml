@@ -2,7 +2,11 @@ name: PR screenshot baselines
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    # The matrix now runs inside the pull request's own validation run (it waits for its version
+    # line's slot first), so that is the run whose artifacts and PR payload this table needs. The
+    # old "CI" name only ever matched push runs, which is why this workflow reported nothing for
+    # pull requests.
+    workflows: ["PR validation"]
     types: [completed]
 
 permissions:
@@ -16,6 +20,16 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request_target'
     runs-on: ubuntu-22.04
     steps:
+      - name: Download the slot context
+        id: context
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: slot-context
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/slot-context
+
       - name: Download the mismatch manifest
         id: download
         continue-on-error: true
@@ -30,6 +44,7 @@ jobs:
         id: table
         uses: actions/github-script@v7
         env:
+          CONTEXT: ${{ runner.temp }}/slot-context/pr.json
           MANIFEST: ${{ runner.temp }}/changed-baselines/manifest.jsonl
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         with:
@@ -66,27 +81,23 @@ jobs:
               return;
             }
 
-            let number = run.pull_requests?.[0]?.number;
-            if (!number) {
-              const headOwner = (run.head_repository?.full_name ?? "").split("/")[0];
-              const { data: pulls } = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: "open",
-                head: `${headOwner}:${run.head_branch}`,
-              });
-              number = pulls[0]?.number;
+            // This run is a `pull_request_target` one, and those carry an EMPTY `pull_requests`
+            // array. The slot job therefore publishes `slot-context/pr.json` inside the run, which
+            // is the only reliable source for the number and the head sha — the previous fallback
+            // (look up open PRs by head branch) silently found nothing once the PR had merged.
+            let ctx = null;
+            if (fs.existsSync(process.env.CONTEXT)) {
+              ctx = JSON.parse(fs.readFileSync(process.env.CONTEXT, "utf8"));
             }
-            if (!number) {
+            const number = ctx?.pr ?? run.pull_requests?.[0]?.number;
+            const sha = ctx?.sha ?? run.head_sha;
+            const base = ctx?.target ?? "";
+            if (!number || !sha) {
               core.warning(`Could not resolve the pull request for run ${run.id}.`);
               return;
             }
-
-            const { data: pull } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: number,
-            });
+            core.setOutput("number", String(number));
+            core.setOutput("sha", sha);
 
             // Group by loader so the table answers "what did each loader do", which is how a
             // mismatch is acted on: it decides which baseline tree the chore rewrites.
@@ -110,7 +121,7 @@ jobs:
             const body = [
               marker,
               "",
-              `Screenshot baselines differ from \`${pull.base.ref}\` at commit \`${run.head_sha.slice(0, 7)}\` (${entries.length} capture${entries.length === 1 ? "" : "s"}):`,
+              `Screenshot baselines differ from \`${base}\` at commit \`${sha.slice(0, 7)}\` (${entries.length} capture${entries.length === 1 ? "" : "s"}):`,
               "",
               "| loader | capture | class |",
               "|---|---|---|",
@@ -151,6 +162,7 @@ jobs:
         env:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           COUNT: ${{ steps.table.outputs.count }}
+          HEAD_SHA: ${{ steps.table.outputs.sha }}
         with:
           script: |
             // The second required context on <mc>/development: it cannot go green before the
@@ -162,7 +174,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 name: "Screenshot mismatch table",
-                head_sha: run.head_sha,
+                head_sha: process.env.HEAD_SHA,
                 status: "completed",
                 conclusion,
                 output: {
