@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "compare": "",
+      "enqueued_at": "2026-11-04T03:56:49Z",
+      "fork": false,
+      "head_repo": "",
+      "id": "e-1",
+      "kind": "chore",
+      "overtaken": 0,
+      "pr": "",
+      "seq": 1,
+      "sha": "f1abc31ada73a0be137ab41c91785dbb31bb078c",
+      "target": "1.18.2/development",
+      "tier": -1
+    }
+  ],
+  "holder": null,
+  "last_runs": {},
+  "mc": "1.18.2",
+  "seq": 1
+}
