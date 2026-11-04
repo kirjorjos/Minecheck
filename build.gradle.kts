@@ -41,7 +41,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "2.0.1"
+version = "2.0.2"
 
 group = "net.minecheck"
 
@@ -858,12 +858,15 @@ val localDevTag: Int =
 
 extra["localDevTag"] = localDevTag
 
+// Resolved on the project, not inside the Copy task (where `property` would look for a task
+// property and fail): the release attaches exactly these files.
+val artifactsVersion = "${property("minecraft_version")}-${project.version}"
+
 tasks.register<Copy>("collectArtifacts") {
   group = "minecheck"
   description = "Builds every loader jar and copies them into build/artifacts"
   dependsOn("buildAll")
 
-  val artifactsVersion = "${property("minecraft_version")}-${project.version}"
   loaderModules.forEach { module ->
     val name = "MineCheck-${module.removeSuffix("-mod")}-$artifactsVersion"
     from(loaderJarDir(module)) {
