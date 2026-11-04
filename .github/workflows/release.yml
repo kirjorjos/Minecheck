@@ -569,6 +569,10 @@ jobs:
 
             echo "::group::Release $TAG"
             git switch --force-create "release-$MC" "origin/$MC/main"
+            # `git switch` rewrites tracked files only, so the gitignored build directory of the
+            # version processed before this one is still here. Empty the staging tree so this
+            # version cannot inherit another version's jars; the asset check below proves it (#52).
+            rm -rf build/artifacts
 
             ./gradlew buildAll collectArtifacts --no-daemon --console=plain \
               -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
@@ -606,6 +610,36 @@ jobs:
 
           print("\n".join(lines[index:]).strip())
           PY
+
+            # Every staged jar has to belong to the version being released. One dispatch builds
+            # every version on one runner in one checkout, so `build/libs` and `build/artifacts`
+            # outlive the branch switch, and the glob below is what decides a user's downloads
+            # (#52).
+            #
+            # One jar per loader today; the `-deobf` twin is already accepted here so a branch that
+            # starts shipping it needs no change to this check.
+            mapfile -t LOADER_IDS < <(jq -r 'select(.id != null) | .id' .github/loaders.jsonl)
+            for id in "${LOADER_IDS[@]}"; do
+              if [[ ! -f "build/artifacts/MineCheck-$id-$MC-$VERSION.jar" ]]; then
+                echo "::error::$TAG is missing MineCheck-$id-$MC-$VERSION.jar"
+                exit 1
+              fi
+            done
+            for staged in build/artifacts/*.jar; do
+              name="$(basename "$staged")"
+              wanted="false"
+              for id in "${LOADER_IDS[@]}"; do
+                if [[ "$name" == "MineCheck-$id-$MC-$VERSION.jar" || \
+                      "$name" == "MineCheck-$id-$MC-$VERSION-deobf.jar" ]]; then
+                  wanted="true"
+                  break
+                fi
+              done
+              if [[ "$wanted" != "true" ]]; then
+                echo "::error::$name in build/artifacts does not belong to $TAG"
+                exit 1
+              fi
+            done
 
             find build/artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-production.jar' -print0 \
               | sort -z | xargs -0 sha256sum > build/artifacts/SHA256SUMS.txt
