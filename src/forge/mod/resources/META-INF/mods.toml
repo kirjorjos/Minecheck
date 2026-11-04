@@ -1,6 +1,6 @@
 modLoader = "javafml"
 loaderVersion = "[43,)"
-license = "GPLv3"
+license = "${licence}"
 
 [[mods]]
 modId = "minecheck"

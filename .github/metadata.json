@@ -1,0 +1,9 @@
+{
+  "loaders": ["fabric", "forge", "quilt"],
+  "release": {
+    "prefix": "MineCheck-",
+    "nameFormat": "{loader}-{mc}-{version}{deobf}.jar",
+    "variants": ["", "-deobf"],
+    "artifactsDir": "build/artifacts"
+  }
+}
