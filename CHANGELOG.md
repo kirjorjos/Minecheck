@@ -18,9 +18,3 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
-
-## Changed
-
-- Released as `2.0.2` alongside `1.18.2`. Nothing changed for 1.19.2; the version moved so both
-  Minecraft lines stay on one number after `1.18.2` needed a build fix before it could publish at
-  all, which left `1.19.2/v2.0.1` as the only release of that version (#64).
