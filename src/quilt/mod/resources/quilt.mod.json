@@ -25,6 +25,9 @@
       { "id": "quilt_loader", "versions": ">=0.19.0" },
       { "id": "quilted_fabric_api", "versions": ">=1.0.0-beta.28" },
       { "id": "minecraft", "versions": ">=${minecraft_version}" }
+    ],
+    "optional": [
+      { "id": "freecam", "versions": ">=1.18.2 <1.20" }
     ]
   }
 }
