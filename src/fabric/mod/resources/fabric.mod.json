@@ -23,6 +23,6 @@
     "minecraft": ">=${minecraft_version} <${minecraft_next}"
   },
   "recommends": {
-    "freecam": "*"
+    "minecam": "*"
   }
 }
