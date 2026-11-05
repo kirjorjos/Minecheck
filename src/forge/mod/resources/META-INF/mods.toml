@@ -25,7 +25,7 @@ side = "BOTH"
 # Optional in both directions: MineCam is usable standalone, and Minecheck only wants it to own
 # the human's camera. Neither mod may require the other, and MineCam is client-only.
 [[dependencies.minecheck]]
-modId = "freecam"
+modId = "minecam"
 mandatory = false
 versionRange = "[0,)"
 ordering = "NONE"
