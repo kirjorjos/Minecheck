@@ -648,40 +648,40 @@ registerLoaderAggregate(
   "testQuiltShots",
 )
 
-val loadersFile = layout.projectDirectory.file(".github/loaders.jsonl")
+val metadataFile = layout.projectDirectory.file(".github/metadata.json")
 
 /**
- * Validates the loader list CI reads. The file is the single source of truth for which loaders
- * exist, and it decides how many jobs a PR runs, so a typo here must fail locally instead of
- * silently dropping a loader from CI.
+ * Validates the loader list CI reads. `.loaders` in the metadata file is the single source of truth
+ * for which loaders exist, and it decides how many jobs a PR runs, so a typo here must fail locally
+ * instead of silently dropping a loader from CI.
  *
- * <p>Only typos are rejected: a module with no entry in the file is allowed, so dropping a loader
+ * <p>Only typos are rejected: a module with no entry in the list is allowed, so dropping a loader
  * from CI stays a one-line change rather than a module deletion.
  */
 val checkLoaders =
   tasks.register("checkLoaders") {
     group = "minecheck"
     description =
-      "Validates .github/loaders.jsonl against the modules, aggregate tasks and baselines"
-    val file = loadersFile.asFile
+      "Validates .loaders in .github/metadata.json against the modules, aggregate tasks and baselines"
+    val file = metadataFile.asFile
     inputs.file(file)
     doLast {
       fun fail(message: String): Nothing =
         throw GradleException("Minecheck: ${file.relativeTo(projectDir)}: $message")
 
       if (!file.isFile) fail("missing")
+      val metadata =
+        try {
+          groovy.json.JsonSlurper().parseText(file.readText())
+        } catch (e: Exception) {
+          fail("is not valid JSON: ${e.message}")
+        }
+      val listed = (metadata as? Map<*, *>)?.get("loaders")
+      if (listed !is List<*>) fail("has no \"loaders\" array")
       val ids = mutableListOf<String>()
-      file.readLines().forEachIndexed { index, raw ->
-        val line = raw.trim()
-        if (line.isEmpty()) return@forEachIndexed
-        val parsed =
-          try {
-            groovy.json.JsonSlurper().parseText(line)
-          } catch (e: Exception) {
-            fail("line ${index + 1} is not valid JSON: ${e.message}")
-          }
-        val id = ((parsed as? Map<*, *>)?.get("id") as? String)?.trim()
-        if (id.isNullOrEmpty()) fail("line ${index + 1} has no string \"id\"")
+      listed.forEachIndexed { index, entry ->
+        val id = (entry as? String)?.trim()
+        if (id.isNullOrEmpty()) fail("loader ${index + 1} is not a non-empty string")
         if (!Regex("[a-z0-9][a-z0-9-]*").matches(id)) {
           fail("loader id \"$id\" must match [a-z0-9][a-z0-9-]*")
         }
