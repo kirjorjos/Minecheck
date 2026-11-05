@@ -1,12 +1,6 @@
 {
   "entries": [],
-  "holder": {
-    "id": "e-10",
-    "kind": "pr",
-    "lease_until": "2026-11-05T06:13:37Z",
-    "pr": "75",
-    "sha": "eb9bea7ef84efe81efe92fdd02122e15be2f78a1"
-  },
+  "holder": null,
   "last_runs": {
     "65": {
       "at": "2026-11-04T05:44:52Z",
@@ -15,6 +9,10 @@
     "73": {
       "at": "2026-11-05T02:48:28Z",
       "sha": "a7cab5cc2321a916e8d661873bf4780d82d556e3"
+    },
+    "75": {
+      "at": "2026-11-05T05:14:33Z",
+      "sha": "eb9bea7ef84efe81efe92fdd02122e15be2f78a1"
     }
   },
   "mc": "1.18.2",
