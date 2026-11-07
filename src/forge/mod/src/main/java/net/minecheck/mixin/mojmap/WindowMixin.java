@@ -7,6 +7,7 @@ import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -22,14 +23,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Window.class)
 public class WindowMixin {
 
-  @Inject(
+  @Redirect(
       method = "<init>",
-      at =
-          @At(
-              value = "INVOKE",
-              target = "Lorg/lwjgl/glfw/GLFW;glfwDefaultWindowHints()V",
-              shift = At.Shift.AFTER))
-  private void minecheck$hideWindowAtCreation(CallbackInfo callback) {
+      at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFW;glfwDefaultWindowHints()V"))
+  private void minecheck$resetWindowHints() {
+    // A redirect, not a callback: Mixin refuses a callback injector at a call inside a constructor,
+    // and this hook has to sit between the reset and the window's creation. Redirecting keeps the
+    // call itself, so the hints Minecraft sets afterwards still start from a clean slate.
+    GLFW.glfwDefaultWindowHints();
     if (GameWindowPolicy.hide(FMLPaths.CONFIGDIR.get())) {
       GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE);
     }
