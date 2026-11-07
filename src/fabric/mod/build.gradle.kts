@@ -14,6 +14,13 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
+// The compatible range the mod metadata declares, from the same single source of truth: "1.18.2"
+// accepts 1.18.x, "26.1" accepts 26.1.x.
+val mcNext =
+  mcVersion.split('.').let { parts ->
+    if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
+  }
+
 val jeiVersion = "11.6.0.1024"
 val emiVersion = "1.1.24+1.19.2+fabric"
 val reiVersion = "9.2.784+fabric"
@@ -33,6 +40,15 @@ unimined.minecraft {
 
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
+}
+
+// fabric.mod.json is templated so the version range cannot drift from gradle.properties; without
+// this the placeholders reach the loader verbatim and every dev run dies at mod discovery.
+tasks.processResources {
+  inputs.property("minecraftVersion", mcVersion)
+  filesMatching("fabric.mod.json") {
+    expand("minecraft_version" to mcVersion, "minecraft_next" to mcNext)
+  }
 }
 
 // Cloth Config for Fabric ships its `me.shedaniel.math` library as a nested jar, and a Fabric

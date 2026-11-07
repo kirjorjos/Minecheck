@@ -110,10 +110,20 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `screenshotGuiScale` | int | `2` | GUI scale the HUD is laid out at, 1–4. Pinned rather than auto, so HUD geometry does not depend on the window. |
 | `screenshotScale` | number | `1.0` | Encode-time downscale for smaller artifacts, `0.25`–`1.0`. Part of a baseline's identity. |
 | `screenshotChatVisible` | boolean | `false` | Whether chat may appear in a capture. See [the capture profile](#the-capture-profile-why-a-shot-is-reproducible). |
-| `viewWindow` | boolean | `false` | Show the client in a view-only window (a "video feed" of a run whose game window nobody can see). Never required, and never fatal: a headless JVM logs why and runs without it. |
+| `viewWindow` | boolean | `false` | Show the client in a view window when the game's own window is hidden — the run's one window, never a second. Its keys are the human's and drive whatever it is drawing. Never required, and never fatal: a headless JVM logs why and runs without it. |
 | `restoreVanillaCamera` | boolean | `false` | Leave the camera and render path completely untouched — no render-delta pin, no capture readback. Scripting keeps working; every `captureScreenshot` fails. |
 | `hideGameWindow` | boolean | `true` | Keep the client's own window from ever appearing: it is created visible never, not hidden afterwards. Set `false` for the ordinary window. |
 | `muteAudio` | boolean | `true` | Never open an audio device: no ALC context, source set or mixer thread is created. Set `false` to give the run sound back. |
+| `cameraMode` | string | `"off"` | `"off"`, `"assist"` or `"fullControl"`. `off` installs nothing: no camera entity, no bindings, no camera work in the render path. `assist` puts the human alongside Lua; a headless JVM has no human input at all, so only Lua drives it there. `restoreVanillaCamera` forces `"off"`. |
+| `cameraHorizontalSpeed` | number | `1.0` | Horizontal flight speed factor, 0–10. |
+| `cameraVerticalSpeed` | number | `1.0` | Vertical (jump/sneak) flight speed factor, 0–10. |
+| `cameraIgnoreAll` | boolean | `true` | The camera passes through every block. The only collision switch the camera has. |
+| `cameraInteractionMode` | string | `"CAMERA"` | `"CAMERA"`: interactions originate at the camera's aim. `"PLAYER"`: at the player's. Both are range-gated to the player's reach. |
+| `cameraShowPlayer` | boolean | `true` | Draw the player's body at its real position while the camera is detached. |
+| `cameraFullBright` | boolean | `false` | Force the maximum lightmap brightness. |
+| `cameraDisableOnDamage` | boolean | mode | Leave the camera when the player takes damage. Defaults on in `assist`, off otherwise. |
+| `cameraFreezePlayer` | boolean | `false` | Block the human's player movement while the camera is active. |
+| `cameraNotifications` | boolean | mode | Action-bar notices on toggle. Defaults on in `assist`, off otherwise. |
 
 The mod also accepts a JVM system property `-Dminecheck.script=<name>` to override the entry script at launch time. It wins over whatever the file names — `script` or `coordinator` — and it works on a config that names neither, so a one-off run needs no edit to `config.json`. The name is resolved against the same `minecheck/scripts` directory; a name with no matching file starts nothing.
 
@@ -140,7 +150,16 @@ Four fields are about the client the run drives rather than about a script:
   reports the refused device once at startup as `Error starting SoundSystem. Turning off sounds &
   music`; that line is this setting doing its job, not a fault, and Minecheck logs the same decision
   as `muteAudio is on — no audio device will be opened` just above it.
-- **`viewWindow`** opens a window that shows the client's frames — a video feed of a run whose game window nobody can see. It is **view only**: it installs no mouse listener and never grabs the pointer, so clicking it does nothing, and the keys typed into it are dispatched through Minecheck's own virtual keyboard. `F2` there writes a screenshot and `F3` opens the debug screen exactly like pressing them in the game. A headless JVM, or a machine with no display at all, logs why and runs without it: turning it on can never break a headless run.
+- **`viewWindow`** opens a window that shows the client's frames when the game's own window is
+  hidden. It is the run's **one** window: paired with `hideGameWindow=false` it opens nothing,
+  because a client never has two windows at once. It installs no mouse listener and never grabs the
+  pointer, so clicking it does nothing — but the keys typed into it are the human's, not scripted
+  input, and they drive whatever the window is drawing: the player's view moves the player, the
+  camera's view flies the camera. `F2` there writes a screenshot and `F3` opens the debug screen
+  exactly like pressing them in the game. A headless JVM, or a machine with no display at all, logs
+  why and runs without it: turning it on can never break a headless run. Headless also means there
+  is no human input at all — no window, nobody to type into it — so a headless run is driven by Lua
+  alone, whatever `cameraMode` says.
 - **`restoreVanillaCamera`** leaves the camera and the render path completely untouched, for a setup where another mod core-mods the camera or the renderer and conflicts with Minecheck's injections. World entry, input, commands and assertions all keep working; every capture fails with the sentence in [the capture errors](#capture-errors) table, and `-Pminecheck.screenshots.update=true` fails too — a mode that cannot produce pixels must never write baselines.
 
 ---
@@ -581,6 +600,59 @@ minecheck.reloadResources(30)
 ```
 
 Client-only; calling it from a server script raises `"client-only function called on dedicated server"`.
+
+---
+
+## Camera (client)
+
+The camera is a **human-only observation camera** built into Minecheck, off unless `cameraMode`
+names a mode. `assist` lets a human fly while a script runs; `fullControl` lets the script drive the
+camera and the player, with every physical input ignored. Captures photograph the player view by
+default, so a baseline is never the camera's picture.
+
+### `minecheck.cameraMode() → string`
+
+The effective mode: `"off"`, `"assist"` or `"fullControl"`. `restoreVanillaCamera` makes it `"off"`
+whatever the file says. Readable in every mode — including `"off"` — because a script's first
+question is what it is allowed to do; it is the only camera action that does not raise while the
+camera is disabled. The same value is on [`minecheck.config()`](#minecheckconfig--table).
+
+### `minecheck.cameraToggle([active]) → boolean`
+
+Attaches or detaches the camera. With no argument it flips the current state; with a boolean it
+makes the camera match, so `cameraToggle(true)` is idempotent. Returns whether the camera is
+attached afterwards. Attaching needs the client to be in a world: before that the camera stays
+detached and the call returns `false`. Lua may always toggle; the human's `F4` works only when human
+input is enabled, so it does nothing in `fullControl`.
+
+### `minecheck.isCameraActive() → boolean`
+
+Whether the camera is attached and is what the client renders from.
+
+### `minecheck.cameraPose() → table / nil`
+
+`{ x, y, z, yaw, pitch }` — world coordinates and degrees — or `nil` while the camera is detached.
+The table is a fresh copy on every call; mutating it moves nothing.
+
+### `minecheck.cameraMove(forward, up, right) → boolean`
+
+Moves the camera along its own basis: `forward` along the yaw-only look direction, `up` along world
+Y, `right` along that forward turned 90 degrees. `up` is a world offset rather than pitch-relative,
+because the flight model always flies horizontally. Returns whether the camera is attached.
+
+All four raise when `cameraMode` is `off`, and on a dedicated server with `"client-only function
+called on dedicated server"`.
+
+In `assist`, the human's own controls belong to the camera while it is the viewpoint: the mouse
+steers it, `F4` toggles it, and `Ctrl`+scroll changes the flight speed a notch at a time (the scroll
+is taken, so the hotbar does not also change). All three need a visible, focused window, so a
+headless run has none of them. Screens and `fullControl` hand control to Lua alone.
+
+While the camera is the human's viewpoint the player's body is held idle: its movement input is
+cleared and its rotation is kept at the angle the server last saw. Mouse look is therefore read as
+a delta and applied to the camera, never to the body — to another player the avatar is
+indistinguishable from one that is standing still, and detaching leaves the human facing the
+direction the camera was pointing.
 
 ---
 

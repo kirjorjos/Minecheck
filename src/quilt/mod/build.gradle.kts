@@ -36,6 +36,12 @@ repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
 }
 
+// quilt.mod.json is templated so its Minecraft bound cannot drift from gradle.properties.
+tasks.processResources {
+  inputs.property("minecraftVersion", mcVersion)
+  filesMatching("quilt.mod.json") { expand("minecraft_version" to mcVersion) }
+}
+
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))

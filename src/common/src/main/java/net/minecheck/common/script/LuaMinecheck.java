@@ -135,6 +135,13 @@ public final class LuaMinecheck {
     // Screenshots (client)
     minecheck.set("captureScreenshot", new CaptureScreenshot());
 
+    // Camera (client) — a flagged feature of this mod, installed only when config.json asks.
+    minecheck.set("cameraMode", new CameraModeAction());
+    minecheck.set("cameraToggle", new CameraToggleAction());
+    minecheck.set("isCameraActive", new IsCameraActiveAction());
+    minecheck.set("cameraPose", new CameraPoseAction());
+    minecheck.set("cameraMove", new CameraMoveAction());
+
     // Recipe viewers (soft dependencies: EMI / JEI / ...)
     minecheck.set("recipeViewer", new RecipeViewerInfo());
     minecheck.set("getRecipeSlots", new GetRecipeSlots());
@@ -2769,7 +2776,130 @@ public final class LuaMinecheck {
       t.set("screenshotChatVisible", LuaValue.valueOf(config.screenshotChatVisible()));
       t.set("viewWindow", LuaValue.valueOf(config.viewWindow()));
       t.set("restoreVanillaCamera", LuaValue.valueOf(config.restoreVanillaCamera()));
+      t.set("cameraMode", config.effectiveCameraMode().jsonName());
+      t.set("cameraHorizontalSpeed", config.cameraHorizontalSpeed());
+      t.set("cameraVerticalSpeed", config.cameraVerticalSpeed());
+      t.set("cameraIgnoreAll", LuaValue.valueOf(config.cameraIgnoreAll()));
+      t.set("cameraInteractionMode", config.cameraInteractionMode().name());
+      t.set("cameraShowPlayer", LuaValue.valueOf(config.cameraShowPlayer()));
+      t.set("cameraFullBright", LuaValue.valueOf(config.cameraFullBright()));
+      t.set("cameraDisableOnDamage", LuaValue.valueOf(config.cameraDisableOnDamage()));
+      t.set("cameraFreezePlayer", LuaValue.valueOf(config.cameraFreezePlayer()));
+      t.set("cameraNotifications", LuaValue.valueOf(config.cameraNotifications()));
       return t;
+    }
+  }
+
+  /**
+   * minecheck.cameraMode() -> string
+   *
+   * <p>The effective mode — {@code "off"} whenever {@code restoreVanillaCamera} is on, whatever the
+   * file's {@code cameraMode} says. Readable in every mode, {@code off} included, because a
+   * script's first question is what it is allowed to do; this is the one camera action that does
+   * not raise while the camera is disabled.
+   */
+  private final class CameraModeAction extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      return LuaValue.valueOf(config.effectiveCameraMode().jsonName());
+    }
+  }
+
+  /**
+   * The camera, raising for a server script and for a camera the config did not install.
+   *
+   * <p>{@code cameraMode} is the one camera action that answers while the camera is off; the rest
+   * need one, because "the camera did nothing" and "the camera does not exist" are different
+   * answers and a script should not have to guess which it got.
+   */
+  private net.minecheck.platform.api.CameraPlatform camera() {
+    requireClient();
+    net.minecheck.platform.api.CameraPlatform camera = client.camera();
+    if (!camera.installed()) {
+      throw new LuaError(
+          "the camera is off (set cameraMode to \"assist\" or \"fullControl\" in config.json)");
+    }
+    return camera;
+  }
+
+  /**
+   * minecheck.cameraToggle([active]) -> boolean
+   *
+   * <p>Attach or detach the camera: with no argument it flips the current state, with a boolean it
+   * makes the camera match, so {@code cameraToggle(true)} is idempotent. Returns whether the camera
+   * is attached afterwards.
+   *
+   * <p>Lua may always toggle. The human's own toggle key is a different rule — it works only when
+   * human input is enabled — and the platform enforces it, not this action.
+   */
+  private final class CameraToggleAction extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      net.minecheck.platform.api.CameraPlatform camera = camera();
+      boolean wanted = args.arg(1).isnil() ? !camera.active() : args.arg(1).checkboolean();
+      if (wanted != camera.active()) {
+        camera.toggle();
+      }
+      return LuaValue.valueOf(camera.active());
+    }
+  }
+
+  /** minecheck.isCameraActive() -> boolean: whether the camera is the client's viewpoint. */
+  private final class IsCameraActiveAction extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      return LuaValue.valueOf(camera().active());
+    }
+  }
+
+  /**
+   * minecheck.cameraPose() -> table / nil
+   *
+   * <p>{@code {x, y, z, yaw, pitch}} in world coordinates and degrees, or {@code nil} while the
+   * camera is detached. The table is a fresh copy every call, so mutating it moves nothing.
+   */
+  private final class CameraPoseAction extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      net.minecheck.platform.api.CameraPlatform.State pose = camera().pose();
+      if (pose == null) {
+        return LuaValue.NIL;
+      }
+      LuaTable table = new LuaTable();
+      table.set("x", pose.x());
+      table.set("y", pose.y());
+      table.set("z", pose.z());
+      table.set("yaw", pose.yaw());
+      table.set("pitch", pose.pitch());
+      return table;
+    }
+  }
+
+  /**
+   * minecheck.cameraMove(forward, up, right) -> boolean
+   *
+   * <p>Moves the camera along its own basis: {@code forward} along the yaw-only look direction,
+   * {@code up} along world Y, {@code right} along that forward turned 90 degrees. The vertical
+   * amount is a world offset rather than pitch-relative because the flight model always flies
+   * horizontally. Returns whether the camera is attached.
+   */
+  private final class CameraMoveAction extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      net.minecheck.platform.api.CameraPlatform camera = camera();
+      double forward = finite(args.arg(1), "forward");
+      double up = finite(args.arg(2), "up");
+      double right = finite(args.arg(3), "right");
+      camera.move(forward, up, right);
+      return LuaValue.valueOf(camera.active());
+    }
+
+    private double finite(LuaValue value, String name) {
+      double number = value.checkdouble();
+      if (!Double.isFinite(number)) {
+        throw new LuaError("cameraMove: " + name + " must be a finite number");
+      }
+      return number;
     }
   }
 
