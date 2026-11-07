@@ -391,9 +391,19 @@ public interface ClientPlatform {
   default void setVanillaCameraRestored(boolean restored) {}
 
   /**
-   * Attach the run's view-only window (see {@link ViewWindow}) — {@code viewWindow} was on and one
-   * was opened. The platform pushes frames to it from {@link #pumpViewWindow()} and routes its keys
-   * to {@link #virtualKey(int, boolean)}; a window is never required for a run to work.
+   * The camera, or {@link CameraPlatform#NONE} when this platform has none. A client whose {@code
+   * cameraMode} is {@code off} answers {@link CameraPlatform#NONE} as well, so a caller asks "is it
+   * active" rather than branching on the mode first.
+   */
+  default CameraPlatform camera() {
+    return CameraPlatform.NONE;
+  }
+
+  /**
+   * Attach the run's window (see {@link ViewWindow}) — {@code viewWindow} was on and one was
+   * opened, so this is the run's single surface. The platform pushes frames to it from {@link
+   * #pumpViewWindow()} and routes its keys to {@link #virtualKey(int, boolean)}; a window is never
+   * required for a run to work.
    */
   default void setViewWindow(ViewWindow window) {}
 
@@ -411,9 +421,10 @@ public interface ClientPlatform {
    * Dispatch a key typed into the view window, as {@link ViewWindow.KeySink} defines it: {@code
    * glfwKey} is a GLFW key code, {@code down} a press or a release.
    *
-   * <p>The platform sends it through its own virtual keyboard — the path a {@code press} action
-   * takes — and marks it with {@link InjectedInput}, so the window is an input surface of the
-   * harness rather than a second, unmarked source of input. Called from the AWT event thread.
+   * <p>The platform sends it through its own virtual keyboard — the same handler a real keypress
+   * reaches — but does <em>not</em> mark it with {@link InjectedInput}: this is the human typing at
+   * the run's one window, so it drives whatever view that window is drawing, exactly as the
+   * keyboard would. Called from the AWT event thread.
    */
   default void virtualKey(int glfwKey, boolean down) {}
 

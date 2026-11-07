@@ -36,6 +36,23 @@ public class YarnClientPlatform implements ClientPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
+  /** The camera this client exposes to scripts and to the loader's client tick hook. */
+  private final YarnCameraPlatform cameraPlatform = new YarnCameraPlatform(this);
+
+  @Override
+  public net.minecheck.platform.api.CameraPlatform camera() {
+    return cameraPlatform;
+  }
+
+  /**
+   * True while the run's view window is on screen — the human's visible surface when the game's own
+   * window is hidden. The camera accepts human input while this or the game's own window has focus.
+   */
+  boolean viewWindowVisible() {
+    net.minecheck.platform.api.ViewWindow window = viewWindow;
+    return window != null && window.visible();
+  }
+
   private MinecraftClient mc() {
     return MinecraftClient.getInstance();
   }
@@ -93,7 +110,7 @@ public class YarnClientPlatform implements ClientPlatform {
   /** Set while {@code restoreVanillaCamera} is in effect: no render-path work, and no captures. */
   private volatile boolean vanillaCameraRestored;
 
-  /** The view-only window the run asked for, or {@code null} (see {@link #pumpViewWindow()}). */
+  /** The run's window, or {@code null} (see {@link #pumpViewWindow()}). */
   private volatile net.minecheck.platform.api.ViewWindow viewWindow;
 
   /** Client ticks between frames pushed to the view window (~10 fps at 20 ticks a second). */
@@ -192,23 +209,21 @@ public class YarnClientPlatform implements ClientPlatform {
 
   /**
    * Dispatches a key typed into the view window through vanilla's keyboard handler — the same path
-   * {@code press()} takes, so the window is a virtual keyboard rather than a second input source.
-   * Marked with {@link net.minecheck.platform.api.InjectedInput} for the same reason every
-   * synthetic key is: a mod that owns the human's physical keys must be able to ignore it.
+   * the human's own keys take, because it is the human's key: the window is the run's single
+   * surface, and what it draws is what those keys drive (the player's view moves the player, the
+   * camera's view flies the camera).
+   *
+   * <p>Deliberately <em>not</em> marked with {@link net.minecheck.platform.api.InjectedInput}: that
+   * marker is for Minecheck's own synthetic input, and a camera that ignores it must still obey the
+   * human typing at this window.
    */
   @Override
   public void virtualKey(int glfwKey, boolean down) {
     onClientThread(
         () ->
-            net.minecheck.platform.api.InjectedInput.run(
-                () ->
-                    mc().keyboard
-                        .onKey(
-                            mc().getWindow().getHandle(),
-                            glfwKey,
-                            0,
-                            down ? GLFW_PRESS : GLFW_RELEASE,
-                            0)));
+            mc().keyboard
+                .onKey(
+                    mc().getWindow().getHandle(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
   }
 
   /**

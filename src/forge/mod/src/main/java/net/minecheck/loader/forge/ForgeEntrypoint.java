@@ -108,12 +108,24 @@ public class ForgeEntrypoint {
           }
         };
 
-    MinecheckBootstrap.init(
-        services,
-        engine -> {
-          this.engine = engine;
-          MinecraftForge.EVENT_BUS.register(this);
-        });
+    MinecheckBootstrap.init(services, engine -> this.engine = engine);
+    // Registered whether or not a script is configured: the client tick hook is where per-frame
+    // client work lives, and a client with no script used to have no hook at all. Every handler
+    // below still gates its work on the engine, so a passive client behaves as it did; camera work
+    // belongs at the top of the client tick, above that gate.
+    MinecraftForge.EVENT_BUS.register(this);
+    if (!dedicated) {
+      // 1.19.2 Forge hands key bindings to the options list through this event instead of a
+      // registry call, so the listener has to exist before the client builds its options.
+      net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext.get()
+          .getModEventBus()
+          .addListener(this::onRegisterKeyMappings);
+    }
+  }
+
+  private void onRegisterKeyMappings(
+      net.minecraftforge.client.event.RegisterKeyMappingsEvent event) {
+    client.installCameraBindings(event);
   }
 
   private final AtomicBoolean builtinWarmed = new AtomicBoolean();
@@ -152,14 +164,27 @@ public class ForgeEntrypoint {
    */
   @SubscribeEvent
   public void onRenderTick(TickEvent.RenderTickEvent event) {
-    if (event.phase == TickEvent.Phase.END && client != null) {
+    if (event.phase == TickEvent.Phase.END && client != null && engine != null) {
       ForgeClientPlatform.notifyFrameDrawn();
     }
   }
 
   @SubscribeEvent
   public void onClientTick(TickEvent.ClientTickEvent event) {
+    if (event.phase == TickEvent.Phase.START) {
+      if (client != null) {
+        // The camera runs before the player does: it holds the body's rotation at the value the
+        // server last saw, and doing that after the player ticked would be after the packet that
+        // carries the change.
+        client.camera().tick();
+      }
+      return;
+    }
     if (event.phase != TickEvent.Phase.END || client == null) {
+      return;
+    }
+    ScriptEngine e = engine;
+    if (e == null || e.isFinished()) {
       return;
     }
     if (client.isBootComplete() && builtinWarmed.compareAndSet(false, true)) {
@@ -168,8 +193,7 @@ public class ForgeEntrypoint {
     client.pinClientClock();
     client.pinRenderTickDelta();
     client.pumpViewWindow();
-    ScriptEngine e = engine;
-    if (e != null && !e.isFinished() && client.isBootComplete()) {
+    if (client.isBootComplete()) {
       e.tick();
     }
   }
@@ -181,6 +205,9 @@ public class ForgeEntrypoint {
   @SubscribeEvent
   public void onPlayerLogin(
       net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent event) {
+    if (engine == null) {
+      return;
+    }
     if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
       ForgeServerChannelTap.installFor(player);
     }
@@ -191,13 +218,20 @@ public class ForgeEntrypoint {
     if (event.phase != TickEvent.Phase.END || serverPlatform == null) {
       return;
     }
+    ScriptEngine e = engine;
+    if (e == null || e.isFinished()) {
+      return;
+    }
+    // 1.19.2's ServerTickEvent carries the server reference; 1.18.2's did not.
     MinecraftServer s = event.getServer();
+    if (s == null) {
+      return;
+    }
     serverPlatform.setServer(s);
     if (rulesApplied.compareAndSet(false, true)) {
       serverPlatform.applyDeterministicRules();
     }
-    ScriptEngine e = engine;
-    if (e != null && !e.isFinished() && serverTickRunning.compareAndSet(false, true)) {
+    if (serverTickRunning.compareAndSet(false, true)) {
       CompletableFuture.runAsync(
           () -> {
             try {

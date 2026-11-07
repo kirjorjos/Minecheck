@@ -8,6 +8,9 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.function.Function;
+import net.minecheck.common.camera.CameraInteractionMode;
+import net.minecheck.common.camera.CameraMode;
 
 /**
  * Reads/writes {@code config/minecheck/config.json}.
@@ -57,6 +60,15 @@ public class JsonConfigManager implements ConfigManager {
     String json = Files.readString(file);
     try {
       JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+      // The mode is read first: two field defaults depend on it, and a file that names a mode but
+      // leaves those fields out must get that mode's defaults rather than the off-mode ones.
+      CameraMode cameraMode =
+          enumField(
+              obj,
+              "cameraMode",
+              ConfigData.DEFAULT_CAMERA_MODE,
+              CameraMode::parse,
+              "off, assist, fullControl");
       return new ConfigData(
           stringField(obj, "script", ""),
           stringField(obj, "coordinator", null),
@@ -70,7 +82,26 @@ public class JsonConfigManager implements ConfigManager {
           booleanField(obj, "viewWindow", ConfigData.DEFAULT_VIEW_WINDOW),
           booleanField(obj, "restoreVanillaCamera", ConfigData.DEFAULT_RESTORE_VANILLA_CAMERA),
           booleanField(obj, "hideGameWindow", ConfigData.DEFAULT_HIDE_GAME_WINDOW),
-          booleanField(obj, "muteAudio", ConfigData.DEFAULT_MUTE_AUDIO));
+          booleanField(obj, "muteAudio", ConfigData.DEFAULT_MUTE_AUDIO),
+          cameraMode,
+          rangedDoubleField(
+              obj, "cameraHorizontalSpeed", ConfigData.DEFAULT_CAMERA_HORIZONTAL_SPEED, 0, 10),
+          rangedDoubleField(
+              obj, "cameraVerticalSpeed", ConfigData.DEFAULT_CAMERA_VERTICAL_SPEED, 0, 10),
+          booleanField(obj, "cameraIgnoreAll", ConfigData.DEFAULT_CAMERA_IGNORE_ALL),
+          enumField(
+              obj,
+              "cameraInteractionMode",
+              ConfigData.DEFAULT_CAMERA_INTERACTION_MODE,
+              CameraInteractionMode::parse,
+              "CAMERA, PLAYER"),
+          booleanField(obj, "cameraShowPlayer", ConfigData.DEFAULT_CAMERA_SHOW_PLAYER),
+          booleanField(obj, "cameraFullBright", ConfigData.DEFAULT_CAMERA_FULL_BRIGHT),
+          booleanField(
+              obj, "cameraDisableOnDamage", ConfigData.defaultCameraDisableOnDamage(cameraMode)),
+          booleanField(obj, "cameraFreezePlayer", ConfigData.DEFAULT_CAMERA_FREEZE_PLAYER),
+          booleanField(
+              obj, "cameraNotifications", ConfigData.defaultCameraNotifications(cameraMode)));
     } catch (RuntimeException e) {
       throw new IOException(
           String.format(
@@ -185,6 +216,25 @@ public class JsonConfigManager implements ConfigManager {
       throw new IllegalArgumentException("\"" + key + "\" must be a boolean");
     }
     return value.getAsBoolean();
+  }
+
+  /**
+   * An enum-valued string field, or {@code fallback} when absent or JSON {@code null}. The accepted
+   * spellings live with the enum's own parser rather than being duplicated here; a value it does
+   * not recognise is an error naming the field, the allowed values and what was written.
+   */
+  private static <E> E enumField(
+      JsonObject obj, String key, E fallback, Function<String, E> parser, String allowed) {
+    String raw = stringField(obj, key, null);
+    if (raw == null) {
+      return fallback;
+    }
+    try {
+      return parser.apply(raw);
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException(
+          "\"" + key + "\" must be one of " + allowed + ", got \"" + raw + "\"");
+    }
   }
 
   /** The field's value, or {@code null} when it is absent or an explicit JSON {@code null}. */
