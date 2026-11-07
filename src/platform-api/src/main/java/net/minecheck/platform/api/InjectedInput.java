@@ -26,6 +26,10 @@ import java.util.function.Supplier;
  * <p><b>What is marked.</b> Only input that goes through the vanilla input handlers — the layer a
  * mod sees. Input dispatched straight at a screen or widget ({@code clickGui}, {@code typeText})
  * does not pass through it and is not wrapped.
+ *
+ * <p><b>Not marked.</b> Keys typed by the human at the run's view window go through the same
+ * handler but are not wrapped: that window is the human's surface, so what it is drawing is what
+ * those keys drive — the player, or the camera.
  */
 public final class InjectedInput {
 

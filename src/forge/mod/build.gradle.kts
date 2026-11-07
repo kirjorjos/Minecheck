@@ -70,6 +70,12 @@ val platformApiOutput =
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
+  // Direct, so it is definitely on this module's runtime classpath for the game-layer patch below:
+  // unimined's Forge dev launch gives Forge's module classloader this module's classes and not the
+  // libraries they link against, so a library needed during mod construction has to be put on the
+  // game layer by hand. Without that, every Forge dev client died at construction with
+  // `NoClassDefFoundError: org/luaj/vm2/Varargs` (crash reports from 2026-08 onwards).
+  implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
   // EMI has no Forge artifact on 1.18.2 (Modrinth lists it for fabric/quilt only), so the Forge
@@ -151,6 +157,68 @@ val productionJar =
 tasks.named("assemble") { dependsOn(productionJar) }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
+
+// A Forge dev client loads this module as a directory on the classpath, and FML decides whether to
+// apply minecheck.mixins.json from the mod's *filesystem* manifest — a classes directory carries
+// none unless one of its resources does. With it missing the client starts normally with every
+// mixin silently inert: the camera's idle body and Ctrl+scroll were dead that way, and a suite that
+// only drives Lua still passed. Fail the build instead of the run.
+val mixinConfigName = "minecheck.mixins.json"
+val verifyMixinRegistration by
+  tasks.registering {
+    group = "verification"
+    description = "Fails when a Forge dev client would start without $mixinConfigName applied."
+    dependsOn(tasks.named("processResources"))
+    val resourcesDir = layout.buildDirectory.dir("resources/main")
+    val classesDir = layout.buildDirectory.dir("classes/java/main")
+    doLast {
+      val res = resourcesDir.get().asFile
+      val manifest = res.resolve("META-INF/MANIFEST.MF")
+      val fix =
+        "Add `MixinConfigs: $mixinConfigName` to src/forge/mod/resources/META-INF/MANIFEST.MF " +
+          "(the shipped jar declares the same attribute)."
+      if (!manifest.isFile) {
+        throw GradleException(
+          "Forge dev run would load no mixin config: $manifest is missing. $fix"
+        )
+      }
+      val declared =
+        manifest
+          .readLines()
+          .map { it.trim() }
+          .firstOrNull { it.startsWith("MixinConfigs:") }
+          ?.substringAfter(':')
+          ?.split(',')
+          ?.map { it.trim() }
+          .orEmpty()
+      if (mixinConfigName !in declared) {
+        throw GradleException(
+          "Forge dev run would load no mixin config: $manifest declares MixinConfigs=$declared. $fix"
+        )
+      }
+      val config = res.resolve(mixinConfigName)
+      if (!config.isFile) {
+        throw GradleException(
+          "$mixinConfigName is registered but not in the processed resources: $config"
+        )
+      }
+      @Suppress("UNCHECKED_CAST")
+      val json = groovy.json.JsonSlurper().parse(config) as Map<String, Any?>
+      val pkg = json["package"] as String
+      @Suppress("UNCHECKED_CAST") val listed = json["client"] as List<String>? ?: emptyList()
+      for (name in listed) {
+        val compiled = classesDir.get().asFile.resolve(pkg.replace('.', '/') + "/$name.class")
+        if (!compiled.isFile) {
+          throw GradleException(
+            "$mixinConfigName lists $name but nothing compiled it: $compiled is missing, so the " +
+              "config would fail or silently skip it."
+          )
+        }
+      }
+    }
+  }
+
+tasks.named("check") { dependsOn(verifyMixinRegistration) }
 
 tasks.register("printServerClasspath") {
   doLast { println(configurations.runtimeClasspath.get().asPath) }
@@ -234,26 +302,78 @@ fun writeDescriptor(task: JavaExec, out: File) {
   out.writeText(sb.toString())
 }
 
-fun ensureGameLayerRuntimeDeps(runTask: JavaExec) {
-  val props = (runTask as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.properties ?: emptyMap()
-  val legacy = props["minecraft_classpath_file"]?.invoke() ?: return
-  val file = File(legacy)
-  if (!file.exists()) return
+/**
+ * The classpath file Forge's game module layer is built from.
+ *
+ * <p>Found through the run's own `minecraft_classpath_file` property when unimined exposes one, and
+ * otherwise at unimined's documented location. The fallback matters: the property is not always
+ * present on the run task this early, and the old code simply returned in that case — silently, so
+ * the client died at mod construction instead of at build time.
+ */
+fun legacyClasspathFile(runTask: JavaExec?): File {
+  val props =
+    (runTask as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.properties
+      ?: emptyMap<String, () -> String>()
+  val configured = props["minecraft_classpath_file"]?.invoke()
+  if (configured != null) {
+    return File(configured)
+  }
+  return layout.projectDirectory.file(".gradle/unimined/local/legacy_classpath.txt").asFile
+}
+
+/**
+ * Puts this module's plain libraries (currently LuaJ) on the game layer.
+ *
+ * <p>Unimined only merges the mod's own classes into the module it launches; a library the mod
+ * needs at construction time is on the Gradle runtime classpath but invisible to Forge's {@code
+ * ModuleClassLoader}, which is why the mod could never construct in a dev client. The file below is
+ * regenerated on every configuration of this project — even a {@code gradlew help} — so a patch
+ * made by an earlier, separate invocation is always gone by launch time; the hooks at the bottom of
+ * this file re-apply it in the build that actually runs the game.
+ */
+fun patchGameLayerClasspath(runTask: JavaExec? = null) {
+  val file = legacyClasspathFile(runTask)
+  if (!file.isFile) {
+    logger.warn(
+      "Minecheck: no Forge legacy classpath file at {} — LuaJ will not be on the game layer",
+      file,
+    )
+    return
+  }
   val text = file.readText()
   val missing =
     configurations.runtimeClasspath
       .get()
       .files
-      .filter { it.name.contains("luaj") }
+      .filter { !it.isDirectory && it.name.contains("luaj") }
       .filter { !text.contains(it.absolutePath) }
-  if (missing.isNotEmpty()) {
-    val sb = StringBuilder(if (text.endsWith("\n")) text else text + "\n")
-    for (dep in missing) {
-      sb.append(dep.absolutePath).append('\n')
-    }
-    file.writeText(sb.toString())
+  if (missing.isEmpty()) {
+    return
   }
+  val sb = StringBuilder(if (text.endsWith("\n")) text else text + "\n")
+  for (dep in missing) {
+    sb.append(dep.absolutePath).append('\n')
+  }
+  file.writeText(sb.toString())
+  logger.lifecycle("Minecheck: added {} to the Forge game layer", missing.joinToString { it.name })
 }
+
+fun ensureGameLayerRuntimeDeps(runTask: JavaExec) {
+  patchGameLayerClasspath(runTask)
+}
+
+// After every project has configured (i.e. after unimined wrote the file), and again immediately
+// before a dev run starts, so the patch belongs to the invocation that launches the game.
+gradle.projectsEvaluated { patchGameLayerClasspath() }
+
+tasks
+  .matching { it.name == "runClient" || it.name == "runServer" }
+  .configureEach {
+    if (this is JavaExec) {
+      val exec = this
+      doFirst { patchGameLayerClasspath(exec) }
+    }
+  }
 
 tasks.register("devHelperDownloadAssets") {
   doLast {
