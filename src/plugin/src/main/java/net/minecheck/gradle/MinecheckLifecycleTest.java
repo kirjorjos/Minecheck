@@ -379,6 +379,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
         deleteRecursively(runDir.resolve("screenshots"));
       }
       stageClientOptions(runDir);
+      stageVoiceChatConfig(runDir);
       if (getServerScript().isPresent()) {
         Path setupDir = null;
         if (getWorldGeneratorScript().isPresent()) {
@@ -840,6 +841,62 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                     + screenshotGuiScale()
                 : "",
             runDir);
+  }
+
+  /**
+   * Points Simple Voice Chat's listener at the player, so proximity follows the character rather
+   * than whichever camera a human happens to be flying.
+   *
+   * <p>Minecam's premise is that the human never owns the player: with it installed they fly a
+   * detached camera, and Simple Voice Chat's default ({@code freecam_mode = CAMERA}) then hears
+   * whatever is around that camera. The mod ships the fix as a client setting, so this is staging,
+   * not a patch.
+   *
+   * <p>The file is merged, never overwritten: the mod writes it on its first client boot with the
+   * device and keybind choices a human made, and a test run has no business resetting those. With
+   * no Minecam and no Simple Voice Chat installed the file is inert, and an installed version that
+   * does not know the key ignores it the same way it ignores its own retired keys.
+   */
+  private void stageVoiceChatConfig(Path runDir) throws IOException {
+    Path file = runDir.resolve("config/voicechat/voicechat-client.properties");
+    String key = "freecam_mode";
+    String value = "PLAYER";
+    String existing = Files.exists(file) ? Files.readString(file) : "";
+    Files.createDirectories(file.getParent());
+    Files.writeString(file, mergeVoiceChatProperty(existing, key, value));
+    getLogger().lifecycle("Minecheck: staged {}={} in {}", key, value, file);
+  }
+
+  /**
+   * Returns {@code text} with {@code key=value} set, every other line untouched.
+   *
+   * <p>Separate from the task so the merge is testable without a run directory: the file is owned
+   * by another mod, and the only two things that may happen to it are "this key is now PLAYER" and
+   * "nothing else moved".
+   */
+  static String mergeVoiceChatProperty(String text, String key, String value) {
+    List<String> lines = new ArrayList<>();
+    if (!text.isEmpty()) {
+      lines.addAll(List.of(text.split("\n", -1)));
+      // A file ending in a newline splits into a trailing empty element; dropping it keeps the
+      // rebuilt file from growing a blank line on every run.
+      while (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty()) {
+        lines.remove(lines.size() - 1);
+      }
+    }
+    boolean replaced = false;
+    for (int i = 0; i < lines.size(); i++) {
+      String line = lines.get(i).trim();
+      if (line.startsWith(key + "=") || line.startsWith(key + " =")) {
+        lines.set(i, key + "=" + value);
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      lines.add(key + "=" + value);
+    }
+    return String.join("\n", lines) + "\n";
   }
 
   // ---------------------------------------------------------------- screenshot profile
