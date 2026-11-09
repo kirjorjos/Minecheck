@@ -22,12 +22,16 @@ import javax.swing.Timer;
  * normal case when a lifecycle run drives the client on a machine without a display, and the point
  * of the option when it drives one on a display the human is not looking at.
  *
- * <p><b>View only.</b> The window installs <em>no</em> mouse listener: the pointer is never
- * captured, grabbed or hidden, so clicking it does nothing at all. Keys typed into it are not
- * delivered to the game as themselves but to a {@link KeySink} — Minecheck's virtual keyboard — so
- * the window behaves exactly like a {@code press} action and is marked with {@link InjectedInput}
- * by the receiving platform. Nothing the window does can move, aim or interact with the player by
- * another route.
+ * <p><b>The run's one window.</b> A client never has two: when the game's own window is hidden this
+ * is the surface the human sees, and {@link #open} will not create a second frame while one is
+ * alive. Keys typed into it are delivered to a {@link KeySink} — Minecheck's virtual keyboard — but
+ * they are the human's input, not scripted input: the receiving platform does not mark them with
+ * {@link InjectedInput}, so they drive whatever this window is drawing, the player's view or the
+ * camera's, exactly as the keyboard would.
+ *
+ * <p><b>No mouse.</b> The window installs <em>no</em> mouse listener: the pointer is never
+ * captured, grabbed or hidden, so clicking it does nothing at all. Nothing the window does can
+ * move, aim or interact with anything by another route.
  *
  * <p><b>Never fatal.</b> A window is a convenience, so every failure — a headless JVM, no display,
  * no toolkit — is logged and turned into a {@code null} from {@link #open}: the run continues
@@ -41,6 +45,12 @@ import javax.swing.Timer;
 public final class ViewWindow {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
+
+  /** Guards {@link #current}; {@link #open} never lets two frames exist at once. */
+  private static final Object OPEN_LOCK = new Object();
+
+  /** The one open window this process has, or {@code null}. */
+  private static ViewWindow current;
 
   /** How often the event thread looks for a new frame (ms). Cheap: a no-op when nothing arrived. */
   private static final int REPAINT_PERIOD_MS = 50;
@@ -77,23 +87,32 @@ public final class ViewWindow {
    * @param sink where keys typed into the window are dispatched
    */
   public static ViewWindow open(String title, KeySink sink) {
-    if (GraphicsEnvironment.isHeadless()) {
-      LOG.warning(
-          "Minecheck: viewWindow is on, but this JVM is headless — running without a view window");
-      return null;
+    synchronized (OPEN_LOCK) {
+      ViewWindow existing = current;
+      if (existing != null && existing.frame != null) {
+        LOG.info("Minecheck: a view window is already open — keeping the one window");
+        return existing;
+      }
+      if (GraphicsEnvironment.isHeadless()) {
+        LOG.warning(
+            "Minecheck: viewWindow is on, but this JVM is headless — running without a view"
+                + " window");
+        return null;
+      }
+      ViewWindow window = new ViewWindow();
+      try {
+        SwingUtilities.invokeAndWait(() -> window.create(title, sink));
+      } catch (Throwable t) {
+        LOG.log(Level.WARNING, "Minecheck: could not open the view window — running without it", t);
+        return null;
+      }
+      if (window.frame == null) {
+        return null;
+      }
+      current = window;
+      LOG.info("Minecheck: view window open (the run's one window — no mouse input)");
+      return window;
     }
-    ViewWindow window = new ViewWindow();
-    try {
-      SwingUtilities.invokeAndWait(() -> window.create(title, sink));
-    } catch (Throwable t) {
-      LOG.log(Level.WARNING, "Minecheck: could not open the view window — running without it", t);
-      return null;
-    }
-    if (window.frame == null) {
-      return null;
-    }
-    LOG.info("Minecheck: view window open (view only — no mouse input, keys go through press())");
-    return window;
   }
 
   /**
@@ -119,6 +138,11 @@ public final class ViewWindow {
     Timer t = timer;
     frame = null;
     timer = null;
+    synchronized (OPEN_LOCK) {
+      if (current == this) {
+        current = null;
+      }
+    }
     SwingUtilities.invokeLater(
         () -> {
           if (t != null) {

@@ -5,7 +5,9 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "WindowMixin",
-    "SoundEngineMixin"
+    "SoundEngineMixin",
+    "MouseScrollMixin",
+    "InputMixin"
   ],
   "injectors": {
     "defaultRequire": 1

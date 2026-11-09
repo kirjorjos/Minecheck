@@ -5,12 +5,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecheck.common.bootstrap.MinecheckBootstrap;
+import net.minecheck.common.script.ScriptEngine;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
@@ -106,24 +108,42 @@ public class FabricEntrypoint implements ModInitializer {
           }
         };
 
+    // Client hooks are registered before the engine exists, so they do not depend on a script being
+    // configured: a client with none used to have no tick hook at all, which is exactly the state a
+    // camera without a script has to work in. The work below stays gated on the engine, so a
+    // passive
+    // client behaves as it did; camera work belongs at the top of the hook, above the gate.
+    final AtomicReference<ScriptEngine> engineRef = new AtomicReference<>();
+    if (client != null) {
+      // Per-frame hook for the screenshot suite: captures need to know that a frame was drawn
+      // (see YarnClientPlatform#captureScreenshot).
+      net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
+          (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
+      client.camera().registerBindings();
+      // The camera ticks at the *start* of the tick, before the player does: it holds the body's
+      // rotation at the value the server last saw, and doing that after the player ticked would be
+      // after the packet that carries the change.
+      ClientTickEvents.START_CLIENT_TICK.register(c -> client.camera().tick());
+      ClientTickEvents.END_CLIENT_TICK.register(
+          c -> {
+            ScriptEngine e = engineRef.get();
+            if (e == null || e.isFinished()) {
+              return;
+            }
+            client.pinClientClock();
+            client.pinRenderTickDelta();
+            client.pumpViewWindow();
+            if (client.isBootComplete()) {
+              e.tick();
+            }
+          });
+    }
+
     MinecheckBootstrap.init(
         services,
         engine -> {
-          if (client != null) {
-            // Per-frame hook for the screenshot suite: captures need to know that a frame was drawn
-            // (see YarnClientPlatform#captureScreenshot).
-            net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
-                (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
-            ClientTickEvents.END_CLIENT_TICK.register(
-                c -> {
-                  client.pinClientClock();
-                  client.pinRenderTickDelta();
-                  client.pumpViewWindow();
-                  if (!engine.isFinished() && client.isBootComplete()) {
-                    engine.tick();
-                  }
-                });
-          } else {
+          engineRef.set(engine);
+          if (client == null) {
             AtomicBoolean serverTickRunning = new AtomicBoolean();
             AtomicBoolean rulesApplied = new AtomicBoolean();
             ServerTickEvents.END_SERVER_TICK.register(

@@ -81,7 +81,13 @@ public final class MinecheckBootstrap {
       // disagree with the config the run was given.
       if (services.client() != null) {
         services.client().setVanillaCameraRestored(config.restoreVanillaCamera());
-        if (config.viewWindow()) {
+        // At most one window, ever: the view window replaces the game's own (hideGameWindow) and
+        // never sits beside it, so a config asking for both keeps the game's window.
+        if (config.viewWindow() && !config.hideGameWindow()) {
+          LOG.info(
+              "Minecheck: viewWindow is on but hideGameWindow is off — the client's own window is"
+                  + " the run's one window, so no view window is opened");
+        } else if (config.viewWindow()) {
           net.minecheck.platform.api.ViewWindow window =
               net.minecheck.platform.api.ViewWindow.open(
                   String.format("Minecheck — %s", services.minecraftVersion()),

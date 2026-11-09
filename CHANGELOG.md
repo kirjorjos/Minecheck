@@ -18,9 +18,19 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
+## Added
+
+- A bundled freecam camera that Lua drives: `minecheck.cameraToggle`, `minecheck.cameraPose` and
+  `minecheck.cameraMove`, with `cameraMode` (`off`, `assist` or `fullControl`) choosing how much of
+  the camera the script owns. Captures still photograph the player view, and `restoreVanillaCamera`
+  leaves the render path untouched.
 
 ## Changed
 
-- Released as `2.0.2` alongside `1.18.2`. Nothing changed for 1.19.2; the version moved so both
-  Minecraft lines stay on one number after `1.18.2` needed a build fix before it could publish at
-  all, which left `1.19.2/v2.0.1` as the only release of that version (#64).
+- MineCam is declared as an optional dependency and referred to by its `minecam` mod id, so a client
+  that has it loads it before Minecheck (#74, #77).
+
+## Fixed
+
+- Simple Voice Chat's listener is staged on the player during camera runs, so flying the camera no
+  longer changes what the script hears (#82).
