@@ -47,8 +47,13 @@ repositories {
 
 tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
+  inputs.property("modVersion", project.version)
   filesMatching("META-INF/mods.toml") {
-    expand("minecraft_version" to mcVersion, "minecraft_next" to mcNext)
+    expand(
+      "version" to project.version.toString(),
+      "minecraft_version" to mcVersion,
+      "minecraft_next" to mcNext,
+    )
   }
 }
 

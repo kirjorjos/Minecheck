@@ -4,7 +4,7 @@ license = "${licence}"
 
 [[mods]]
 modId = "minecheck"
-version = "0.1.0"
+version = "${version}"
 displayName = "Minecheck"
 description = "Scripted automation of the Minecraft client and server for mod development"
 

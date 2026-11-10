@@ -38,7 +38,10 @@ repositories {
 
 tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
-  filesMatching("quilt.mod.json") { expand("minecraft_version" to mcVersion) }
+  inputs.property("modVersion", project.version)
+  filesMatching("quilt.mod.json") {
+    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
+  }
 }
 
 dependencies {
