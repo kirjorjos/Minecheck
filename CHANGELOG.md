@@ -18,7 +18,3 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
-
-## Fixed
-
-- Every loader's metadata reported `0.1.0`, a version that was never released; `fabric.mod.json`, `mods.toml` and `quilt.mod.json` now carry the version the release ships (#98).
