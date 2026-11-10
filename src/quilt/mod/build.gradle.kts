@@ -39,7 +39,10 @@ repositories {
 // quilt.mod.json is templated so its Minecraft bound cannot drift from gradle.properties.
 tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
-  filesMatching("quilt.mod.json") { expand("minecraft_version" to mcVersion) }
+  inputs.property("modVersion", project.version)
+  filesMatching("quilt.mod.json") {
+    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
+  }
 }
 
 dependencies {

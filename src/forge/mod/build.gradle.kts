@@ -13,6 +13,13 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
+// The compatible range the mod metadata declares, from the same single source of truth: "1.18.2"
+// accepts 1.18.x, "26.1" accepts 26.1.x.
+val mcNext =
+  mcVersion.split('.').let { parts ->
+    if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
+  }
+
 val emiVersion = "1.1.24+1.19.2+forge"
 val jeiVersion = "11.6.0.1024"
 val reiVersion = "9.2.784+forge"
@@ -403,5 +410,18 @@ tasks.register("devHelperServerLaunch") {
     val server = tasks.named("runServer").get() as JavaExec
     writeDescriptor(server, out.get().asFile)
     ensureGameLayerRuntimeDeps(server)
+  }
+}
+
+// mods.toml declares the mod version; expand it from the project version so the metadata
+// tracks the release rather than a hand-maintained literal.
+tasks.processResources {
+  inputs.property("modVersion", project.version)
+  filesMatching("META-INF/mods.toml") {
+    expand(
+      "version" to project.version.toString(),
+      "minecraft_version" to mcVersion,
+      "minecraft_next" to mcNext,
+    )
   }
 }
