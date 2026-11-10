@@ -4,7 +4,7 @@ license = "${licence}"
 
 [[mods]]
 modId = "minecheck"
-version = "0.1.0"
+version = "${version}"
 displayName = "Minecheck"
 description = "Scripted automation of the Minecraft client and server for mod development"
 
@@ -18,6 +18,6 @@ side = "BOTH"
 [[dependencies.minecheck]]
 modId = "minecraft"
 mandatory = true
-versionRange = "[1.19.2,1.20)"
+versionRange = "[${minecraft_version},${minecraft_next})"
 ordering = "NONE"
 side = "BOTH"

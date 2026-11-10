@@ -3,7 +3,7 @@
   "quilt_loader": {
     "group": "net.minecheck",
     "id": "minecheck",
-    "version": "0.1.0",
+    "version": "${version}",
     "metadata": {
       "name": "Minecheck",
       "description": "Scripted automation of the Minecraft client and server for mod development",
