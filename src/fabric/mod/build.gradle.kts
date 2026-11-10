@@ -44,8 +44,13 @@ repositories {
 
 tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
+  inputs.property("modVersion", project.version)
   filesMatching("fabric.mod.json") {
-    expand("minecraft_version" to mcVersion, "minecraft_next" to mcNext)
+    expand(
+      "version" to project.version.toString(),
+      "minecraft_version" to mcVersion,
+      "minecraft_next" to mcNext,
+    )
   }
 }
 
