@@ -4,6 +4,7 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import net.minecheck.gradle.MinecheckLifecyclePlugin
 import net.minecheck.gradle.MinecheckLifecycleTest
+import net.minecheck.gradle.MinecheckProductionBoot
 import net.minecheck.gradle.MinecheckScreenshotBaselines
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
@@ -892,6 +893,36 @@ tasks.register<Copy>("collectArtifacts") {
       artifactsDir,
     )
   }
+}
+
+/**
+ * Boots each packaged loader jar in an installed dedicated server (issue #103). The lifecycle
+ * suites run the *development* classpath and `checkProductionJars` only reads the jar's bytecode,
+ * so a jar that breaks after remapping - or one whose metadata names an API nobody can install -
+ * passed both. This does what a user does with the release asset: installs the loader at the
+ * version this line builds against, drops the jar in `mods/`, and requires Minecheck to report
+ * itself active.
+ *
+ * `-Pboot.only=fabric,forge` boots a subset, `-Pboot.java=<path>` picks the JDK the servers run on
+ * (default: `java` from `PATH`), and `-Pboot.timeout=<seconds>` widens the start deadline.
+ */
+// Resolved on the project: inside the task block `property` would look for a task property.
+val bootMinecraftVersion = property("minecraft_version").toString()
+
+tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
+  group = "minecheck"
+  description = "Boots every packaged loader jar in an installed dedicated server"
+  dependsOn("collectArtifacts")
+  minecraftVersion.set(bootMinecraftVersion)
+  modVersion.set(project.version.toString())
+  metadataFile.set(layout.projectDirectory.file(".github/metadata.json"))
+  projectRoot.set(layout.projectDirectory)
+  artifactsDir.set(layout.buildDirectory.dir("artifacts"))
+  artifactJars.from(fileTree(layout.buildDirectory.dir("artifacts")) { include("*.jar") })
+  workRoot.set(layout.buildDirectory.dir("production-boot"))
+  onlyLoaders.set(providers.gradleProperty("boot.only").getOrElse(""))
+  javaExecutable.set(providers.gradleProperty("boot.java").getOrElse("java"))
+  bootTimeoutSeconds.set(providers.gradleProperty("boot.timeout").map { it.toInt() }.getOrElse(600))
 }
 
 /**
