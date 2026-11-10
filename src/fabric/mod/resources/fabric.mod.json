@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "minecheck",
-  "version": "0.1.0",
+  "version": "${version}",
   "name": "Minecheck",
   "description": "Scripted automation of the Minecraft client and server for mod development",
   "license": "${licence}",
