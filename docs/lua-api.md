@@ -101,7 +101,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `coordinator` | string \| null | `null` | Multi-phase entry script (wins over `script` when set). |
+| `coordinator` | string \| null | `null` | Multi-phase entry script (wins over `script` when set). A coordinator composes phases from other staged scripts with [`runScript`](#minecheckrunscriptname--boolean). |
 | `script` | string | `""` | Single-phase entry script (used when `coordinator` is absent). |
 | `failMode` | string | `"exit"` | `"exit"`: quit/stop on script failure. `"continue"`: log and keep going. |
 | `defaultTimeout` | int | `30` | Default timeout in seconds for all wait actions (joins, waits, sleeps). A world-entry wait is a ceiling: it ends early only when the load has stopped advancing. |
@@ -692,6 +692,42 @@ local hud = minecheck.captureScreenshot("hud", {
 
 The digest is returned because a capture is judged by its pixels: when a baseline comparison fails, the same `sha256` in the log and in `run-result.json` is what makes the failure diagnosable without downloading images.
 
+### `minecheck.captureFrame([options][, timeout]) → table`
+
+Reads the frame the client is showing into memory and returns it **without writing a PNG**. The crop, the downscale and the chat clear are `captureScreenshot`'s; what it skips is the encode, the file and the frame report — which is what a loop that only wants to know whether the picture moved should pay.
+
+```lua
+local first = minecheck.captureFrame()
+local second = minecheck.captureFrame()
+if first.sha256 == second.sha256 then
+  minecheck.log("the picture did not move")
+end
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `options` | table | Optional. `region` (`{ x, y, w, h, unit? }`) crops exactly as `captureScreenshot`'s does. `pixels` (boolean, default `false`) also returns the pixel buffer as a Lua string — four bytes per pixel, the platform's own packing, opaque to a script. |
+| `timeout` | number | Max seconds to wait for the frame (default: `config.defaultTimeout`). |
+
+**Returns:** `{ width, height, bytes, sha256, guiScale[, pixels] }`. `sha256` is over the **pixels**, not over a PNG, so it is deliberately not comparable with a written capture's digest — it answers "did the picture move?", not "is this the baseline?".
+
+### `minecheck.saveScreenshot(name, frame[, timeout]) → table`
+
+Encodes and writes a frame that `captureFrame` returned, and reports it the way `captureScreenshot` does — `{ path, width, height, bytes, sha256 }`, with the **written PNG's** digest, which is the one a baseline compares. The frame must carry its pixels (`captureFrame({ pixels = true })`), because those pixels are the picture that gets encoded. The name rules and the per-run uniqueness rule are `captureScreenshot`'s.
+
+```lua
+local frame = minecheck.captureFrame({ pixels = true })
+minecheck.saveScreenshot("world-settled", frame)
+```
+
+### `minecheck.sha256(value) → string`
+
+Lower-case hex SHA-256 of a string, binary included, computed by the JVM. Hashing in Lua would be far slower — a megabyte of pixels costs hundreds of milliseconds in pure Lua and a couple in Java — so a script that wants a digest of its own asks here.
+
+```lua
+minecheck.log(minecheck.sha256("abc"))  -- ba7816bf8f01cfea414140de5dae2223…
+```
+
 #### The capture profile (why a shot is reproducible)
 
 Minecheck pins the settings that decide what a frame looks like, so the same script on the same machine produces the **same picture** every run. The Gradle plugin writes them into the run's `options.txt`, and `config.json` can override the four starred ones for the run:
@@ -730,7 +766,13 @@ minecheck.createWorld({ name = "minecheck_world", seed = 0 })
 minecheck.waitFor(minecheck.worldGenSettled, 120)
 minecheck.runCommand("time set 6000")
 minecheck.runCommand("tp @s 0.5 -60 0.5 0 90")
--- then capture once two consecutive captures report the same digest
+-- then capture once two consecutive frames report the same digest
+local previous
+while true do
+  local frame = minecheck.captureFrame()
+  if previous ~= nil and frame.sha256 == previous then break end
+  previous = frame.sha256
+end
 minecheck.captureScreenshot("world-settled")
 ```
 
@@ -1559,6 +1601,45 @@ Key points:
 - **`disconnect` not `quit`** between phases — `quit` shuts down the process.
 - **`pcall` around each phase** — a failing phase is recorded and skipped; the next phase continues.
 - **One process, one session** — no restart overhead; the title screen is the only clean-state boundary.
+
+### `minecheck.runScript(name) → boolean`
+
+**Both sides.** Runs another script from the same `minecheck/scripts` directory, in this session and
+in the caller's globals, and returns `true` when it finishes. A coordinator uses it to compose phases
+that live in their own files instead of inlining them:
+
+```lua
+local function phase(name)
+    minecheck.log("phase: " .. name)
+    minecheck.runScript(name)
+end
+
+phase("beacon-client.lua")
+phase("query-client.lua")
+minecheck.quit()
+```
+
+While a phase runs, `_G.MINECHECK_PHASE` holds its file name (it is `nil` in a top-level run), which
+is how one script can serve both as a suite of its own and as a phase:
+
+```lua
+local phase = _G.MINECHECK_PHASE ~= nil
+
+-- A phase does not end the session it is running inside.
+if not phase then
+    minecheck.leaveWorld(60)
+    minecheck.quit()
+end
+```
+
+The phase shares the session: the same world, the same packet channel, the same tick clock, the same
+coroutine — so every wait inside it still yields a tick, and state a phase leaves behind (an inventory,
+a planted block, a held screen) is there for the next one. It runs in the caller's globals, so a phase
+can read a global the coordinator set.
+
+A phase that raises propagates the error to the caller; wrap it in `pcall` to record a failure and
+continue. `name` is resolved inside the scripts directory only — a name that climbs out of it is
+refused, and a missing file raises rather than silently doing nothing.
 
 ---
 

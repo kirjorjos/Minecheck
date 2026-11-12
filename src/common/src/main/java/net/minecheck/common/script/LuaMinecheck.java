@@ -1,5 +1,8 @@
 package net.minecheck.common.script;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 import net.minecheck.common.config.ConfigData;
@@ -113,6 +116,9 @@ public final class LuaMinecheck {
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
 
+    // Coordinators: run another staged script as a phase of this same session.
+    minecheck.set("runScript", new RunScript());
+
     // The tick clock: the server this process runs, held and advanced by the script.
     minecheck.set("pauseTicks", new PauseTicks());
     minecheck.set("stepTicks", new StepTicks());
@@ -147,6 +153,9 @@ public final class LuaMinecheck {
 
     // Screenshots (client)
     minecheck.set("captureScreenshot", new CaptureScreenshot());
+    minecheck.set("captureFrame", new CaptureFrame());
+    minecheck.set("saveScreenshot", new SaveScreenshot());
+    minecheck.set("sha256", new Sha256());
 
     // Camera (client) — a flagged feature of this mod, installed only when config.json asks.
     minecheck.set("cameraMode", new CameraModeAction());
@@ -1935,7 +1944,7 @@ public final class LuaMinecheck {
     @Override
     public Varargs invoke(Varargs args) {
       requireClient();
-      String name = captureName(args.arg1());
+      String name = captureName("captureScreenshot", args.arg1());
       boolean hasRegion = false;
       int rx = 0;
       int ry = 0;
@@ -1965,10 +1974,10 @@ public final class LuaMinecheck {
               throw new LuaError("captureScreenshot: unknown region field \"" + field + "\"");
             }
           }
-          rx = regionInt(region, "x");
-          ry = regionInt(region, "y");
-          rw = regionInt(region, "w");
-          rh = regionInt(region, "h");
+          rx = regionInt("captureScreenshot", region, "x");
+          ry = regionInt("captureScreenshot", region, "y");
+          rw = regionInt("captureScreenshot", region, "w");
+          rh = regionInt("captureScreenshot", region, "h");
           if (rw <= 0 || rh <= 0) {
             throw new LuaError(
                 "captureScreenshot: region needs a positive w and h, got " + rw + "x" + rh);
@@ -2040,62 +2049,364 @@ public final class LuaMinecheck {
         throw wrap("captureScreenshot", e);
       }
     }
+  }
 
-    /**
-     * The capture name, with a trailing {@code .png} stripped: the name doubles as the file name,
-     * so {@code captureScreenshot("title.png")} writes {@code title.png} rather than {@code
-     * title.png.png}. Separators and {@code ..} are refused so a name can never escape the run's
-     * screenshots directory, and a leading {@code _} is allowed (it marks an ad-hoc capture the
-     * baseline comparison skips).
-     */
-    private String captureName(LuaValue arg) {
-      if (arg.type() != LuaValue.TSTRING) {
+  /**
+   * The capture name, with a trailing {@code .png} stripped: the name doubles as the file name, so
+   * {@code captureScreenshot("title.png")} writes {@code title.png} rather than {@code
+   * title.png.png}. Separators and {@code ..} are refused so a name can never escape the run's
+   * screenshots directory, and a leading {@code _} is allowed (it marks an ad-hoc capture the
+   * baseline comparison skips).
+   */
+  private static String captureName(String action, LuaValue arg) {
+    if (arg.type() != LuaValue.TSTRING) {
+      throw new LuaError(action + ": the capture name must be a string, got " + arg.typename());
+    }
+    String name = arg.tojstring();
+    if (name.endsWith(".png")) {
+      name = name.substring(0, name.length() - 4);
+    }
+    if (name.isBlank()) {
+      throw new LuaError(action + ": the capture name must not be empty");
+    }
+    if (name.contains("/") || name.contains("\\") || name.contains("..")) {
+      throw new LuaError(action + ": invalid capture name \"" + name + "\"");
+    }
+    for (int i = 0; i < name.length(); i++) {
+      if (Character.isISOControl(name.charAt(i))) {
+        throw new LuaError(action + ": invalid capture name \"" + name + "\"");
+      }
+    }
+    return name;
+  }
+
+  /** One whole-number region field, or a Lua error naming it and the action that asked. */
+  private static int regionInt(String action, LuaTable region, String field) {
+    LuaValue value = region.get(field);
+    if (value.isnil()) {
+      throw new LuaError(action + ": region needs numeric x, y, w, h (missing \"" + field + "\")");
+    }
+    if (!value.isnumber()) {
+      throw new LuaError(
+          action
+              + ": region needs numeric x, y, w, h (\""
+              + field
+              + "\" is a "
+              + value.typename()
+              + ")");
+    }
+    double number = value.todouble();
+    if (number != Math.rint(number) || number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
+      throw new LuaError(
+          action
+              + ": region field \""
+              + field
+              + "\" must be a whole number, got "
+              + value.tojstring());
+    }
+    return (int) number;
+  }
+
+  /** The options a capture action accepts: a region crop, and whether the caller wants pixels. */
+  private static final class CaptureOptions {
+    private boolean hasRegion;
+    private int x;
+    private int y;
+    private int w;
+    private int h;
+    private String unit = net.minecheck.platform.api.ScreenshotRequest.UNIT_FRAMEBUFFER;
+    private boolean pixels;
+  }
+
+  /**
+   * Reads {@code options} the way the capture actions do: {@code region} ({@code { x, y, w, h,
+   * unit? }}) and, when {@code allowPixels}, {@code pixels}. Unknown keys raise, because a typo
+   * must not silently capture the whole frame or drop the buffer.
+   */
+  private static CaptureOptions captureOptions(
+      String action, LuaValue optionsArg, boolean allowPixels) {
+    CaptureOptions parsed = new CaptureOptions();
+    if (optionsArg.isnil()) {
+      return parsed;
+    }
+    LuaTable options = optionsArg.checktable();
+    for (LuaValue key : options.keys()) {
+      String option = key.tojstring();
+      if (option.equals("region")) {
+        continue;
+      }
+      if (allowPixels && option.equals("pixels")) {
+        parsed.pixels = options.get("pixels").toboolean();
+        continue;
+      }
+      throw new LuaError(action + ": unknown option \"" + option + "\"");
+    }
+    LuaValue regionArg = options.get("region");
+    if (regionArg.isnil()) {
+      return parsed;
+    }
+    LuaTable region = regionArg.checktable();
+    for (LuaValue key : region.keys()) {
+      String field = key.tojstring();
+      if (!field.equals("x")
+          && !field.equals("y")
+          && !field.equals("w")
+          && !field.equals("h")
+          && !field.equals("unit")) {
+        throw new LuaError(action + ": unknown region field \"" + field + "\"");
+      }
+    }
+    parsed.x = regionInt(action, region, "x");
+    parsed.y = regionInt(action, region, "y");
+    parsed.w = regionInt(action, region, "w");
+    parsed.h = regionInt(action, region, "h");
+    if (parsed.w <= 0 || parsed.h <= 0) {
+      throw new LuaError(
+          action + ": region needs a positive w and h, got " + parsed.w + "x" + parsed.h);
+    }
+    LuaValue unitArg = region.get("unit");
+    if (!unitArg.isnil()) {
+      parsed.unit = unitArg.optjstring("").trim().toLowerCase(java.util.Locale.ROOT);
+      if (!parsed.unit.equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_FRAMEBUFFER)
+          && !parsed.unit.equals(net.minecheck.platform.api.ScreenshotRequest.UNIT_GUI)) {
         throw new LuaError(
-            "captureScreenshot: the capture name must be a string, got " + arg.typename());
+            action
+                + ": region unit must be \"framebuffer\" or \"gui\", got \""
+                + parsed.unit
+                + "\"");
       }
-      String name = arg.tojstring();
-      if (name.endsWith(".png")) {
-        name = name.substring(0, name.length() - 4);
+    }
+    parsed.hasRegion = true;
+    return parsed;
+  }
+
+  /**
+   * minecheck.captureFrame([options][, timeout]) -> table
+   *
+   * <p>Client: reads the frame the client is showing into memory — the same crop, downscale and
+   * chat clear a written capture does — and returns {@code { width, height, bytes, sha256, guiScale
+   * }} plus {@code pixels} when {@code options.pixels} asks for the buffer. No PNG is encoded, no
+   * file is written and no frame report is rewritten, so a loop that only compares pictures pays a
+   * readback and a hash instead of an encode, a write and a file to read back.
+   *
+   * <p>{@code sha256} is over the pixels, not over a PNG: it answers "did the picture move?" and is
+   * deliberately not comparable with {@code captureScreenshot}'s digest.
+   */
+  private final class CaptureFrame extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      CaptureOptions options = captureOptions("captureFrame", args.arg(1), true);
+      net.minecheck.platform.api.ScreenshotRequest request =
+          new net.minecheck.platform.api.ScreenshotRequest(
+              "_frame",
+              options.hasRegion,
+              options.x,
+              options.y,
+              options.w,
+              options.h,
+              options.unit,
+              config.screenshotScale(),
+              config.screenshotChatVisible(),
+              config.screenshotWidth(),
+              config.screenshotHeight());
+      return awaitRequest(
+          "captureFrame", client::requestFrame, request, args.arg(2), options.pixels);
+    }
+  }
+
+  /**
+   * minecheck.saveScreenshot(name, frame[, timeout]) -> table
+   *
+   * <p>Client: encodes and writes a frame {@code captureFrame} returned and reports it the way
+   * {@code captureScreenshot} does — {@code { path, width, height, bytes, sha256 }} — with the
+   * written PNG's digest, which is the one a baseline compares. The frame must carry its pixels
+   * ({@code captureFrame({ pixels = true })}): the pixels are the picture that gets encoded, and
+   * the crop and the downscale already happened when they were captured.
+   */
+  private final class SaveScreenshot extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = captureName("saveScreenshot", args.arg1());
+      LuaTable frame = args.arg(2).checktable();
+      int width = frame.get("width").checkint();
+      int height = frame.get("height").checkint();
+      int guiScale = frame.get("guiScale").optint(1);
+      LuaValue framePixels = frame.get("pixels");
+      if (framePixels.isnil()) {
+        throw new LuaError(
+            "saveScreenshot: the frame carries no pixels — capture it with captureFrame({ pixels"
+                + " = true }) to write it");
       }
-      if (name.isBlank()) {
-        throw new LuaError("captureScreenshot: the capture name must not be empty");
+      int[] pixels =
+          net.minecheck.common.screenshot.Digests.unpack(luaBytes("saveScreenshot", framePixels));
+      if (width <= 0 || height <= 0 || pixels.length != width * height) {
+        throw new LuaError(
+            "saveScreenshot: the frame carries "
+                + pixels.length
+                + " pixels for a "
+                + width
+                + "x"
+                + height
+                + " picture — pass a frame from captureFrame({ pixels = true })");
       }
-      if (name.contains("/") || name.contains("\\") || name.contains("..")) {
-        throw new LuaError("captureScreenshot: invalid capture name \"" + name + "\"");
+      if (!capturedScreenshots.add(name)) {
+        throw new LuaError("saveScreenshot: \"" + name + "\" was already captured in this run");
       }
-      for (int i = 0; i < name.length(); i++) {
-        if (Character.isISOControl(name.charAt(i))) {
-          throw new LuaError("captureScreenshot: invalid capture name \"" + name + "\"");
+      net.minecheck.platform.api.ScreenshotRequest request =
+          net.minecheck.platform.api.ScreenshotRequest.forFrame(
+              name,
+              pixels,
+              width,
+              height,
+              config.screenshotScale(),
+              config.screenshotChatVisible(),
+              config.screenshotWidth(),
+              config.screenshotHeight(),
+              guiScale);
+      return awaitRequest("saveScreenshot", client::writeFrame, request, args.arg(3), false);
+    }
+  }
+
+  /**
+   * minecheck.sha256(value) -> string
+   *
+   * <p>Lower-case hex SHA-256 of a string, binary included, computed by the JVM. A script that
+   * wants a digest of its own — of a frame's pixels, of a payload it just read — asks here instead
+   * of hashing in Lua: a pure-Lua SHA-256 over a megabyte costs hundreds of milliseconds where this
+   * costs a couple.
+   */
+  private final class Sha256 extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      return LuaValue.valueOf(
+          net.minecheck.common.screenshot.Digests.sha256(luaBytes("sha256", args.arg1())));
+    }
+  }
+
+  /**
+   * minecheck.runScript(name) -> boolean
+   *
+   * <p>Runs another script from the same {@code minecheck/scripts} directory as the entry script,
+   * in this session and in the caller's globals, and returns true once it finishes. This is how a
+   * coordinator composes phases that live in their own files instead of inlining them: the phase
+   * runs exactly as it would as a top-level script — same {@code minecheck} table, same world, same
+   * tick clock, same coroutine, so every wait still yields a tick.
+   *
+   * <p>{@code _G.MINECHECK_PHASE} holds the phase's name while it runs (nil in a top-level run), so
+   * a script that can be either a suite of its own or a phase can tell the difference. That is what
+   * lets a phase skip the {@code quit}/{@code stop} that would end the whole session.
+   *
+   * <p>A phase that raises propagates the error to the caller: wrap the call in {@code pcall} to
+   * record a failed phase and carry on with the next one. The name is resolved inside the scripts
+   * directory only — a name that climbs out of it is refused, not followed.
+   */
+  private final class RunScript extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = args.checkjstring(1).trim();
+      if (name.isEmpty()) {
+        throw new LuaError("runScript: name must not be blank");
+      }
+      Path scriptFile = engine.scriptFile();
+      Path scripts = scriptFile == null ? null : scriptFile.getParent();
+      if (scripts == null) {
+        throw new LuaError("runScript: the running script has no scripts directory");
+      }
+      Path directory = scripts.toAbsolutePath().normalize();
+      Path file = directory.resolve(name).normalize();
+      if (!file.startsWith(directory)) {
+        throw new LuaError("runScript: \"" + name + "\" is outside " + directory);
+      }
+      if (!Files.isRegularFile(file)) {
+        throw new LuaError("runScript: no script named \"" + name + "\" in " + directory);
+      }
+      String source;
+      try {
+        source = Files.readString(file);
+      } catch (IOException e) {
+        throw new LuaError("runScript: could not read " + file + ": " + e.getMessage());
+      }
+      LuaValue previous = globals.get("MINECHECK_PHASE");
+      globals.set("MINECHECK_PHASE", LuaValue.valueOf(name));
+      try {
+        globals.load(source, "@" + name).call();
+      } finally {
+        globals.set("MINECHECK_PHASE", previous);
+      }
+      return LuaValue.TRUE;
+    }
+  }
+
+  /**
+   * Drives one screenshot request to completion, yielding a tick at a time and giving up at the
+   * timeout, and returns the table the capture actions answer with.
+   */
+  private LuaTable awaitRequest(
+      String action,
+      java.util.function.Consumer<net.minecheck.platform.api.ScreenshotRequest> ask,
+      net.minecheck.platform.api.ScreenshotRequest request,
+      LuaValue timeoutArg,
+      boolean pixels) {
+    double seconds = timeoutArg.isnumber() ? timeoutArg.todouble() : config.defaultTimeout();
+    long deadline = clock.getAsLong() + (long) (seconds * 1000);
+    try {
+      while (true) {
+        if (request.state() == net.minecheck.platform.api.ScreenshotRequest.State.QUEUED) {
+          ask.accept(request);
         }
+        net.minecheck.platform.api.ScreenshotRequest.State state = request.state();
+        if (state == net.minecheck.platform.api.ScreenshotRequest.State.DONE) {
+          LuaTable t = new LuaTable();
+          t.set("width", LuaValue.valueOf(request.outWidth()));
+          t.set("height", LuaValue.valueOf(request.outHeight()));
+          t.set("bytes", LuaValue.valueOf(request.bytes()));
+          t.set("sha256", LuaValue.valueOf(request.sha256()));
+          t.set("guiScale", LuaValue.valueOf(request.guiScale()));
+          if (pixels && request.pixels() != null) {
+            t.set(
+                "pixels",
+                org.luaj.vm2.LuaString.valueOf(
+                    net.minecheck.common.screenshot.Digests.pack(request.pixels())));
+          }
+          if (request.path() != null) {
+            t.set("path", LuaValue.valueOf(request.path().toString()));
+          }
+          return t;
+        }
+        if (state == net.minecheck.platform.api.ScreenshotRequest.State.FAILED) {
+          throw new LuaError(action + ": " + request.failure());
+        }
+        if (clock.getAsLong() > deadline) {
+          throw new LuaError(
+              action
+                  + ": timed out after "
+                  + (seconds == Math.rint(seconds) ? Long.toString((long) seconds) : seconds)
+                  + "s waiting for the frame");
+        }
+        globals.yield(LuaValue.NIL);
       }
-      return name;
+    } catch (LuaError e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw wrap(action, e);
     }
+  }
 
-    /** One whole-number region field, or a Lua error naming it. */
-    private int regionInt(LuaTable region, String field) {
-      LuaValue value = region.get(field);
-      if (value.isnil()) {
-        throw new LuaError(
-            "captureScreenshot: region needs numeric x, y, w, h (missing \"" + field + "\")");
-      }
-      if (!value.isnumber()) {
-        throw new LuaError(
-            "captureScreenshot: region needs numeric x, y, w, h (\""
-                + field
-                + "\" is a "
-                + value.typename()
-                + ")");
-      }
-      double number = value.todouble();
-      if (number != Math.rint(number) || number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
-        throw new LuaError(
-            "captureScreenshot: region field \""
-                + field
-                + "\" must be a whole number, got "
-                + value.tojstring());
-      }
-      return (int) number;
+  /** The bytes of a Lua string without a UTF-8 round trip: pixels and payloads are binary. */
+  private static byte[] luaBytes(String action, LuaValue value) {
+    if (value.type() != LuaValue.TSTRING) {
+      throw new LuaError(action + ": expected a string, got " + value.typename());
     }
+    org.luaj.vm2.LuaString string = value.checkstring();
+    byte[] bytes = string.m_bytes;
+    int offset = string.m_offset;
+    int length = string.m_length;
+    if (offset == 0 && length == bytes.length) {
+      return bytes;
+    }
+    return java.util.Arrays.copyOfRange(bytes, offset, offset + length);
   }
 
   // ------------------------------------------------------------ server actions

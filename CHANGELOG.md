@@ -19,22 +19,19 @@ Suggested shape, delete what you do not use:
 ## Fixed
 -->
 
-## Added
-- `bootPackagedJars` installs each packaged loader jar in a real dedicated server and fails unless
-  Minecheck reports itself active there, so a jar that breaks after remapping is caught before the
-  release that would have shipped it (#103). `-Pboot.only=fabric,forge` boots a subset,
-  `-Pboot.java=<path>` picks the JDK the servers run on, and `-Pboot.timeout=<seconds>` widens the
-  start deadline.
-- `pauseTicks`, `stepTicks` and `resumeTicks` let a script own the tick loop of the server it runs:
-  the world can be held between captures and advanced by an exact tick count, and stepped ticks run
-  back to back instead of at twenty a second. `uncappedTicks` drops vanilla's cadence for the whole
-  run, so a machine with headroom runs well past twenty ticks a second. All of it is behind
-  `ownTickClock`, off by default.
-
 ## Changed
-- A pull request into this line's `development` branch boots the packaged jars instead of only
-  running the development classpath, and that check is a Gradle task in the plugin rather than a
-  Python script shipped beside the build.
-- The screenshot suite settles on a held clock and a fixed tick count instead of on the frame
-  digest. A capture is a function of the ticks the script ran rather than of how fast the runner drew
-  frames, and the ad-hoc `_settle-*` probes are gone from the mismatch report.
+
+- Release verification keeps captured frames in memory and hashes them in the JVM, so a lifecycle
+  run no longer writes screenshot files to disk and the same bytes reach the comparison directly.
+- The lifecycle suites run as phases of one session instead of one game per suite: beacon, query,
+  packet and spawn share a client and a dedicated server, and input and live share a client. Every
+  assertion is unchanged; the lifecycle jobs boot five games where they booted ten.
+- The Forge frame-tap suite still boots its own client and server on this line: in a merged
+  session the tap installs but observes no frames on 1.19.2 (#121). The other suites are
+  unaffected.
+
+## Fixed
+
+- A phase that waited for a cue the server had already sent no longer hangs until its timeout.
+- The punch test puts the sword in the target's hand, where the command means it to be, not only
+  in the inventory.

@@ -60,9 +60,13 @@ check(itemFound, "diamond item drop exists on the server")
 local igloo = minecheck.spawnStructure("minecraft:igloo/top", { x = 10, y = 100, z = 10 })
 check(igloo.success, "spawnStructure igloo/top succeeded")
 
-minecheck.log("spawn test: all expects done, waiting for client to leave")
--- How long the client's own script needs is not knowable here (it is another process), so the
--- ceiling is config.defaultTimeout, which the harness stages for the whole run, not a guess.
-local left = minecheck.waitForPlayerLeave(player)
-check(left, "client left after spawn test")
-minecheck.runCommand("stop")
+-- A phase leaves the session running: the coordinator owns the player-leave wait and the stop (see
+-- `_G.MINECHECK_PHASE` in docs/lua-api.md).
+if not _G.MINECHECK_PHASE then
+  minecheck.log("spawn test: all expects done, waiting for client to leave")
+  -- How long the client's own script needs is not knowable here (it is another process), so the
+  -- ceiling is config.defaultTimeout, which the harness stages for the whole run, not a guess.
+  local left = minecheck.waitForPlayerLeave(player)
+  check(left, "client left after spawn test")
+  minecheck.runCommand("stop")
+end
