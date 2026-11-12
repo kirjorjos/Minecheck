@@ -21,6 +21,12 @@ local function phase(name)
   minecheck.runScript(name)
 end
 
+-- The session owns the join: the phases below are in the world already and would fail on a client
+-- that never entered one (each of them skips its own `joinServer` in phase mode).
+if not minecheck.expect(minecheck.joinServer("localhost:25565", 300), "joined the server for the merged session") then
+  minecheck.fail("joinServer failed")
+end
+
 phase("beacon-client.lua")
 phase("query-client.lua")
 phase("packet-client.lua")
