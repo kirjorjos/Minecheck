@@ -8,6 +8,7 @@ import net.minecheck.common.live.LiveException;
 import net.minecheck.common.live.LiveListener;
 import net.minecheck.common.net.PacketChannel;
 import net.minecheck.common.net.PacketValues;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecheck.platform.api.PlatformServices;
@@ -42,6 +43,12 @@ public final class LuaMinecheck {
 
   /** How long to wait for {@code openChat} to put the chat screen up before typing into it. */
   private static final long CHAT_OPEN_TIMEOUT_MS = 5000;
+
+  /**
+   * Ceiling on one {@code stepTicks} call. A step releases one semaphore permit per tick, so the
+   * count has to fit an int and stay a scene, not a whole test run idling in one call.
+   */
+  private static final long MAX_STEP_TICKS = 1_000_000L;
 
   private final Globals globals;
   private final PlatformServices services;
@@ -105,6 +112,12 @@ public final class LuaMinecheck {
     minecheck.set("isInWorld", new IsInWorld());
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
+
+    // The tick clock: the server this process runs, held and advanced by the script.
+    minecheck.set("pauseTicks", new PauseTicks());
+    minecheck.set("stepTicks", new StepTicks());
+    minecheck.set("resumeTicks", new ResumeTicks());
+    minecheck.set("uncappedTicks", new UncappedTicks());
 
     // Input actions (client)
     minecheck.set("press", new Press());
@@ -2693,6 +2706,146 @@ public final class LuaMinecheck {
         globals.yield(LuaValue.NIL);
       }
       return LuaValue.NIL;
+    }
+  }
+
+  /**
+   * minecheck.pauseTicks() -> nil
+   *
+   * <p>Holds the server this process runs before its next tick's world work — on a client, the
+   * singleplayer world's integrated server. The client keeps ticking, so the script and the
+   * renderer stay alive while the world stands still; a capture taken now sees a frozen frame
+   * rather than whatever the runner managed to render during it.
+   *
+   * <p>The hold lasts until {@code resumeTicks} or the next {@code stepTicks}. A command is a
+   * server tick's work, so {@code runCommand} while held stays queued until the clock moves again.
+   */
+  private final class PauseTicks extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireTickClock("pauseTicks");
+      TickClock.get().pause();
+      return LuaValue.NIL;
+    }
+  }
+
+  /**
+   * minecheck.stepTicks(ticks[, timeout]) -> nil
+   *
+   * <p>Advances the world exactly {@code ticks} times and returns once the last one has finished.
+   * The ticks run back to back rather than at twenty a second, so a long scene costs a burst of
+   * work instead of the game time it represents — the same tick count on a slow runner and a fast
+   * one.
+   *
+   * <p>Implies {@code pauseTicks}: the clock is still held when this returns, which is the point —
+   * a capture that follows is a function of the tick count the script chose, not of how many ticks
+   * happened to pass while the frame was being drawn.
+   */
+  private final class StepTicks extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireTickClock("stepTicks");
+      long count = args.arg1().checklong();
+      if (count < 0) {
+        throw new LuaError("stepTicks: ticks must be zero or more, not " + count);
+      }
+      if (count > MAX_STEP_TICKS) {
+        throw new LuaError(
+            "stepTicks: at most " + MAX_STEP_TICKS + " ticks per call, not " + count);
+      }
+      TickClock tickClock = TickClock.get();
+      tickClock.pause();
+      if (count == 0) {
+        return LuaValue.NIL;
+      }
+      long before = tickClock.stepped();
+      long target = before + count;
+      tickClock.step(count);
+      long deadline = deadline(args, 2);
+      while (tickClock.stepped() < target) {
+        if (clock.getAsLong() > deadline) {
+          throw new LuaError(
+              "stepTicks: "
+                  + (tickClock.stepped() - before)
+                  + " of "
+                  + count
+                  + " ticks ran before the timeout");
+        }
+        globals.yield(LuaValue.NIL);
+      }
+      return LuaValue.NIL;
+    }
+  }
+
+  /**
+   * minecheck.uncappedTicks([enabled]) -> nil
+   *
+   * <p>Drops vanilla's fifty-millisecond cadence: each tick starts as soon as the previous one
+   * finished, so the world runs at whatever the machine's milliseconds-per-tick allows — faster
+   * than twenty a second on a runner with headroom, and only as fast as its own ticks on one
+   * without. Omitting the argument turns it on; {@code false} puts the cadence back.
+   *
+   * <p>The client is not affected: frames are drawn at the renderer's own rate either way, so a
+   * script that wants a specific picture still holds the clock with {@code pauseTicks}/{@code
+   * stepTicks}. {@code resumeTicks} and the end of the run both put the cadence back.
+   */
+  private final class UncappedTicks extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireTickClock("uncappedTicks");
+      boolean enabled = args.arg1().optboolean(true);
+      TickClock.get().setUncapped(enabled);
+      if (enabled && !TickClock.get().pacingHook()) {
+        LOG.warning(
+            "Minecheck: uncappedTicks is on but no pacing hook has run — this loader's server loop"
+                + " keeps its fifty-millisecond cadence");
+      }
+      return LuaValue.NIL;
+    }
+  }
+
+  /** minecheck.resumeTicks() -> nil — hands the loop back to the wall clock. */
+  private final class ResumeTicks extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireTickClock("resumeTicks", false);
+      TickClock.get().resume();
+      return LuaValue.NIL;
+    }
+  }
+
+  /**
+   * Refuses an action that needs the tick clock, with a reason instead of a hang.
+   *
+   * <p>Two states make it unusable and each gets its own sentence: the run did not opt in with
+   * {@code ownTickClock}, no loader bound the gate at all, or the gate is bound but no server tick
+   * runs here — a client playing on a server another process owns, where the clock belongs to that
+   * process and not to this one.
+   */
+  private void requireTickClock(String action) {
+    requireTickClock(action, true);
+  }
+
+  /**
+   * {@code requireLive} is false for {@code resumeTicks}: handing the loop back is always safe, and
+   * the script does it on its way out, when no tick has run recently by definition.
+   */
+  private void requireTickClock(String action, boolean requireLive) {
+    if (!config.ownTickClock()) {
+      throw new LuaError(
+          action
+              + ": the tick clock is disabled — set \"ownTickClock\": true in"
+              + " config/minecheck/config.json to let a script hold the world's ticks");
+    }
+    TickClock tickClock = TickClock.get();
+    if (!tickClock.bound()) {
+      throw new LuaError(action + ": this loader has no tick gate, so the clock cannot be owned");
+    }
+    if (requireLive && !tickClock.running()) {
+      throw new LuaError(
+          action
+              + ": no server tick has run in this process — the tick clock belongs to the server,"
+              + " and this client does not run the one it is playing on");
     }
   }
 

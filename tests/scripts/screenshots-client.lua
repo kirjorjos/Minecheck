@@ -45,34 +45,30 @@ end
 
 --- Runs a scene-setting command and fails the run when the server did not take it.
 local function command(cmd)
+  -- A command is a server tick's work, so it cannot land while the clock is held: hand the loop
+  -- back before sending it. The settle that follows stops it again.
+  minecheck.resumeTicks()
   local result = minecheck.runCommand(cmd)
   minecheck.log(cmd .. " -> success=" .. tostring(result.success))
   minecheck.expect(result.success == true, "ran /" .. cmd)
 end
 
--- The picture eases for several seconds after a world is created (its lighting is still settling),
--- and two runs reach the same point after different frame counts, so a fixed wait either shoots
--- mid-ease or wastes seconds. Settle on the picture instead: capture, wait, capture again, and stop
--- once two digests agree. The probes are ad-hoc (`_`), so they are uploaded but never baselined.
-local settleCount = 0
+-- The picture eases for several hundred ticks after a world is created (its lighting is still
+-- settling), and how many of those ticks a run gets through before a capture depends on how fast
+-- the runner draws frames — so sampling the picture until two frames happen to agree settles at a
+-- different count on every machine, and wrote ~30 ad-hoc PNGs into the capture directory each run.
+-- Own the clock instead: stop the server this client runs, advance it by a fixed tick count, and
+-- shoot what follows. `stepTicks` runs those ticks back to back rather than at twenty a second, so
+-- the same settle costs a burst of work instead of twenty seconds of game time.
+local SETTLE_TICKS = 400
+
 local function settle(label)
-  local previous
-  -- 60 probes, not 30: after a world is created its lighting fades over a few hundred ticks, and at
-  -- the client's real twenty ticks a second that is longer in wall-clock time than it was when the
-  -- tick rate was accidentally driven by the frame rate. The bound is a budget, not a wait — a
-  -- settled frame returns after two probes.
-  for _ = 1, 60 do
-    settleCount = settleCount + 1
-    local probe = minecheck.captureScreenshot("_settle-" .. label .. "-" .. settleCount)
-    if previous ~= nil and probe.sha256 == previous then
-      minecheck.log("settled after " .. settleCount .. " probe(s)")
-      return true
-    end
-    previous = probe.sha256
-    minecheck.wait(0.25)
-  end
-  minecheck.fail("the frame never settled for " .. label)
-  return false
+  minecheck.pauseTicks()
+  minecheck.stepTicks(SETTLE_TICKS)
+  minecheck.log(label .. " settled after " .. SETTLE_TICKS .. " ticks")
+  -- The client ticks on while the server stands still: give it a few frames of the now-frozen world
+  -- to apply the stepped state and finish its own lightmap pass before the caller captures.
+  minecheck.wait(0.5)
 end
 
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 0 })
@@ -99,6 +95,11 @@ local function stand()
     string.format("player at %.3f %.3f %.3f in %s", player.pos.x, player.pos.y, player.pos.z, player.dimension)
   )
 end
+
+-- Spend the runner's CPU rather than its wall clock: with no tick cap the world runs at whatever
+-- milliseconds-per-tick the machine manages, so the ticks between the scene steps stop being a
+-- twenty-a-second floor. The captures themselves are still taken on a held clock.
+minecheck.uncappedTicks()
 
 -- 1. The world at noon, looking down: ground, the pinned HUD and the held-block highlight in one
 -- frame, with the sky's light at the flat top of its curve.
@@ -176,4 +177,6 @@ minecheck.expect(
   "_hud-region is the cropped height, not the frame"
 )
 
+-- Leave the clock running: a held server never finishes the shutdown this quit starts.
+minecheck.resumeTicks()
 minecheck.quit()
