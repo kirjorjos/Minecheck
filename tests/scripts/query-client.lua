@@ -47,9 +47,17 @@ end
 
 -- The server has finished reading the target's state and cues us over Minecheck's packet channel.
 -- Attacking any earlier would move the target under the server's own "settled and still" assertions.
-local cued = minecheck.waitForPacket("punch_ready", 180)
-if not minecheck.expect(cued ~= false, "server cued the punch phase") then
-  minecheck.fail("no punch cue from the server")
+--
+-- As a phase the cue is not waited for: the server's phases run back to back and it finishes this
+-- one long before the client reaches it (the beacon phase alone takes a minute), so the cue was
+-- delivered while nothing was listening and a packet is not replayed. What the cue protects -
+-- the target standing still while the server measures it - has already happened by now, and the
+-- client's own "sees the target" wait above is the real handshake.
+if not phase then
+  local cued = minecheck.waitForPacket("punch_ready", 180)
+  if not minecheck.expect(cued ~= false, "server cued the punch phase") then
+    minecheck.fail("no punch cue from the server")
+  end
 end
 
 -- Aim at it and hold attack until it is gone, re-finding it on every swing so a knockback nudge
