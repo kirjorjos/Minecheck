@@ -42,7 +42,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "3.0.0"
+version = "3.0.1"
 
 group = "net.minecheck"
 
@@ -594,6 +594,103 @@ registerScreenshotsLifecycle("testForgeShots", "forge")
 registerScreenshotsLifecycle("testQuiltShots", "quilt")
 
 /**
+ * The server-backed suites, as phases of one session: one client boot and one dedicated-server boot
+ * instead of one of each per suite. Their per-suite tasks stay registered for debugging a single
+ * scenario locally; the aggregate runs this one.
+ */
+fun registerServerFeaturesLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client + dedicated server once and runs the server-backed suites as phases of that session (beacon, query, packet, frame tap, spawn)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    coordinator = "server-features-client.lua"
+    script = "server-features-client.lua"
+    serverScript = "server-features-server.lua"
+    serverLoaderTask = ":$loader-mod:runServer"
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    serverRunDir = layout.projectDirectory.dir("$runRoot/run/server").asFile.absolutePath
+    worldName = "minecheck_world"
+    serverPort = "25565"
+    levelSeed = "0"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runServer",
+      "devHelperServerLaunch",
+      "server-launch.txt",
+      serverLaunchFile,
+      this,
+    )
+  }
+}
+
+/**
+ * The client-only suites, as phases of one session: input and live each need a client-created world
+ * and share the one `input-test.lua` creates, so they need no disconnect between them.
+ */
+fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
+  val runRoot = "src/$loader/mod"
+  tasks.register<MinecheckLifecycleTest>(taskName) {
+    group = "minecheck"
+    description =
+      "Boots the $loader client once and runs the client-only suites as phases of that session (input, live)"
+    dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
+
+    loaderTask = ":$loader-mod:runClient"
+    coordinator = "client-features-client.lua"
+    script = "client-features-client.lua"
+    liveDriverFile.set(layout.projectDirectory.file("tests/scripts/live-driver.txt"))
+    scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
+    runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
+    worldName = "minecheck_world"
+    xvfbRun = true
+
+    resultFile.set(
+      layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
+    )
+
+    MinecheckLifecyclePlugin.wireLaunchDescriptor(
+      project,
+      ":$loader-mod:runClient",
+      "devHelperClientLaunch",
+      "client-launch.txt",
+      clientLaunchFile,
+      this,
+    )
+  }
+}
+
+registerServerFeaturesLifecycle("testFabricServerFeatures", "fabric")
+
+registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
+
+registerServerFeaturesLifecycle("testQuiltServerFeatures", "quilt")
+
+registerClientFeaturesLifecycle("testFabricClientFeatures", "fabric")
+
+registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
+
+registerClientFeaturesLifecycle("testQuiltClientFeatures", "quilt")
+
+/**
  * Every lifecycle suite for one loader, as one task. CI runs one of these per loader in its own
  * job, so the workflow never has to enumerate task families — adding a suite means adding it here
  * and to the loader's aggregate.
@@ -610,12 +707,8 @@ registerLoaderAggregate(
   "fabric",
   "testFabric",
   "testFabricFail",
-  "testFabricInput",
-  "testFabricLive",
-  "testFabricSpawn",
-  "testFabricQuery",
-  "testFabricBeacon",
-  "testFabricPacket",
+  "testFabricServerFeatures",
+  "testFabricClientFeatures",
   "testFabricWorldHandoff",
   "testFabricShots",
 )
@@ -624,13 +717,8 @@ registerLoaderAggregate(
   "forge",
   "testForge",
   "testForgeFail",
-  "testForgeInput",
-  "testForgeLive",
-  "testForgeSpawn",
-  "testForgeQuery",
-  "testForgeBeacon",
-  "testForgePacket",
-  "testForgePacketTap",
+  "testForgeServerFeatures",
+  "testForgeClientFeatures",
   "testForgeWorldHandoff",
   "testForgeShots",
 )
@@ -639,12 +727,8 @@ registerLoaderAggregate(
   "quilt",
   "testQuilt",
   "testQuiltFail",
-  "testQuiltInput",
-  "testQuiltLive",
-  "testQuiltSpawn",
-  "testQuiltQuery",
-  "testQuiltBeacon",
-  "testQuiltPacket",
+  "testQuiltServerFeatures",
+  "testQuiltClientFeatures",
   "testQuiltWorldHandoff",
   "testQuiltShots",
 )

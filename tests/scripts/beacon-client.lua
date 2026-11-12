@@ -9,9 +9,14 @@ end
 -- still booting in parallel — a loaded CI runner took 143 s from server launch to `Done`, all of it
 -- after the port was already accepting connections (so every attempt in that window is dropped).
 -- 120 s ran out before the server was up and the client gave up one retry short of joining.
-local joined = minecheck.joinServer("localhost:25565", 300)
-if not minecheck.expect(joined, "joined beacon-test server") then
-  minecheck.fail("joinServer failed")
+-- A phase runs inside a session the coordinator owns: it is already in the world, and leaving is
+-- the coordinator's call (see `_G.MINECHECK_PHASE` in docs/lua-api.md).
+local phase = _G.MINECHECK_PHASE ~= nil
+if not phase then
+  local joined = minecheck.joinServer("localhost:25565", 300)
+  if not minecheck.expect(joined, "joined beacon-test server") then
+    minecheck.fail("joinServer failed")
+  end
 end
 
 local function check(result, name)
@@ -437,5 +442,7 @@ if jeiInstalled then
   end
 end
 
-minecheck.disconnect(60)
-minecheck.quit()
+if not phase then
+  minecheck.disconnect(60)
+  minecheck.quit()
+end
