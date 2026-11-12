@@ -83,6 +83,7 @@ public class JsonConfigManager implements ConfigManager {
           booleanField(obj, "restoreVanillaCamera", ConfigData.DEFAULT_RESTORE_VANILLA_CAMERA),
           booleanField(obj, "hideGameWindow", ConfigData.DEFAULT_HIDE_GAME_WINDOW),
           booleanField(obj, "muteAudio", ConfigData.DEFAULT_MUTE_AUDIO),
+          booleanField(obj, "ownTickClock", ConfigData.DEFAULT_OWN_TICK_CLOCK),
           cameraMode,
           rangedDoubleField(
               obj, "cameraHorizontalSpeed", ConfigData.DEFAULT_CAMERA_HORIZONTAL_SPEED, 0, 10),
