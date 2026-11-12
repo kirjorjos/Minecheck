@@ -448,6 +448,35 @@ public interface ClientPlatform {
   }
 
   /**
+   * Capture the client's next rendered frame into memory, without encoding or writing a PNG.
+   *
+   * <p>The readback, the crop, the downscale and the chat clear are {@link #requestScreenshot}'s;
+   * what an in-memory capture skips is the PNG encode, the file write and the frame report. On
+   * {@link ScreenshotRequest.State#DONE} the request holds the pixels and their digest instead of a
+   * path, which is what a loop asking "did the picture change?" should pay for.
+   *
+   * <p>The default fails the request rather than doing nothing, so a platform without an in-memory
+   * path surfaces as a clear Lua error instead of a capture that never completes.
+   */
+  default void requestFrame(ScreenshotRequest request) {
+    request.fail("in-memory frame capture is not supported by this platform");
+  }
+
+  /**
+   * Encode and write a frame captured in memory — a request built with {@link
+   * ScreenshotRequest#forFrame} — and report its path, size and PNG digest through {@link
+   * ScreenshotRequest#succeed}.
+   *
+   * <p>No framebuffer is read: the pixels <em>are</em> the picture, so the work is the encode and
+   * the file, done off the render thread like any other capture.
+   *
+   * <p>The default fails the request.
+   */
+  default void writeFrame(ScreenshotRequest request) {
+    request.fail("writing an in-memory frame is not supported by this platform");
+  }
+
+  /**
    * Open the chat screen on the client thread, dispatched asynchronously (see {@link
    * #runOnClientThread(Runnable)}): the screen is <em>not</em> guaranteed to be up when this
    * returns. {@code mode} is {@code "command"} to pre-fill a leading {@code "/"} (so the text is

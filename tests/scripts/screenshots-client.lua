@@ -57,15 +57,42 @@ end
 -- settling), and how many of those ticks a run gets through before a capture depends on how fast
 -- the runner draws frames — so sampling the picture until two frames happen to agree settles at a
 -- different count on every machine, and wrote ~30 ad-hoc PNGs into the capture directory each run.
--- Own the clock instead: stop the server this client runs, advance it by a fixed tick count, and
--- shoot what follows. `stepTicks` runs those ticks back to back rather than at twenty a second, so
--- the same settle costs a burst of work instead of twenty seconds of game time.
-local SETTLE_TICKS = 400
+-- Own the clock instead: stop the server this client runs and advance it by ticks the script
+-- chooses. Step in chunks and stop once two consecutive samples leave the picture identical: the
+-- sample points are tick counts rather than wall-clock moments, so where a settle stops is a
+-- property of the scene and not of the machine, and a scene that has converged after two hundred
+-- ticks does not pay for four hundred.
+--
+-- The chunk is the caller's to choose (a scene that eases in a few ticks can be sampled every few
+-- ticks; one whose lighting creeps can step further between reads), because how far apart the
+-- samples are is a property of the scene, not of this helper. The cap and the chunk are both
+-- per-call, so `settle` never decides for a scene how many ticks to step.
+local SETTLE_CHUNK = 100
+local SETTLE_MAX_TICKS = 400
 
-local function settle(label)
+local function settle(label, opts)
+  opts = opts or {}
+  local chunk = opts.chunk or SETTLE_CHUNK
+  local maxTicks = opts.max or SETTLE_MAX_TICKS
+  if chunk < 1 then
+    minecheck.fail("settle chunk must be at least one tick, got " .. tostring(chunk))
+  end
   minecheck.pauseTicks()
-  minecheck.stepTicks(SETTLE_TICKS)
-  minecheck.log(label .. " settled after " .. SETTLE_TICKS .. " ticks")
+  local ticks = 0
+  local previous
+  while ticks < maxTicks do
+    local step = math.min(chunk, maxTicks - ticks)
+    minecheck.stepTicks(step)
+    ticks = ticks + step
+    -- `captureFrame` reads the picture without encoding or writing it: a probe costs a readback and
+    -- a hash, which is what makes asking after every chunk cheaper than always stepping the cap.
+    local frame = minecheck.captureFrame()
+    if previous ~= nil and frame.sha256 == previous then
+      break
+    end
+    previous = frame.sha256
+  end
+  minecheck.log(label .. " settled after " .. ticks .. " ticks")
   -- The client ticks on while the server stands still: give it a few frames of the now-frozen world
   -- to apply the stepped state and finish its own lightmap pass before the caller captures.
   minecheck.wait(0.5)

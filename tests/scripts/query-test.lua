@@ -166,9 +166,13 @@ check(
   minecheck.runCommand("execute if entity @a[gamemode=survival,name=" .. player .. "]").result == 1,
   "client player is in survival"
 )
+-- The sword has to end up in the *hand*, not merely in the inventory: a merged session's earlier
+-- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
+-- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
+-- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
 check(
-  minecheck.runCommand("give " .. player .. " minecraft:netherite_sword 1").result >= 1,
-  "client player given a sword"
+  minecheck.runCommand("item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1").result >= 1,
+  "client player given a sword in the hand"
 )
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
@@ -186,11 +190,15 @@ check(
 minecheck.log("query test: all server expects done, cueing the client to punch")
 check(minecheck.sendPacket("punch_ready"), "cued the client over the packet channel")
 
--- The client's punch phase runs in another process and decides when it leaves; the ceiling comes
--- from config.defaultTimeout rather than a number guessed here.
-local left = minecheck.waitForPlayerLeave(player)
-check(left, "client left after query test")
--- The client only leaves once the target is gone, so its absence proves a real player attack killed
--- it (findEntities by tag, the only side where tags exist).
-check(#minecheck.findEntities("minecraft:vex", "punchtarget") == 0, "the punched target died")
-minecheck.runCommand("stop")
+-- A phase leaves the session running: the coordinator owns the player-leave wait and the stop (see
+-- `_G.MINECHECK_PHASE` in docs/lua-api.md).
+if not _G.MINECHECK_PHASE then
+  -- The client's punch phase runs in another process and decides when it leaves; the ceiling comes
+  -- from config.defaultTimeout rather than a number guessed here.
+  local left = minecheck.waitForPlayerLeave(player)
+  check(left, "client left after query test")
+  -- The client only leaves once the target is gone, so its absence proves a real player attack
+  -- killed it (findEntities by tag, the only side where tags exist).
+  check(#minecheck.findEntities("minecraft:vex", "punchtarget") == 0, "the punched target died")
+  minecheck.runCommand("stop")
+end

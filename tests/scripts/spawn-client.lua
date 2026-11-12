@@ -8,12 +8,16 @@ if minecheck.clickGui("Proceed to main menu", 0, 1) then
   minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
 end
 
-local joined = minecheck.joinServer("localhost:25565", 300)
-if not minecheck.expect(joined, "joined spawn-test server") then
-  minecheck.fail("joinServer failed")
+-- This suite's work is all on the server; in a merged session the client only has to be present, so
+-- a phase neither joins nor leaves (see `_G.MINECHECK_PHASE` in docs/lua-api.md).
+local phase = _G.MINECHECK_PHASE ~= nil
+if not phase then
+  local joined = minecheck.joinServer("localhost:25565", 300)
+  if not minecheck.expect(joined, "joined spawn-test server") then
+    minecheck.fail("joinServer failed")
+  end
+
+  local left = minecheck.leaveWorld(60)
+  minecheck.expect(left, "left spawn-test server")
+  minecheck.quit()
 end
-
-local left = minecheck.leaveWorld(60)
-minecheck.expect(left, "left spawn-test server")
-
-minecheck.quit()

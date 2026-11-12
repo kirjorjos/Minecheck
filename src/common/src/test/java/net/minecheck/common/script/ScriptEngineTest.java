@@ -42,6 +42,14 @@ class ScriptEngineTest {
     boolean left;
     boolean quit;
 
+    // In-memory frames: a 2x2 picture, and a written-frame record for saveScreenshot.
+    static final int[] FRAME_PIXELS = {0x01020304, 0x05060708, 0x090A0B0C, 0x0D0E0F10};
+    int frameCalls;
+    int writeCalls;
+    int writtenWidth;
+    int writtenHeight;
+    int[] writtenPixels;
+
     CreateWorldOptions createdWorld;
 
     @Override
@@ -76,6 +84,27 @@ class ScriptEngineTest {
     @Override
     public void quit() {
       quit = true;
+    }
+
+    @Override
+    public void requestFrame(net.minecheck.platform.api.ScreenshotRequest request) {
+      frameCalls++;
+      request.succeedFrame(
+          2, 2, FRAME_PIXELS, net.minecheck.common.screenshot.Digests.sha256(FRAME_PIXELS), 2);
+    }
+
+    @Override
+    public void writeFrame(net.minecheck.platform.api.ScreenshotRequest request) {
+      writeCalls++;
+      writtenWidth = request.outWidth();
+      writtenHeight = request.outHeight();
+      writtenPixels = request.pixels();
+      request.succeed(
+          java.nio.file.Path.of("/run/screenshots/" + request.name() + ".png"),
+          request.outWidth(),
+          request.outHeight(),
+          4321,
+          "png-digest");
     }
 
     @Override
@@ -798,6 +827,50 @@ class ScriptEngineTest {
   }
 
   @Test
+  void runScriptRunsAStagedScriptAsAPhaseInTheCallersGlobals() throws Exception {
+    Files.writeString(
+        tempDir.resolve("phase.lua"),
+        "_G.phaseSaw = MINECHECK_PHASE\n"
+            + "minecheck.expect(MINECHECK_PHASE == 'phase.lua', 'a phase knows its own name')\n");
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "minecheck.runScript('phase.lua')\n"
+                + "minecheck.expect(MINECHECK_PHASE == nil, 'the flag is cleared afterwards')\n"
+                + "minecheck.expect(phaseSaw == 'phase.lua', 'the phase ran in the caller globals')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void runScriptRaisesOnAMissingScript() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(client, ConfigData.defaults(), "minecheck.runScript('not-there.lua')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertTrue(engine.isFailed());
+    assertTrue(engine.failureMessage().contains("no script named"), engine.failureMessage());
+  }
+
+  @Test
+  void runScriptRefusesANameThatClimbsOutOfTheScriptsDirectory() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(client, ConfigData.defaults(), "minecheck.runScript('../outside.lua')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertTrue(engine.isFailed());
+    assertTrue(engine.failureMessage().contains("outside"), engine.failureMessage());
+  }
+
+  @Test
   void joinLocalWorldBlocksUntilInWorld() throws Exception {
     FakeClient client = new FakeClient();
     ScriptEngine engine =
@@ -829,6 +902,76 @@ class ScriptEngineTest {
     assertEquals(42L, client.createdWorld.seed());
     assertFalse(client.createdWorld.mobSpawning(), "deterministic default: no mob spawning");
     assertFalse(client.createdWorld.structures(), "deterministic default: no structures");
+  }
+
+  @Test
+  void sha256IsComputedByTheJvm() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "local digest = minecheck.sha256('abc')\n"
+                + "assert(digest == "
+                + "'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', digest)\n");
+    runUntilFinished(engine, 5);
+    assertTrue(engine.isFinished(), "script should finish");
+    assertFalse(engine.isFailed());
+  }
+
+  @Test
+  void captureFrameReadsTheFrameWithoutWritingIt() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local frame = minecheck.captureFrame()\n"
+                + "assert(frame.width == 2 and frame.height == 2, 'frame size')\n"
+                + "assert(frame.path == nil, 'captureFrame must not write a file')\n"
+                + "assert(frame.pixels == nil, 'pixels are opt-in')\n"
+                + "assert(#frame.sha256 == 64, 'the digest is a sha256')\n");
+    runUntilFinished(engine, 5);
+    assertTrue(engine.isFinished(), "script should finish");
+    assertFalse(engine.isFailed());
+    assertEquals(1, client.frameCalls);
+  }
+
+  @Test
+  void saveScreenshotWritesAFrameTheScriptCaptured() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local frame = minecheck.captureFrame({ pixels = true })\n"
+                + "assert(frame.pixels ~= nil, 'the pixels were asked for')\n"
+                + "local shot = minecheck.saveScreenshot('from-frame', frame)\n"
+                + "assert(shot.path ~= nil, 'saveScreenshot returns the path')\n"
+                + "assert(shot.sha256 == 'png-digest', shot.sha256)\n"
+                + "assert(shot.bytes == 4321, shot.bytes)\n");
+    runUntilFinished(engine, 5);
+    assertTrue(engine.isFinished(), "script should finish");
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals(1, client.frameCalls, "the frame came from captureFrame");
+    assertEquals(1, client.writeCalls, "the write went through writeFrame");
+    assertEquals(2, client.writtenWidth);
+    assertEquals(2, client.writtenHeight);
+    assertTrue(java.util.Arrays.equals(FakeClient.FRAME_PIXELS, client.writtenPixels));
+  }
+
+  @Test
+  void saveScreenshotRefusesAFrameWithoutPixels() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "local frame = minecheck.captureFrame()\n"
+                + "local ok, err = pcall(function() minecheck.saveScreenshot('no-pixels', frame) end)\n"
+                + "assert(not ok, 'a frame without pixels must not be written')\n"
+                + "assert(string.find(err, 'captureFrame', 1, true), err)\n");
+    runUntilFinished(engine, 5);
+    assertTrue(engine.isFinished(), "script should finish");
+    assertFalse(engine.isFailed(), engine.failureMessage());
   }
 
   @Test
