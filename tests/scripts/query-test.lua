@@ -171,9 +171,7 @@ check(
 -- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
 -- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
 check(
-  minecheck.runCommand(
-    "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1"
-  ).result >= 1,
+  minecheck.runCommand("item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1").result >= 1,
   "client player given a sword in the hand"
 )
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
