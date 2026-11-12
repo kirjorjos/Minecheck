@@ -1065,6 +1065,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       config.put("screenshotGuiScale", screenshotGuiScale());
       config.put("screenshotScale", screenshotScale());
       config.put("screenshotChatVisible", screenshotChatVisible());
+      // The suite owns the clock: it settles a scene by stepping a fixed tick count and captures
+      // while the world is held, so a frame is a function of the script rather than of how fast the
+      // runner drew frames. Every other run keeps vanilla's twenty ticks a second.
+      config.put("ownTickClock", true);
     }
     Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
     getLogger()
