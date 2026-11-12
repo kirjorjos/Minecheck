@@ -361,7 +361,35 @@ public class YarnClientPlatform implements ClientPlatform {
       request.fail(SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
       return;
     }
-    onClientThread(() -> captureScreenshot(request));
+    onClientThread(() -> captureScreenshot(request, true));
+  }
+
+  @Override
+  public void requestFrame(net.minecheck.platform.api.ScreenshotRequest request) {
+    if (vanillaCameraRestored) {
+      request.fail(SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
+      return;
+    }
+    onClientThread(() -> captureScreenshot(request, false));
+  }
+
+  /**
+   * Writes a frame that was captured in memory: no readback, because the pixels <em>are</em> the
+   * picture.
+   */
+  @Override
+  public void writeFrame(net.minecheck.platform.api.ScreenshotRequest request) {
+    if (vanillaCameraRestored) {
+      request.fail(SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
+      return;
+    }
+    request.running();
+    encodeFrame(
+        request,
+        new java.io.File(mc().runDirectory, "screenshots")
+            .toPath()
+            .resolve(request.name() + ".png")
+            .toAbsolutePath());
   }
 
   /**
@@ -407,7 +435,8 @@ public class YarnClientPlatform implements ClientPlatform {
    * frame drawn <em>before</em> it, chat included. So the clear is followed by a wait for the frame
    * counter to move, not by a read on the next tick.
    */
-  private void captureScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
+  private void captureScreenshot(
+      net.minecheck.platform.api.ScreenshotRequest request, boolean write) {
     MinecraftClient mc = mc();
     // Outside a world the HUD is not drawn, so there is no chat to take out of the picture.
     boolean clearChat = !request.chatVisible() && mc.world != null;
@@ -501,14 +530,106 @@ public class YarnClientPlatform implements ClientPlatform {
     if (screenshotRenderer == null) {
       screenshotRenderer = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
     }
+    request.running();
+    if (!write) {
+      readFrame(request, image, x, y, cropWidth, cropHeight, guiScale);
+      return;
+    }
     java.nio.file.Path target =
         new java.io.File(mc.runDirectory, "screenshots")
             .toPath()
             .resolve(request.name() + ".png")
             .toAbsolutePath();
-    request.running();
     writeScreenshot(
         request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, target);
+  }
+
+  /** Crops, downscales and digests the capture in memory — off the render thread. */
+  private static void readFrame(
+      net.minecheck.platform.api.ScreenshotRequest request,
+      net.minecraft.client.texture.NativeImage source,
+      int x,
+      int y,
+      int cropWidth,
+      int cropHeight,
+      int guiScale) {
+    SCREENSHOT_WRITER.execute(
+        () -> {
+          try {
+            int outWidth = Math.max(1, (int) Math.round(cropWidth * request.scale()));
+            int outHeight = Math.max(1, (int) Math.round(cropHeight * request.scale()));
+            int[] pixels = new int[outWidth * outHeight];
+            int at = 0;
+            for (int dy = 0; dy < outHeight; dy++) {
+              int sy = y + (int) ((long) dy * cropHeight / outHeight);
+              for (int dx = 0; dx < outWidth; dx++) {
+                int sx = x + (int) ((long) dx * cropWidth / outWidth);
+                pixels[at++] = source.getColor(sx, sy);
+              }
+            }
+            request.succeedFrame(
+                outWidth,
+                outHeight,
+                pixels,
+                net.minecheck.common.screenshot.Digests.sha256(pixels),
+                guiScale);
+          } catch (RuntimeException e) {
+            request.fail(
+                "framebuffer read failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          } finally {
+            source.close();
+          }
+        });
+  }
+
+  /** Encodes a frame captured in memory and writes it — off the render thread. */
+  private static void encodeFrame(
+      net.minecheck.platform.api.ScreenshotRequest request, java.nio.file.Path target) {
+    SCREENSHOT_WRITER.execute(
+        () -> {
+          net.minecraft.client.texture.NativeImage out = null;
+          try {
+            int outWidth = request.outWidth();
+            int outHeight = request.outHeight();
+            int[] pixels = request.pixels();
+            out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
+            for (int dy = 0; dy < outHeight; dy++) {
+              for (int dx = 0; dx < outWidth; dx++) {
+                out.setColor(dx, dy, pixels[dy * outWidth + dx]);
+              }
+            }
+            java.nio.file.Path directory = target.getParent();
+            java.nio.file.Files.createDirectories(directory);
+            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
+            out.writeTo(tmp);
+            java.nio.file.Files.move(
+                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            byte[] bytes = java.nio.file.Files.readAllBytes(target);
+            net.minecheck.common.screenshot.ScreenshotProfile.write(
+                directory,
+                request.frameWidth(),
+                request.frameHeight(),
+                request.guiScale(),
+                request.scale(),
+                request.chatVisible(),
+                screenshotRenderer);
+            request.succeed(
+                target,
+                outWidth,
+                outHeight,
+                bytes.length,
+                net.minecheck.common.screenshot.Digests.sha256(bytes));
+          } catch (Exception e) {
+            request.fail(
+                "framebuffer read failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          } finally {
+            if (out != null) {
+              out.close();
+            }
+          }
+        });
   }
 
   /**
@@ -581,16 +702,7 @@ public class YarnClientPlatform implements ClientPlatform {
 
   /** Lower-case hex SHA-256, the digest a baseline comparison reports. */
   private static String sha256(byte[] bytes) {
-    try {
-      byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
-      StringBuilder hex = new StringBuilder(digest.length * 2);
-      for (byte b : digest) {
-        hex.append(String.format("%02x", b));
-      }
-      return hex.toString();
-    } catch (java.security.NoSuchAlgorithmException e) {
-      throw new IllegalStateException("SHA-256 is required by the Java platform", e);
-    }
+    return net.minecheck.common.screenshot.Digests.sha256(bytes);
   }
 
   @Override
