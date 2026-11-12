@@ -7,6 +7,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecheck.common.bootstrap.MinecheckBootstrap;
 import net.minecheck.common.script.ScriptEngine;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
 import net.minecheck.platform.api.RecipeViewer;
@@ -107,6 +108,13 @@ public class ForgeEntrypoint {
             return ModList.get().isLoaded(modId);
           }
         };
+
+    // The tick gate: the server's loop is ours to hold (on a client, the integrated one), so a
+    // script
+    // can stop the world between frames and advance it by a tick count rather than by however many
+    // ticks a runner managed to render. Bound before any script exists — the clock belongs to the
+    // server, not to a run — and in both environments. The actions stay behind `ownTickClock`.
+    TickClock.get().bind("forge");
 
     MinecheckBootstrap.init(services, engine -> this.engine = engine);
     // Registered whether or not a script is configured: the client tick hook is where per-frame
@@ -215,7 +223,17 @@ public class ForgeEntrypoint {
 
   @SubscribeEvent
   public void onServerTick(TickEvent.ServerTickEvent event) {
-    if (event.phase != TickEvent.Phase.END || serverPlatform == null) {
+    if (event.phase == TickEvent.Phase.START) {
+      // Before this tick's world work: a held clock parks the server thread here, which is what
+      // keeps the world from advancing between two captures.
+      TickClock.get().awaitTick();
+      return;
+    }
+    if (event.phase != TickEvent.Phase.END) {
+      return;
+    }
+    TickClock.get().countTick();
+    if (serverPlatform == null) {
       return;
     }
     ScriptEngine e = engine;

@@ -41,6 +41,8 @@ import net.minecheck.common.camera.CameraMode;
  *     working, every capture fails (default: off)
  * @param hideGameWindow whether to keep the game's own window from appearing at all (default: on)
  * @param muteAudio whether the sound engine may open an audio device at all (default: no)
+ * @param ownTickClock whether scripts may hold, step and hand back the server's tick loop (default:
+ *     no — a run that does not ask for it keeps vanilla's twenty ticks a second)
  * @param cameraMode how much of the run the camera owns (default: off)
  * @param cameraHorizontalSpeed horizontal flight speed factor, 0–10
  * @param cameraVerticalSpeed vertical flight speed factor, 0–10
@@ -66,6 +68,7 @@ public record ConfigData(
     boolean restoreVanillaCamera,
     boolean hideGameWindow,
     boolean muteAudio,
+    boolean ownTickClock,
     CameraMode cameraMode,
     double cameraHorizontalSpeed,
     double cameraVerticalSpeed,
@@ -94,6 +97,13 @@ public record ConfigData(
   public static final boolean DEFAULT_HIDE_GAME_WINDOW = true;
 
   public static final boolean DEFAULT_MUTE_AUDIO = true;
+
+  /**
+   * Off by default: owning the clock stops the server the script is playing on, which changes what
+   * every other wait in the run means. A suite opts in when it wants the tick count, not the wall
+   * clock, to decide what a capture contains.
+   */
+  public static final boolean DEFAULT_OWN_TICK_CLOCK = false;
 
   public static final CameraMode DEFAULT_CAMERA_MODE = CameraMode.OFF;
 
@@ -143,6 +153,7 @@ public record ConfigData(
         DEFAULT_RESTORE_VANILLA_CAMERA,
         DEFAULT_HIDE_GAME_WINDOW,
         DEFAULT_MUTE_AUDIO,
+        DEFAULT_OWN_TICK_CLOCK,
         DEFAULT_CAMERA_MODE,
         DEFAULT_CAMERA_HORIZONTAL_SPEED,
         DEFAULT_CAMERA_VERTICAL_SPEED,
