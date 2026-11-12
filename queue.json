@@ -1,5 +1,20 @@
 {
-  "entries": [],
+  "entries": [
+    {
+      "compare": "",
+      "enqueued_at": "2026-11-12T19:41:59Z",
+      "fork": false,
+      "head_repo": "",
+      "id": "e-43",
+      "kind": "chore",
+      "overtaken": 0,
+      "pr": "",
+      "seq": 43,
+      "sha": "dfe5f9a446dd178119d84e14b09816a78666f07c",
+      "target": "1.18.2/development",
+      "tier": -1
+    }
+  ],
   "holder": {
     "granted_at": "2026-11-12T19:41:36Z",
     "id": "e-42",
@@ -67,5 +82,5 @@
     }
   },
   "mc": "1.18.2",
-  "seq": 42
+  "seq": 43
 }
