@@ -2,7 +2,9 @@
 --  verify the shape of the client's packet, echo it back, push a packet the client observes via
 --  onPacket, wait for the client's "done", then stop the server.
 
-local hello = minecheck.waitForPacket("hello", 180)
+-- 300 s: as a phase this wait starts when the server reaches packet, which is minutes before the
+-- client does (it is still working through the phases ahead of this one on its side).
+local hello = minecheck.waitForPacket("hello", 300)
 minecheck.expect(hello ~= false, "received the client's hello")
 if hello then
   minecheck.expect(hello.args[1] == "ping", "hello arg 1 is the string ping")

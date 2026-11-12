@@ -38,7 +38,9 @@ minecheck.registerPacketDecoder("minecheck:main", function(bytes)
   return {}
 end)
 
-local ready = minecheck.waitForPacket("tap-ready", 120)
+-- 300 s: as a phase this wait starts when the server reaches the tap, minutes before the client
+-- does (it is still working through the phases ahead of this one on its side).
+local ready = minecheck.waitForPacket("tap-ready", 300)
 minecheck.expect(ready ~= false, "client asked for tap traffic")
 
 -- The same frame, as the tap saw it on the wire, with the argument the client actually sent.
