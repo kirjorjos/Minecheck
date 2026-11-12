@@ -36,11 +36,10 @@ end
 phase("beacon-client.lua")
 phase("query-client.lua")
 phase("packet-client.lua")
--- The frame tap is a Forge-only observation path; on the other loaders the whole channel API is
--- exercised by packet-client above (`watchPacketChannel("minecheck:main")` is asserted there).
-if minecheck.isModLoaded("forge") then
-  phase("packet-tap-client.lua")
-end
+-- The Forge frame tap is not a phase of this session on this line: on 1.19.2 the tap installs on the
+-- live connection but observes nothing once an earlier phase has already watched the channel, so
+-- `testForgePacketTap` keeps its own client and server here (see #121). The channel API itself is
+-- still exercised by packet-client above (`watchPacketChannel("minecheck:main")` is asserted there).
 phase("spawn-client.lua")
 
 minecheck.expect(minecheck.leaveWorld(60), "left the server after every phase")

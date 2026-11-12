@@ -719,6 +719,10 @@ registerLoaderAggregate(
   "testForgeFail",
   "testForgeServerFeatures",
   "testForgeClientFeatures",
+  // The frame tap is not a phase of the merged session on this line: on 1.19.2 it observes nothing
+  // once an earlier phase has already watched the channel (#121), so it keeps its own client and
+  // server here.
+  "testForgePacketTap",
   "testForgeWorldHandoff",
   "testForgeShots",
 )

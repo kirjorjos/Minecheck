@@ -28,10 +28,8 @@ phase("query-test.lua")
 after("query-client.lua")
 phase("packet-test.lua")
 after("packet-client.lua")
-if minecheck.isModLoaded("forge") then
-  phase("packet-tap-server.lua")
-  after("packet-tap-client.lua")
-end
+-- The Forge frame tap runs in its own session on this line (see server-features-client.lua and #121),
+-- so this session has no tap phase.
 phase("spawn-test.lua")
 
 local left = minecheck.waitForPlayerLeave("Dev")
