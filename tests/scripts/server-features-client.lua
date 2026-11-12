@@ -16,9 +16,15 @@
 -- Each phase script is the same file the standalone task runs, so there is one copy of the
 -- assertions; `_G.MINECHECK_PHASE` tells them not to quit the session or re-join a server.
 
+-- Each phase tells the server when it is over. The server runs its own copy of these phases and
+-- would otherwise be several ahead: its beacon gives are what the client's handshake reads, but its
+-- query phase replaces the hotbar slot that handshake waits on, and would do so while the client is
+-- still working through beacon. `waitForPacket` replays what arrived before the call, so the server
+-- cannot miss one of these.
 local function phase(name)
   minecheck.log("phase: " .. name)
   minecheck.runScript(name)
+  minecheck.expect(minecheck.sendPacket("client-done:" .. name), "told the server that " .. name .. " is done")
 end
 
 -- The session owns the join: the phases below are in the world already and would fail on a client
