@@ -22,8 +22,12 @@ local function expect(cond, name)
 end
 
 -- A world first, so a served chunk has game state to read and the session is served from a running
--- game rather than the title screen.
-expect(minecheck.createWorld({ name = "minecheck_world", seed = 42 }), "created superflat world")
+-- game rather than the title screen. A phase reuses the world the session already has open (see
+-- `_G.MINECHECK_PHASE` in docs/lua-api.md).
+local phase = _G.MINECHECK_PHASE ~= nil
+if not minecheck.isInWorld() then
+  expect(minecheck.createWorld({ name = "minecheck_world", seed = 42 }), "created superflat world")
+end
 expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen settled")
 
 minecheck.log("live test: serving (port is logged above)")
@@ -59,4 +63,6 @@ expect(viaRaw:accept(0) == nil, "accept() returns nil when nobody connects withi
 viaRaw:close()
 
 minecheck.log("live test: session served and closed")
-minecheck.quit()
+if not phase then
+  minecheck.quit()
+end

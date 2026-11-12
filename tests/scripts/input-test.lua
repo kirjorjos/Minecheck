@@ -34,8 +34,11 @@ local function blockLabel(b)
   return b.x .. "," .. b.y .. "," .. b.z
 end
 
-local created = minecheck.createWorld({ name = "minecheck_world", seed = 42 })
-expect(created, "created superflat world")
+-- A phase attaches to the world the coordinator already opened; on its own it still creates one.
+local phase = _G.MINECHECK_PHASE ~= nil
+if not minecheck.isInWorld() then
+  expect(minecheck.createWorld({ name = "minecheck_world", seed = 42 }), "created superflat world")
+end
 
 local settled = minecheck.waitFor(minecheck.worldGenSettled, 90)
 expect(settled, "worldgen settled")
@@ -278,10 +281,13 @@ expect(
 )
 
 local cfg = minecheck.config()
-expect(cfg ~= nil and cfg.script == "input-test.lua", "config().script is the running script")
 expect(cfg.failMode == "exit", "config().failMode is exit")
 expect(cfg.defaultTimeout == 300, "config().defaultTimeout is 300")
-expect(cfg.coordinator == nil, "config().coordinator is absent for a plain script")
+-- As a phase the entry script is the coordinator, so only a standalone run names this file here.
+if not phase then
+  expect(cfg ~= nil and cfg.script == "input-test.lua", "config().script is the running script")
+  expect(cfg.coordinator == nil, "config().coordinator is absent for a plain script")
+end
 
 -- wait(): no argument waits exactly one tick, a number waits that many seconds. Both must hand
 -- control back to the game rather than only look like they did.
@@ -351,4 +357,6 @@ expect(
 
 expect(minecheck.isInWorld(), "still in the world after the screen opened and closed")
 
-minecheck.quit()
+if not phase then
+  minecheck.quit()
+end
