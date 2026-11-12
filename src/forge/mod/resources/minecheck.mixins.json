@@ -3,6 +3,9 @@
   "minVersion": "0.8",
   "package": "net.minecheck.mixin.mojmap",
   "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "ServerPacingMixin"
+  ],
   "client": [
     "WindowMixin",
     "SoundEngineMixin",

@@ -13,6 +13,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecheck.common.bootstrap.MinecheckBootstrap;
 import net.minecheck.common.script.ScriptEngine;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
@@ -138,6 +139,16 @@ public class FabricEntrypoint implements ModInitializer {
             }
           });
     }
+
+    // The tick gate: the server's loop is ours to hold (on a client, the integrated one), so a
+    // script
+    // can stop the world between frames and advance it by a tick count rather than by however many
+    // ticks a runner managed to render. Registered before any script exists — the clock belongs to
+    // the server, not to a run — and in both environments, so a dedicated server's own scripts can
+    // drive it too. The actions stay behind `ownTickClock` in the config.
+    TickClock.get().bind("fabric");
+    ServerTickEvents.START_SERVER_TICK.register(ticking -> TickClock.get().awaitTick());
+    ServerTickEvents.END_SERVER_TICK.register(ticking -> TickClock.get().countTick());
 
     MinecheckBootstrap.init(
         services,
