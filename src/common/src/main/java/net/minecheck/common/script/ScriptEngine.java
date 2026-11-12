@@ -12,6 +12,7 @@ import net.minecheck.common.net.PacketInbox;
 import net.minecheck.common.result.ExpectRecord;
 import net.minecheck.common.result.RunResult;
 import net.minecheck.common.result.RunResultWriter;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.PlatformServices;
 import net.minecheck.platform.api.ServerPlatform;
@@ -216,6 +217,11 @@ public final class ScriptEngine {
     }
     this.finished = true;
     this.failed = failed;
+    // A script that stopped while it held the tick clock must not leave the server parked, and one
+    // that asked for uncapped ticks must not leave it spinning: the engine owns the run's teardown,
+    // so both go back even when the script never said so.
+    TickClock.get().resume();
+    TickClock.get().setUncapped(false);
     LOG.info(
         String.format(
             "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));

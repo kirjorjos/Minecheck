@@ -112,6 +112,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `screenshotChatVisible` | boolean | `false` | Whether chat may appear in a capture. See [the capture profile](#the-capture-profile-why-a-shot-is-reproducible). |
 | `viewWindow` | boolean | `false` | Show the client in a view window when the game's own window is hidden — the run's one window, never a second. Its keys are the human's and drive whatever it is drawing. Never required, and never fatal: a headless JVM logs why and runs without it. |
 | `restoreVanillaCamera` | boolean | `false` | Leave the camera and render path completely untouched — no render-delta pin, no capture readback. Scripting keeps working; every `captureScreenshot` fails. |
+| `ownTickClock` | boolean | `false` | Let the script hold, step and hand back the tick loop of the server this process runs (`pauseTicks` / `stepTicks` / `resumeTicks`). Off by default: owning the clock stops the world between captures, and a run that never asked for it should keep twenty ticks a second. |
 | `hideGameWindow` | boolean | `true` | Keep the client's own window from ever appearing: it is created visible never, not hidden afterwards. Set `false` for the ordinary window. |
 | `muteAudio` | boolean | `true` | Never open an audio device: no ALC context, source set or mixer thread is created. Set `false` to give the run sound back. |
 | `cameraMode` | string | `"off"` | `"off"`, `"assist"` or `"fullControl"`. `off` installs nothing: no camera entity, no bindings, no camera work in the render path. `assist` puts the human alongside Lua; a headless JVM has no human input at all, so only Lua drives it there. `restoreVanillaCamera` forces `"off"`. |
@@ -1019,6 +1020,54 @@ Writes a message to the game log under the `Minecheck` logger.
 | `level` | string | `"info"` (default), `"warn"`, or `"error"`. |
 
 ---
+
+### `minecheck.pauseTicks() → nil`
+
+Holds the server this process runs before its next tick's world work — on a client, the singleplayer
+world's integrated server. The client keeps ticking, so the script and the renderer stay alive while
+the world stands still. The hold lasts until `resumeTicks` or the next `stepTicks`. A command is a
+server tick's work, so one sent while the clock is held stays queued until it moves again.
+
+Requires `ownTickClock: true`.
+
+### `minecheck.stepTicks(ticks[, timeout]) → nil`
+
+Advances the world exactly `ticks` times and returns once the last one has finished. The ticks run
+**back to back** instead of at twenty a second, so a scene that needs two hundred ticks costs a burst
+of work rather than ten seconds of game time — the same count on a slow runner and a fast one.
+
+Implies `pauseTicks`, and leaves the clock held when it returns: that is the point, because a capture
+taken afterwards is then a function of the tick count the script chose rather than of how many ticks
+happened to pass while the frame was drawn.
+
+```lua
+minecheck.pauseTicks()
+minecheck.stepTicks(400) -- settle a fresh world's lighting without waiting twenty seconds
+local shot = minecheck.captureScreenshot("world-settled")
+```
+
+Requires `ownTickClock: true`, and a server this process runs. A client that is playing on somebody
+else's server has no clock here to hold, and the action says so instead of hanging.
+
+### `minecheck.resumeTicks() → nil`
+
+Hands the tick loop back to the wall clock, and un-parks a server thread already waiting in the gate.
+
+Requires `ownTickClock: true`.
+
+### `minecheck.uncappedTicks([enabled]) → nil`
+
+Drops vanilla's fifty-millisecond cadence: each tick starts as soon as the previous one finished, so
+the world runs at whatever the machine's milliseconds-per-tick allows — faster than twenty a second
+on a runner with headroom, and only as fast as its own ticks on one without. Omitting the argument
+turns it on; `false` puts the cadence back.
+
+The client is unaffected: frames are drawn at the renderer's own rate either way, so a capture that
+must be a specific picture still holds the clock with `pauseTicks` / `stepTicks`. `resumeTicks`
+leaves the mode alone; the end of the run turns it off, so a run cannot leave a server spinning.
+
+Requires `ownTickClock: true`. A loader whose loop has no pacing hook logs a warning when this is
+called and keeps the vanilla cadence.
 
 ### `minecheck.sleep(seconds) → nil`
 
