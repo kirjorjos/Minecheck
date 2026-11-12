@@ -63,6 +63,8 @@ public final class ScreenshotRequest {
   private volatile int outHeight;
   private volatile long bytes;
   private volatile String sha256;
+  private volatile int[] pixels;
+  private volatile int guiScale = 1;
 
   /**
    * @param name capture name; also the file name ({@code <name>.png})
@@ -208,6 +210,66 @@ public final class ScreenshotRequest {
   /** Lower-case hex SHA-256 of the written PNG — what makes a mismatch diagnosable from a log. */
   public String sha256() {
     return sha256;
+  }
+
+  /**
+   * The picture as packed pixels (the platform's own packing), row-major, already cropped and
+   * downscaled; {@code null} unless the request captured in memory.
+   */
+  public int[] pixels() {
+    return pixels;
+  }
+
+  /**
+   * The GUI scale the frame was read at — recorded by the frame report a written frame rewrites.
+   */
+  public int guiScale() {
+    return guiScale;
+  }
+
+  /**
+   * Record an in-memory capture: the picture and its digest, no file.
+   *
+   * <p>{@link #path()} stays {@code null} and {@link #bytes()} is the pixel buffer's size, because
+   * an in-memory capture is compared by its pixels rather than by a PNG it never encoded — so the
+   * digest {@code sha256} carries is over them and is not comparable with a written capture's.
+   */
+  public void succeedFrame(int width, int height, int[] pixels, String sha256, int guiScale) {
+    this.outWidth = width;
+    this.outHeight = height;
+    this.pixels = pixels;
+    this.sha256 = sha256;
+    this.guiScale = guiScale;
+    this.bytes = (long) pixels.length * 4;
+    this.state = State.DONE;
+  }
+
+  /**
+   * A request that writes an already captured frame: no readback, just the PNG encode and the file.
+   *
+   * <p>The pixels passed here are what {@link #succeedFrame} produced, crop and downscale included,
+   * so {@code width}/{@code height} describe them rather than a new crop of the framebuffer. The
+   * remaining arguments are the capture profile the frame was read under, which the written file
+   * reports alongside it.
+   */
+  public static ScreenshotRequest forFrame(
+      String name,
+      int[] pixels,
+      int width,
+      int height,
+      double scale,
+      boolean chatVisible,
+      int frameWidth,
+      int frameHeight,
+      int guiScale) {
+    ScreenshotRequest request =
+        new ScreenshotRequest(
+            name, false, 0, 0, 0, 0, UNIT_FRAMEBUFFER, scale, chatVisible, frameWidth, frameHeight);
+    request.outWidth = width;
+    request.outHeight = height;
+    request.pixels = pixels;
+    request.guiScale = guiScale;
+    return request;
   }
 
   /** Why the capture failed; {@code null} unless the state is {@link State#FAILED}. */
