@@ -18,3 +18,15 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
+
+## Added
+- `bootPackagedJars` installs each packaged loader jar in a real dedicated server and fails unless
+  Minecheck reports itself active there, so a jar that breaks after remapping is caught before the
+  release that would have shipped it (#103). `-Pboot.only=fabric,forge` boots a subset,
+  `-Pboot.java=<path>` picks the JDK the servers run on, and `-Pboot.timeout=<seconds>` widens the
+  start deadline.
+
+## Changed
+- A pull request into this line's `development` branch now boots the packaged jars instead of only
+  running the development classpath, and that check is a Gradle task in the plugin rather than a
+  Python script shipped beside the build.
