@@ -166,9 +166,15 @@ check(
   minecheck.runCommand("execute if entity @a[gamemode=survival,name=" .. player .. "]").result == 1,
   "client player is in survival"
 )
+-- The sword has to end up in the *hand*, not merely in the inventory: a merged session's earlier
+-- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
+-- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
+-- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
 check(
-  minecheck.runCommand("give " .. player .. " minecraft:netherite_sword 1").result >= 1,
-  "client player given a sword"
+  minecheck.runCommand(
+    "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1"
+  ).result >= 1,
+  "client player given a sword in the hand"
 )
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
