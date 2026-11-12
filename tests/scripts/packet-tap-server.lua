@@ -56,4 +56,7 @@ minecheck.expect(minecheck.sendPacket("tapped", 1234, "payload"), "sent the pack
 local done = minecheck.waitForPacket("tap-done", 120)
 minecheck.expect(done ~= false, "client finished the tap test")
 
-minecheck.runCommand("stop")
+-- A phase leaves the server running for the phases after it (see `_G.MINECHECK_PHASE`).
+if not _G.MINECHECK_PHASE then
+  minecheck.runCommand("stop")
+end

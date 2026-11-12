@@ -1,5 +1,8 @@
 package net.minecheck.common.script;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 import net.minecheck.common.config.ConfigData;
@@ -112,6 +115,9 @@ public final class LuaMinecheck {
     minecheck.set("isInWorld", new IsInWorld());
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
+
+    // Coordinators: run another staged script as a phase of this same session.
+    minecheck.set("runScript", new RunScript());
 
     // The tick clock: the server this process runs, held and advanced by the script.
     minecheck.set("pauseTicks", new PauseTicks());
@@ -2276,6 +2282,60 @@ public final class LuaMinecheck {
     public Varargs invoke(Varargs args) {
       return LuaValue.valueOf(
           net.minecheck.common.screenshot.Digests.sha256(luaBytes("sha256", args.arg1())));
+    }
+  }
+
+  /**
+   * minecheck.runScript(name) -> boolean
+   *
+   * <p>Runs another script from the same {@code minecheck/scripts} directory as the entry script,
+   * in this session and in the caller's globals, and returns true once it finishes. This is how a
+   * coordinator composes phases that live in their own files instead of inlining them: the phase
+   * runs exactly as it would as a top-level script — same {@code minecheck} table, same world, same
+   * tick clock, same coroutine, so every wait still yields a tick.
+   *
+   * <p>{@code _G.MINECHECK_PHASE} holds the phase's name while it runs (nil in a top-level run), so
+   * a script that can be either a suite of its own or a phase can tell the difference. That is what
+   * lets a phase skip the {@code quit}/{@code stop} that would end the whole session.
+   *
+   * <p>A phase that raises propagates the error to the caller: wrap the call in {@code pcall} to
+   * record a failed phase and carry on with the next one. The name is resolved inside the scripts
+   * directory only — a name that climbs out of it is refused, not followed.
+   */
+  private final class RunScript extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = args.checkjstring(1).trim();
+      if (name.isEmpty()) {
+        throw new LuaError("runScript: name must not be blank");
+      }
+      Path scriptFile = engine.scriptFile();
+      Path scripts = scriptFile == null ? null : scriptFile.getParent();
+      if (scripts == null) {
+        throw new LuaError("runScript: the running script has no scripts directory");
+      }
+      Path directory = scripts.toAbsolutePath().normalize();
+      Path file = directory.resolve(name).normalize();
+      if (!file.startsWith(directory)) {
+        throw new LuaError("runScript: \"" + name + "\" is outside " + directory);
+      }
+      if (!Files.isRegularFile(file)) {
+        throw new LuaError("runScript: no script named \"" + name + "\" in " + directory);
+      }
+      String source;
+      try {
+        source = Files.readString(file);
+      } catch (IOException e) {
+        throw new LuaError("runScript: could not read " + file + ": " + e.getMessage());
+      }
+      LuaValue previous = globals.get("MINECHECK_PHASE");
+      globals.set("MINECHECK_PHASE", LuaValue.valueOf(name));
+      try {
+        globals.load(source, "@" + name).call();
+      } finally {
+        globals.set("MINECHECK_PHASE", previous);
+      }
+      return LuaValue.TRUE;
     }
   }
 

@@ -186,11 +186,15 @@ check(
 minecheck.log("query test: all server expects done, cueing the client to punch")
 check(minecheck.sendPacket("punch_ready"), "cued the client over the packet channel")
 
--- The client's punch phase runs in another process and decides when it leaves; the ceiling comes
--- from config.defaultTimeout rather than a number guessed here.
-local left = minecheck.waitForPlayerLeave(player)
-check(left, "client left after query test")
--- The client only leaves once the target is gone, so its absence proves a real player attack killed
--- it (findEntities by tag, the only side where tags exist).
-check(#minecheck.findEntities("minecraft:vex", "punchtarget") == 0, "the punched target died")
-minecheck.runCommand("stop")
+-- A phase leaves the session running: the coordinator owns the player-leave wait and the stop (see
+-- `_G.MINECHECK_PHASE` in docs/lua-api.md).
+if not _G.MINECHECK_PHASE then
+  -- The client's punch phase runs in another process and decides when it leaves; the ceiling comes
+  -- from config.defaultTimeout rather than a number guessed here.
+  local left = minecheck.waitForPlayerLeave(player)
+  check(left, "client left after query test")
+  -- The client only leaves once the target is gone, so its absence proves a real player attack
+  -- killed it (findEntities by tag, the only side where tags exist).
+  check(#minecheck.findEntities("minecraft:vex", "punchtarget") == 0, "the punched target died")
+  minecheck.runCommand("stop")
+end

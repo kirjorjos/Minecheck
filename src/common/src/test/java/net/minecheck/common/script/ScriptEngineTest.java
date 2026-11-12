@@ -827,6 +827,50 @@ class ScriptEngineTest {
   }
 
   @Test
+  void runScriptRunsAStagedScriptAsAPhaseInTheCallersGlobals() throws Exception {
+    Files.writeString(
+        tempDir.resolve("phase.lua"),
+        "_G.phaseSaw = MINECHECK_PHASE\n"
+            + "minecheck.expect(MINECHECK_PHASE == 'phase.lua', 'a phase knows its own name')\n");
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "minecheck.runScript('phase.lua')\n"
+                + "minecheck.expect(MINECHECK_PHASE == nil, 'the flag is cleared afterwards')\n"
+                + "minecheck.expect(phaseSaw == 'phase.lua', 'the phase ran in the caller globals')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void runScriptRaisesOnAMissingScript() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(client, ConfigData.defaults(), "minecheck.runScript('not-there.lua')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertTrue(engine.isFailed());
+    assertTrue(engine.failureMessage().contains("no script named"), engine.failureMessage());
+  }
+
+  @Test
+  void runScriptRefusesANameThatClimbsOutOfTheScriptsDirectory() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(client, ConfigData.defaults(), "minecheck.runScript('../outside.lua')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertTrue(engine.isFailed());
+    assertTrue(engine.failureMessage().contains("outside"), engine.failureMessage());
+  }
+
+  @Test
   void joinLocalWorldBlocksUntilInWorld() throws Exception {
     FakeClient client = new FakeClient();
     ScriptEngine engine =
