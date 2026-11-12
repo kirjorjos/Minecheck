@@ -29,9 +29,12 @@ end
 -- addresses one named player instead of broadcasting, and must say so when that player is absent.
 minecheck.expect(minecheck.side() == "server", "side is server")
 local cfg = minecheck.config()
-minecheck.expect(cfg ~= nil and cfg.script == "packet-test.lua", "config().script is the running server script")
 minecheck.expect(cfg.failMode == "exit" and cfg.defaultTimeout == 300, "config() reports failMode/defaultTimeout")
-minecheck.expect(cfg.coordinator == nil, "config().coordinator is absent for a plain server script")
+-- As a phase the entry script is the coordinator, so only a standalone run names this file here.
+if not _G.MINECHECK_PHASE then
+  minecheck.expect(cfg ~= nil and cfg.script == "packet-test.lua", "config().script is the running server script")
+  minecheck.expect(cfg.coordinator == nil, "config().coordinator is absent for a plain server script")
+end
 
 minecheck.expect(
   minecheck.sendPacketTo("Dev", "targeted", "only-for-you", 7),
@@ -66,4 +69,7 @@ minecheck.expect(minecheck.sendPacket("push", "from-server"), "pushed a server-i
 local done = minecheck.waitForPacket("done", 180)
 minecheck.expect(done ~= false, "client reported done")
 
-minecheck.runCommand("stop")
+-- A phase leaves the server running for the phases after it (see `_G.MINECHECK_PHASE`).
+if not _G.MINECHECK_PHASE then
+  minecheck.runCommand("stop")
+end

@@ -101,7 +101,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `coordinator` | string \| null | `null` | Multi-phase entry script (wins over `script` when set). |
+| `coordinator` | string \| null | `null` | Multi-phase entry script (wins over `script` when set). A coordinator composes phases from other staged scripts with [`runScript`](#minecheckrunscriptname--boolean). |
 | `script` | string | `""` | Single-phase entry script (used when `coordinator` is absent). |
 | `failMode` | string | `"exit"` | `"exit"`: quit/stop on script failure. `"continue"`: log and keep going. |
 | `defaultTimeout` | int | `30` | Default timeout in seconds for all wait actions (joins, waits, sleeps). A world-entry wait is a ceiling: it ends early only when the load has stopped advancing. |
@@ -1601,6 +1601,45 @@ Key points:
 - **`disconnect` not `quit`** between phases — `quit` shuts down the process.
 - **`pcall` around each phase** — a failing phase is recorded and skipped; the next phase continues.
 - **One process, one session** — no restart overhead; the title screen is the only clean-state boundary.
+
+### `minecheck.runScript(name) → boolean`
+
+**Both sides.** Runs another script from the same `minecheck/scripts` directory, in this session and
+in the caller's globals, and returns `true` when it finishes. A coordinator uses it to compose phases
+that live in their own files instead of inlining them:
+
+```lua
+local function phase(name)
+    minecheck.log("phase: " .. name)
+    minecheck.runScript(name)
+end
+
+phase("beacon-client.lua")
+phase("query-client.lua")
+minecheck.quit()
+```
+
+While a phase runs, `_G.MINECHECK_PHASE` holds its file name (it is `nil` in a top-level run), which
+is how one script can serve both as a suite of its own and as a phase:
+
+```lua
+local phase = _G.MINECHECK_PHASE ~= nil
+
+-- A phase does not end the session it is running inside.
+if not phase then
+    minecheck.leaveWorld(60)
+    minecheck.quit()
+end
+```
+
+The phase shares the session: the same world, the same packet channel, the same tick clock, the same
+coroutine — so every wait inside it still yields a tick, and state a phase leaves behind (an inventory,
+a planted block, a held screen) is there for the next one. It runs in the caller's globals, so a phase
+can read a global the coordinator set.
+
+A phase that raises propagates the error to the caller; wrap it in `pcall` to record a failure and
+continue. `name` is resolved inside the scripts directory only — a name that climbs out of it is
+refused, and a missing file raises rather than silently doing nothing.
 
 ---
 

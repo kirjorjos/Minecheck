@@ -27,11 +27,15 @@ check(g2.result > 0, "named sword given")
 local g3 = minecheck.runCommand("give " .. player .. " minecraft:redstone 8")
 check(g3.result > 0, "8 redstone given (partial moveItem check)")
 
-minecheck.log("beacon test: player op'd and items given, waiting for client to leave")
--- No explicit timeout: the client is a separate process running its own script, so how long it
--- needs is not something this script can know. A hard-coded 90 s here failed a CI run whose client
--- was still finishing a Java-side probe at 93 s. The ceiling is config.defaultTimeout, which the
--- harness stages for the whole run.
-local left = minecheck.waitForPlayerLeave(player)
-check(left, "client left after beacon test")
-minecheck.runCommand("stop")
+-- A phase shares the session: the coordinator decides when the player leaves and when the server
+-- stops (see `_G.MINECHECK_PHASE` in docs/lua-api.md).
+if not _G.MINECHECK_PHASE then
+  minecheck.log("beacon test: player op'd and items given, waiting for client to leave")
+  -- No explicit timeout: the client is a separate process running its own script, so how long it
+  -- needs is not something this script can know. A hard-coded 90 s here failed a CI run whose
+  -- client was still finishing a Java-side probe at 93 s. The ceiling is config.defaultTimeout,
+  -- which the harness stages for the whole run.
+  local left = minecheck.waitForPlayerLeave(player)
+  check(left, "client left after beacon test")
+  minecheck.runCommand("stop")
+end

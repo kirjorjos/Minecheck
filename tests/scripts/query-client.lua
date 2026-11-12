@@ -10,9 +10,13 @@ if minecheck.clickGui("Proceed to main menu", 0, 1) then
   minecheck.expect(minecheck.waitFor(minecheck.isOnTitleScreen, 30), "dismissed the mod-loading screen")
 end
 
-local joined = minecheck.joinServer("localhost:25565", 300)
-if not minecheck.expect(joined, "joined query-test server") then
-  minecheck.fail("joinServer failed")
+-- A phase is already in the world; only the coordinator joins and leaves (see `_G.MINECHECK_PHASE`).
+local phase = _G.MINECHECK_PHASE ~= nil
+if not phase then
+  local joined = minecheck.joinServer("localhost:25565", 300)
+  if not minecheck.expect(joined, "joined query-test server") then
+    minecheck.fail("joinServer failed")
+  end
 end
 
 -- Client-side entity query. The server spawns a vex for this phase: vexes never spawn naturally in
@@ -64,7 +68,8 @@ end
 minecheck.expect(killed, "punched the target to death")
 minecheck.expect(#minecheck.findNearbyEntities("minecraft:vex") == 0, "the client no longer sees it")
 
-local left = minecheck.leaveWorld(60)
-minecheck.expect(left, "left query-test server")
-
-minecheck.quit()
+if not phase then
+  local left = minecheck.leaveWorld(60)
+  minecheck.expect(left, "left query-test server")
+  minecheck.quit()
+end
