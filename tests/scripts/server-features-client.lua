@@ -43,5 +43,11 @@ if minecheck.isModLoaded("forge") then
 end
 phase("spawn-client.lua")
 
+-- The spawn phase's work is all on the server, whose own `waitForPlayer` is what notices this player.
+-- Leaving when this client's spawn phase ends is therefore too early: the server may not have reached
+-- its phase yet, and it then reports a player that never joined (#129). Wait for its cue first.
+local serverDone = minecheck.waitForPacket("server-done:spawn-test.lua", 600)
+minecheck.expect(serverDone ~= false, "the server finished its spawn phase")
+
 minecheck.expect(minecheck.leaveWorld(60), "left the server after every phase")
 minecheck.quit()
