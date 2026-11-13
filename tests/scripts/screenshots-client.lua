@@ -70,6 +70,15 @@ end
 local SETTLE_CHUNK = 100
 local SETTLE_MAX_TICKS = 400
 
+-- A scene that has stopped moving on the tick clock can still move on the client's own clock: a
+-- recipe viewer bakes its index (EMI rebuilds whenever the client receives recipes) and its panel
+-- grows a page at a time while the world stands still, which is how `crafting-open` came out as
+-- `1/1` in one run and `Page 1 of 2` in the next (#140). So the digest has to hold across a
+-- wall-clock gap too, not only across a tick step. The gap and the sample cap are both bounded: a
+-- scene that never holds still fails the run instead of writing a picture that is still moving.
+local SETTLE_STABLE_GAP = 0.5
+local SETTLE_STABLE_SAMPLES = 10
+
 local function settle(label, opts)
   opts = opts or {}
   local chunk = opts.chunk or SETTLE_CHUNK
@@ -96,6 +105,25 @@ local function settle(label, opts)
   -- The client ticks on while the server stands still: give it a few frames of the now-frozen world
   -- to apply the stepped state and finish its own lightmap pass before the caller captures.
   minecheck.wait(0.5)
+  -- ...and then hold the same digest across a wall-clock gap, so what the caller captures is a
+  -- frame the scene has stopped changing, not one that happens to sit between two chunks of a
+  -- background build.
+  local previousFrame
+  for sample = 1, SETTLE_STABLE_SAMPLES do
+    local frame = minecheck.captureFrame()
+    if previousFrame ~= nil and frame.sha256 == previousFrame then
+      minecheck.log(label .. " held still across " .. (sample - 1) * SETTLE_STABLE_GAP .. "s")
+      return
+    end
+    previousFrame = frame.sha256
+    minecheck.wait(SETTLE_STABLE_GAP)
+  end
+  minecheck.fail(
+    label
+      .. " was still changing after "
+      .. SETTLE_STABLE_SAMPLES * SETTLE_STABLE_GAP
+      .. "s — the scene never settled"
+  )
 end
 
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 0 })
