@@ -51,6 +51,16 @@ minecheck.registerPacketDecoder("minecheck:main", function(bytes)
   return {}
 end)
 
+-- In a merged session an earlier phase already watched this same channel (`minecheck:main`), so
+-- this decoder replaced that one. A raw frame that arrives before the replacement is decoded by the
+-- previous decoder and dropped — which is what made the tap look blind (#121). Say so first, and
+-- wait until the server has registered its own decoder, before sending the frame to be tapped.
+if _G.MINECHECK_PHASE then
+  minecheck.expect(minecheck.sendPacket("tap-entering"), "told the server this client entered its tap phase")
+  local go = minecheck.waitForPacket("tap-go", 300)
+  minecheck.expect(go ~= false, "the server registered its tap decoder before any raw frame")
+end
+
 -- The argument is what proves the *server-side* tap decoded this frame on the wire (4321, not
 -- the 1234 the server sends back).
 minecheck.expect(minecheck.sendPacket("tap-ready", 4321), "asked the server for tap traffic")
