@@ -33,6 +33,11 @@ if minecheck.isModLoaded("forge") then
   after("packet-tap-client.lua")
 end
 phase("spawn-test.lua")
+-- Every spawn expect is done, so the client may leave now. It waits for this before `leaveWorld`:
+-- the phase's own `waitForPlayer` is the first thing it does, and the client's spawn phase is a
+-- no-op, so without the cue the client was already gone when this phase started and the run failed
+-- with "player Dev never joined the spawn-test server" (#129).
+minecheck.expect(minecheck.sendPacket("server-done:spawn-test.lua"), "told the client the spawn phase is done")
 
 local left = minecheck.waitForPlayerLeave("Dev")
 minecheck.expect(left, "client left after the merged session")
