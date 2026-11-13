@@ -1634,6 +1634,78 @@ class ScriptEngineTest {
     assertFalse(engine.isFailed());
   }
 
+  /**
+   * Runs the suite's own beacon payment check against a scripted client, so both outcomes vanilla
+   * allows are exercised without a server and without waiting for the pickup delay.
+   */
+  private ScriptEngine runBeaconPaymentCheck(FakeClient client) throws Exception {
+    Path script = Path.of(System.getProperty("minecheck.scriptsDir", ""), "beacon-payment.lua");
+    assertTrue(Files.isRegularFile(script), "the guard must run the suite's own script: " + script);
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine = engine(client, ConfigData.defaults(), Files.readString(script), clock);
+    // The script waits 10 s of game time for the pickup; a real clock never gets there inside a
+    // test, so the ticks are driven by hand and the clock moves with them.
+    for (int i = 0; i < 600 && !engine.isFinished(); i++) {
+      engine.tick();
+      clock.addAndGet(50);
+    }
+    assertTrue(engine.isFinished(), "the check script must run to the end");
+    return engine;
+  }
+
+  private static net.minecheck.platform.api.SlotInfo emerald(int count) {
+    return new net.minecheck.platform.api.SlotInfo(false, "minecraft:emerald", count, null);
+  }
+
+  private static net.minecheck.platform.api.EntityInfo droppedItem() {
+    return new net.minecheck.platform.api.EntityInfo(
+        7, "minecraft:item", 8.5, 65.0, 8.5, java.util.Set.of());
+  }
+
+  /**
+   * The two ways vanilla can end the beacon payment: picked back up, or still lying at the player's
+   * feet. A guard that only knew the pickup branch is what made the suite fail one run in four
+   * (#129), so both are pinned here.
+   */
+  @Test
+  void beaconPaymentCheckAcceptsAPickupAndADroppedStack() throws Exception {
+    FakeClient pickedUp = new FakeClient();
+    pickedUp.openNow("inventory");
+    pickedUp.slots.put(36, emerald(1));
+    ScriptEngine afterPickup = runBeaconPaymentCheck(pickedUp);
+    assertFalse(
+        afterPickup.isFailed(),
+        "a payment picked back up must pass: " + afterPickup.failureMessage());
+
+    FakeClient dropped = new FakeClient();
+    dropped.openNow("inventory");
+    dropped.slots.put(36, FakeClient.EMPTY_SLOT);
+    dropped.clientEntities = java.util.List.of(droppedItem());
+    ScriptEngine afterDrop = runBeaconPaymentCheck(dropped);
+    assertFalse(
+        afterDrop.isFailed(),
+        "a payment still on the ground must pass: " + afterDrop.failureMessage());
+  }
+
+  @Test
+  void beaconPaymentCheckRejectsADuplicatedOrLostEmerald() throws Exception {
+    // Two stacks came back out of one emerald. The drop is there so the "came back" check passes
+    // and the cap is the check that has to catch it.
+    FakeClient duplicated = new FakeClient();
+    duplicated.openNow("inventory");
+    duplicated.slots.put(36, emerald(2));
+    duplicated.clientEntities = java.util.List.of(droppedItem());
+    ScriptEngine both = runBeaconPaymentCheck(duplicated);
+    assertTrue(both.isFailed(), "two emeralds back from one is a duplication");
+    assertTrue(both.failureMessage().contains("duplicate"), both.failureMessage());
+
+    FakeClient lost = new FakeClient();
+    lost.openNow("inventory");
+    ScriptEngine gone = runBeaconPaymentCheck(lost);
+    assertTrue(gone.isFailed(), "neither in the inventory nor on the ground: the emerald was lost");
+    assertTrue(gone.failureMessage().contains("came back"), gone.failureMessage());
+  }
+
   @Test
   void openScreenOpensBeaconAndReadsSlots() throws Exception {
     FakeClient client = new FakeClient();

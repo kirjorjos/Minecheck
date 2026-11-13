@@ -235,55 +235,10 @@ local function hotbarStart()
   return minecheck.slotCount("inventory") > 46 and 45 or 36
 end
 
--- Closing the beacon screen does not put the payment stack back into the inventory: vanilla drops it
--- at the player's feet on close (`BeaconMenu.removed` -> `Player.drop`, server side only), and it only
--- shows up in the inventory once the player picks it up after the vanilla pickup delay. Standing on
--- top of the beacon usually makes that a second or two, but the delay is the game's, not this
--- script's: waiting a fixed 10 s for the pickup is what failed one run in four with "got 0" (#129),
--- with the emerald still on the ground when the read happened.
---
--- Assert what vanilla actually guarantees instead: the round trip through the beacon neither lost nor
--- duplicated the emerald. It is either back in the inventory (picked up) or still next to the player
--- as the item entity the close path dropped. The beacon screen already showed the move itself
--- (payment slot full, the main slot it came from empty).
-local function emeraldCount()
-  local total = 0
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
-    if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
-      total = total + s.count
-    end
-  end
-  return total
-end
-
--- The close drop lands next to the player, so it is inside the client's own view of the world.
-local function droppedItems()
-  return #minecheck.findNearbyEntities("minecraft:item")
-end
-
-local emeraldBack = minecheck.waitFor(function()
-  return emeraldCount() == 1
-end, 10)
-if not emeraldBack and droppedItems() == 0 then
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
-    if s ~= nil and not s.empty then
-      minecheck.log("beacon test: slot " .. i .. " = " .. tostring(s.id) .. " x" .. tostring(s.count))
-    end
-  end
-end
-check(
-  emeraldBack or droppedItems() > 0,
-  "the emerald came back from the beacon screen once (inventory "
-    .. emeraldCount()
-    .. ", item drops nearby "
-    .. droppedItems()
-    .. ")"
-)
--- Both at once (picked up while the drop is still visible) would be a duplication, so the count is
--- capped even when the drop check above is what passed.
-check(emeraldCount() <= 1, "the beacon round trip did not duplicate the emerald (got " .. emeraldCount() .. ")")
+-- The payment round trip is asserted in its own script, so both outcomes vanilla allows - back in
+-- the inventory by pickup, or still on the ground as the dropped stack - are exercised by a
+-- regression guard that runs without a server (see `beacon-payment.lua`).
+minecheck.runScript("beacon-payment.lua")
 
 local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
