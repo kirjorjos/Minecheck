@@ -1,5 +1,6 @@
 package net.minecheck.loader.forge;
 
+import java.util.logging.Logger;
 import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
 import mezz.jei.api.runtime.IJeiRuntime;
@@ -22,11 +23,10 @@ public final class ForgeJeiPlugin implements IModPlugin {
 
   @Override
   public void onRuntimeAvailable(IJeiRuntime runtime) {
+    // Logged because this is the handover the bridge depends on: without it every recipe lookup
+    // answers "no ghost slots" while `recipeViewer("jei")` still reports JEI, which is
+    // indistinguishable in a script from an empty index.
+    Logger.getLogger("Minecheck").info("JEI handed its runtime to Minecheck");
     ForgeJeiRecipeViewer.setRuntime(runtime);
-  }
-
-  @Override
-  public void onRuntimeUnavailable() {
-    ForgeJeiRecipeViewer.setRuntime(null);
   }
 }

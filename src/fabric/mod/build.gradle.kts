@@ -21,18 +21,18 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "11.6.0.1024"
-val emiVersion = "1.1.24+1.19.2+fabric"
+val jeiVersion = "11.1.1.239"
+val emiVersion = "0.4.3+1.19"
 val reiVersion = "9.2.784+fabric"
 
 // REI 9.x does not declare these in its fabric.mod.json, but its own bytecode references them
 // (`dev/architectury/**`, `me/shedaniel/clothconfig2/**`), so they must be loaded at runtime.
 val clothConfigVersion = "8.3.134+fabric"
-val architecturyVersion = "6.6.92+fabric"
+val architecturyVersion = "5.14.84+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(11) }
+  mappings { yarn(4) }
   fabric { loader("0.15.11") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -89,7 +89,7 @@ val extractBasicMath =
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.77.0+1.19.2")
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.58.0+1.19")
   add("modImplementation", "maven.modrinth:jei:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
