@@ -1240,7 +1240,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.commandUnsigned(command);
+    mc.player.command(command);
   }
 
   @Override

@@ -24,9 +24,4 @@ public final class MinecheckJeiPlugin implements IModPlugin {
   public void onRuntimeAvailable(IJeiRuntime runtime) {
     JeiRecipeViewer.setRuntime(runtime);
   }
-
-  @Override
-  public void onRuntimeUnavailable() {
-    JeiRecipeViewer.setRuntime(null);
-  }
 }

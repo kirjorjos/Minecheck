@@ -4,5 +4,5 @@
   "guiScale": 2,
   "scale": 1.0,
   "chatVisible": false,
-  "renderer": "llvmpipe (LLVM 15.0.7, 256 bits)"
+  "renderer": "llvmpipe (LLVM 20.1.2, 256 bits)"
 }
