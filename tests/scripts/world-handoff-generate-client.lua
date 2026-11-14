@@ -7,6 +7,12 @@
 --
 -- Leave behind something a *freshly generated* server world could not have — a marker block at a
 -- fixed position — so the server script can prove which world it is actually running.
+--
+-- The world this client creates is flat: bedrock at -64, grass on top at -61, so the surface is
+-- SURFACE_Y. The marker sits well above it, where the generator leaves air. The other two handoff
+-- scripts read the same height; keep the three in step.
+local SURFACE_Y = -60
+local MARKER_Y = SURFACE_Y + 160
 
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 424242 })
 minecheck.expect(created, "client generated the handoff world")
@@ -17,11 +23,11 @@ end
 minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen settled")
 
 -- Cheats are on by default for a Minecheck-created world, so the client can set the marker itself.
-local placed = minecheck.runCommand("setblock 0 100 0 minecraft:gold_block")
+local placed = minecheck.runCommand("setblock 0 " .. MARKER_Y .. " 0 minecraft:gold_block")
 minecheck.expect(placed.success, "client placed the handoff marker") -- The block update reaches the client's own copy of the chunk a tick or two later, so this waits
 -- for what it can see rather than assuming the write was instantaneous.
 local marked = minecheck.waitFor(function()
-  local b = minecheck.getBlock({ x = 0, y = 100, z = 0 })
+  local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"
 end, 20)
 minecheck.expect(marked, "client reads the handoff marker back")

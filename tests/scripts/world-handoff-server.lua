@@ -2,6 +2,12 @@
 -- started the server with `-Ddh.serverSetupDir`, so this world came from the client instead of
 -- being generated here. The marker block is what proves that: `execute if block` succeeds only in
 -- the save the client created.
+--
+-- The staged save is the flat world the client built: surface at SURFACE_Y, marker well above it.
+-- The same height is declared in world-handoff-generate-client.lua and world-handoff-client.lua.
+local SURFACE_Y = -60
+local MARKER_Y = SURFACE_Y + 160
+
 local player = "Dev"
 
 local function check(result, name)
@@ -18,7 +24,7 @@ check(minecheck.waitFor(minecheck.worldGenSettled, 180), "worldgen settled befor
 -- conditional `execute if` that fails — or that runs against a chunk the server has not loaded yet
 -- — returns 0 successes without throwing. So the count is the assertion, and it is polled.
 local function markerPresent()
-  return minecheck.runCommand("execute if block 0 100 0 minecraft:gold_block").result >= 1
+  return minecheck.runCommand("execute if block 0 " .. MARKER_Y .. " 0 minecraft:gold_block").result >= 1
 end
 check(minecheck.waitFor(markerPresent, 90), "server is running the world the client generated (marker block present)")
 
