@@ -140,7 +140,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   /**
    * Pinned {@code level-seed} for the server's world (empty/absent = normal random generation).
    * Minecheck only writes it into {@code server.properties}; the vanilla jar + installed world-gen
-   * mods still generate the world normally.
+   * mods still generate the world, on the superflat preset {@link #serverProperties()} writes.
    */
   @Input
   @Optional
@@ -942,6 +942,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     sb.append("online-mode=false\n");
     sb.append("server-port=").append(port()).append('\n');
     sb.append("enforce-secure-profile=false\n");
+    // The same superflat world the client-side scripts create by hand. The suites place blocks,
+    // item drops and structures at fixed coordinates and assert on what they find there, while the
+    // dedicated server was left on the default generator: on generated terrain those coordinates
+    // hold whatever the seed produced, which is how the spawn phase refused a placement into air
+    // on 1.18.1 while the same code passed on 1.18.2. Flat ground is the same surface on every seed
+    // and every version, so a fixture written against it stays true.
+    // `flat`, not `minecraft:flat`: 1.18.1's DedicatedServerProperties does not resolve the
+    // namespaced form and silently falls back to normal generation (the world it produced spawned
+    // the
+    // player at y=63, on the surface of generated terrain).
+    sb.append("level-type=flat\n");
+    // A village or outpost landing on those coordinates would collide with exactly the same
+    // assertions, and no suite asks the generator for one (structures are spawned explicitly).
+    sb.append("generate-structures=false\n");
     String seed = getLevelSeed().getOrNull();
     if (seed != null && !seed.isBlank()) {
       sb.append("level-seed=").append(seed).append('\n');
