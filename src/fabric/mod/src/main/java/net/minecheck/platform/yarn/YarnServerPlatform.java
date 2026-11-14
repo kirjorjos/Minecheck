@@ -13,7 +13,7 @@ import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtHelper;
+import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.Structure;
@@ -61,7 +61,7 @@ public class YarnServerPlatform implements ServerPlatform {
       return new NbtCompound();
     }
     try {
-      return NbtHelper.fromNbtProviderString(nbt);
+      return StringNbtReader.parse(nbt);
     } catch (CommandSyntaxException e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
@@ -130,7 +130,7 @@ public class YarnServerPlatform implements ServerPlatform {
       }
       out.add(
           new net.minecheck.platform.api.EntityInfo(
-              entity.getId(),
+              entity.getEntityId(),
               Registry.ENTITY_TYPE.getId(entity.getType()).toString(),
               entity.getX(),
               entity.getY(),
@@ -172,7 +172,7 @@ public class YarnServerPlatform implements ServerPlatform {
             compound,
             world,
             loaded -> {
-              loaded.refreshPositionAndAngles(x, y, z, loaded.getYaw(), loaded.getPitch());
+              loaded.refreshPositionAndAngles(x, y, z, loaded.getYaw(1.0f), loaded.getPitch(1.0f));
               return loaded;
             });
     if (entity == null) {
@@ -182,10 +182,10 @@ public class YarnServerPlatform implements ServerPlatform {
       mob.initialize(
           world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null, null);
     }
-    if (!world.spawnNewEntityAndPassengers(entity)) {
+    if (!world.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
-    return entity.getId();
+    return entity.getEntityId();
   }
 
   @Override
@@ -213,7 +213,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.readNbt(compound);
+        blockEntity.fromTag(state, compound);
       }
     }
     return true;
@@ -236,13 +236,13 @@ public class YarnServerPlatform implements ServerPlatform {
     stack.setCount(count);
     NbtCompound compound = parseNbt(nbt);
     if (!compound.isEmpty()) {
-      stack.setNbt(compound);
+      stack.setTag(compound);
     }
     ItemEntity itemEntity = new ItemEntity(world, x, y, z, stack);
     if (!world.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
-    return itemEntity.getId();
+    return itemEntity.getEntityId();
   }
 
   @Override
@@ -257,10 +257,10 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     ServerWorld world = overworld();
     StructureManager manager = world.getStructureManager();
-    Structure template =
-        manager
-            .getStructure(identifier)
-            .orElseThrow(() -> new IllegalArgumentException("unknown structure: " + id));
+    Structure template = manager.getStructure(identifier);
+    if (template == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlacementData placementData = new StructurePlacementData().setIgnoreEntities(true);
     return template.place(world, pos, pos, placementData, world.getRandom(), 2);

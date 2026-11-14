@@ -10,13 +10,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import net.minecraft.block.Block;
-import net.minecraft.structure.StructureSet;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.registry.Registry;
-import net.minecraft.util.registry.RegistryKey;
 import net.minecraft.world.biome.Biome;
 import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
 import net.minecraft.world.gen.chunk.FlatChunkGeneratorLayer;
+import net.minecraft.world.gen.chunk.StructuresConfig;
 
 /**
  * The flat world every Minecheck suite runs in, built from the declaration the harness also hands
@@ -68,24 +67,23 @@ final class FlatWorldSettings {
   }
 
   /** The declared world, laid over the preset this version would build so nothing else shifts. */
-  static FlatChunkGeneratorConfig config(
-      Registry<Biome> biomes, Registry<StructureSet> structureSets) {
+  static FlatChunkGeneratorConfig config(Registry<Biome> biomes) {
     Declaration declared = declaration();
     List<FlatChunkGeneratorLayer> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
       Block block = Registry.BLOCK.get(new Identifier(layer.block));
       layers.add(new FlatChunkGeneratorLayer(layer.height, block));
     }
-    FlatChunkGeneratorConfig base =
-        FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets);
-    // No structure overrides: the declaration describes bare ground, and the suites place the
-    // structures they assert on themselves.
-    FlatChunkGeneratorConfig config = base.withLayers(layers, Optional.empty());
-    // A registry-backed entry, not RegistryEntry.of: a direct holder is not a registry element,
-    // and the game refuses to write a level whose flat settings name one.
-    biomes
-        .getEntry(RegistryKey.of(Registry.BIOME_KEY, new Identifier(declared.biome)))
-        .ifPresent(config::setBiome);
-    return config;
+    // 1.16.5 has no StructureSet registry: the flat settings carry a StructuresConfig, and the
+    // declaration describes bare ground, so the generator places no structure. Features and lakes
+    // stay off for the same reason — the suites place what they assert on themselves.
+    Biome biome = biomes.get(new Identifier(declared.biome));
+    return new FlatChunkGeneratorConfig(
+        biomes,
+        new StructuresConfig(false),
+        layers,
+        false,
+        false,
+        biome == null ? Optional.empty() : Optional.of(() -> biome));
   }
 }

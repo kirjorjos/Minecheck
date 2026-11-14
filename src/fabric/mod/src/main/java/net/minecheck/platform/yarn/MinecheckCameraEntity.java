@@ -18,7 +18,7 @@ import net.minecraft.world.World;
 final class MinecheckCameraEntity extends Entity {
 
   MinecheckCameraEntity(World world) {
-    super(EntityType.MARKER, world);
+    super(EntityType.ARMOR_STAND, world);
     setNoGravity(true);
     this.noClip = true;
   }

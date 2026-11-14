@@ -1,5 +1,6 @@
 package net.minecheck.platform.yarn;
 
+import com.mojang.serialization.Lifecycle;
 import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.logging.Level;
@@ -25,11 +26,11 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.structure.StructureSet;
 import net.minecraft.text.Text;
 import net.minecraft.text.TranslatableText;
 import net.minecraft.util.registry.DynamicRegistryManager;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.util.registry.SimpleRegistry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
@@ -470,7 +471,8 @@ public class YarnClientPlatform implements ClientPlatform {
         || window.getFramebufferHeight() != request.frameHeight()) {
       // The profile pins the window size; re-assert it when something changed it. The resize is
       // reported back by GLFW over the next frames, so ask again on the next tick.
-      window.setWindowedSize(request.frameWidth(), request.frameHeight());
+      org.lwjgl.glfw.GLFW.glfwSetWindowSize(
+          window.getHandle(), request.frameWidth(), request.frameHeight());
       request.retry(
           "the client window is "
               + window.getFramebufferWidth()
@@ -531,7 +533,11 @@ public class YarnClientPlatform implements ClientPlatform {
 
     net.minecraft.client.texture.NativeImage image;
     try {
-      image = net.minecraft.client.util.ScreenshotRecorder.takeScreenshot(framebuffer);
+      image =
+          net.minecraft.client.util.ScreenshotUtils.takeScreenshot(
+              mc.getWindow().getFramebufferWidth(),
+              mc.getWindow().getFramebufferHeight(),
+              framebuffer);
     } catch (RuntimeException e) {
       request.fail("framebuffer read failed: " + e.getMessage());
       return;
@@ -573,7 +579,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getColor(sx, sy);
+                pixels[at++] = source.getPixelColor(sx, sy);
               }
             }
             request.succeedFrame(
@@ -605,13 +611,13 @@ public class YarnClientPlatform implements ClientPlatform {
             out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setColor(dx, dy, pixels[dy * outWidth + dx]);
+                out.setPixelColor(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
             java.nio.file.Files.createDirectories(directory);
             java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
-            out.writeTo(tmp);
+            out.writeFile(tmp);
             java.nio.file.Files.move(
                 tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             byte[] bytes = java.nio.file.Files.readAllBytes(target);
@@ -677,13 +683,13 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setColor(dx, dy, source.getColor(sx, sy));
+                out.setPixelColor(dx, dy, source.getPixelColor(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
             java.nio.file.Files.createDirectories(directory);
             java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
-            out.writeTo(tmp);
+            out.writeFile(tmp);
             java.nio.file.Files.move(
                 tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             byte[] bytes = java.nio.file.Files.readAllBytes(target);
@@ -718,7 +724,7 @@ public class YarnClientPlatform implements ClientPlatform {
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");
     onClientThread(
-        () -> mc().setScreen(new net.minecraft.client.gui.screen.ChatScreen(command ? "/" : "")));
+        () -> mc().openScreen(new net.minecraft.client.gui.screen.ChatScreen(command ? "/" : "")));
   }
 
   @Override
@@ -768,24 +774,25 @@ public class YarnClientPlatform implements ClientPlatform {
     MinecraftClient mc = mc();
     onClientThread(
         () -> {
-          DynamicRegistryManager.Immutable registryManager =
-              DynamicRegistryManager.createAndLoad().toImmutable();
-          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
-          // have built, dropped into the default dimension set in place of the noise overworld. Its
-          // layers come from the shared declaration in tests/flat-world.json, which the harness
-          // also
-          // gives the dedicated server as `generator-settings`, so both sides build the same
-          // surface.
+          DynamicRegistryManager.Impl registryManager = DynamicRegistryManager.create();
+          // 1.16.5 keeps the dimension set in a SimpleRegistry, so the flat generator replaces the
+          // default overworld entry and every other dimension is copied as the defaults built it.
+          // The layers come from tests/flat-world.json, which the harness also gives the
+          // dedicated server as `generator-settings`, so both sides build the same surface.
           Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
-          Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
-          FlatChunkGenerator flat =
-              new FlatChunkGenerator(
-                  structureSets, FlatWorldSettings.config(biomes, structureSets));
-          Registry<DimensionOptions> dimensions =
-              GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
+          FlatChunkGenerator flat = new FlatChunkGenerator(FlatWorldSettings.config(biomes));
+          GeneratorOptions defaults =
+              GeneratorOptions.getDefaultOptions(
                   registryManager.get(Registry.DIMENSION_TYPE_KEY),
-                  GeneratorOptions.getDefaultOptions(registryManager).getDimensions(),
-                  flat);
+                  biomes,
+                  registryManager.get(Registry.NOISE_SETTINGS_WORLDGEN));
+          SimpleRegistry<DimensionOptions> dimensions = defaults.getDimensions();
+          DimensionOptions overworld = dimensions.get(DimensionOptions.OVERWORLD);
+          dimensions.set(
+              dimensions.getRawId(overworld),
+              DimensionOptions.OVERWORLD,
+              new DimensionOptions(overworld.getDimensionTypeSupplier(), flat),
+              Lifecycle.stable());
           GeneratorOptions generatorOptions =
               new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
           mc.createWorld(options.name(), levelInfo, registryManager, generatorOptions);
@@ -849,7 +856,7 @@ public class YarnClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           try {
-            ConnectScreen.connect(mc().currentScreen, mc(), serverAddress, info);
+            mc().openScreen(new ConnectScreen(mc().currentScreen, mc(), info));
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.connect(%s:%s)",
@@ -962,7 +969,7 @@ public class YarnClientPlatform implements ClientPlatform {
    */
   private InputUtil.Key resolveKey(String key) {
     if (key.startsWith("key.")) {
-      for (KeyBinding binding : mc().options.allKeys) {
+      for (KeyBinding binding : mc().options.keysAll) {
         if (binding.getTranslationKey().equals(key)) {
           try {
             String bound = binding.getBoundKeyTranslationKey();
@@ -1086,8 +1093,8 @@ public class YarnClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           if (mc.player != null) {
-            mc.player.setPitch(pitch);
-            mc.player.setYaw(yaw);
+            mc.player.pitch = pitch;
+            mc.player.yaw = yaw;
           }
         });
   }
@@ -1156,7 +1163,7 @@ public class YarnClientPlatform implements ClientPlatform {
       // (vanilla never syncs it), so this is a faithful copy of what the client actually knows.
       out.add(
           new net.minecheck.platform.api.EntityInfo(
-              entity.getId(),
+              entity.getEntityId(),
               actual.toString(),
               entity.getX(),
               entity.getY(),
@@ -1181,7 +1188,9 @@ public class YarnClientPlatform implements ClientPlatform {
     net.minecraft.block.BlockState state = mc.world.getBlockState(blockPos);
     net.minecraft.block.entity.BlockEntity blockEntity = mc.world.getBlockEntity(blockPos);
     java.util.Map<String, Object> nbt =
-        blockEntity == null ? null : nbtToMap(blockEntity.createNbt());
+        blockEntity == null
+            ? null
+            : nbtToMap(blockEntity.writeNbt(new net.minecraft.nbt.NbtCompound()));
     return new net.minecheck.platform.api.BlockInfo(
         net.minecraft.util.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
@@ -1396,7 +1405,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (stack.isEmpty()) {
       return new net.minecheck.platform.api.SlotInfo(true, null, 0, null);
     }
-    net.minecraft.nbt.NbtCompound nbt = stack.getNbt();
+    net.minecraft.nbt.NbtCompound nbt = stack.getTag();
     return new net.minecheck.platform.api.SlotInfo(
         false,
         net.minecraft.util.registry.Registry.ITEM.getId(stack.getItem()).toString(),
