@@ -26,9 +26,8 @@ include(":fabric-mod")
 
 project(":fabric-mod").projectDir = file("src/fabric/mod")
 
-include(":quilt-mod")
-
-project(":quilt-mod").projectDir = file("src/quilt/mod")
+// No :quilt-mod on 1.18.1: quilted-fabric-api's first release is 1.0.0-beta.1+0.48.0-1.18.2 and
+// QSL publishes nothing for 1.18.1 either, so the module cannot be built for this version.
 
 include(":forge-mod")
 

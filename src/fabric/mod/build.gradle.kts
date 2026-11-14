@@ -1,6 +1,5 @@
 import java.io.File
 import java.io.FileInputStream
-import java.util.zip.ZipFile
 import net.minecheck.gradle.LaunchDescriptor
 
 plugins {
@@ -21,18 +20,14 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "10.2.1.1002"
-val emiVersion = "0.7.3+1.18.2"
-val reiVersion = "8.4.778+fabric"
-
-// REI does not declare these in its fabric.mod.json, but its own bytecode references them
-// (`dev/architectury/**`, `me/shedaniel/clothconfig2/**`), so they must be loaded at runtime.
-val clothConfigVersion = "6.5.102"
-val architecturyVersion = "4.12.94+fabric"
+// 1.18.1 predates every recipe viewer that ships for Fabric: JEI's first Fabric artifact is
+// jei-1.18.2-fabric, EMI starts at 1.18.2, and REI publishes no 1.18.1 build at all — so this
+// loader has no viewer bridge here. The Lua API is the same everywhere; only Forge hosts one on
+// this line.
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(4) }
+  mappings { yarn(22) }
   fabric { loader("0.15.11") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -54,52 +49,10 @@ tasks.processResources {
   }
 }
 
-// Cloth Config for Fabric ships its `me.shedaniel.math` library as a nested jar, and a Fabric
-// development run does not expand Jar-in-Jar for classpath mods — while REI links against those
-// classes directly (`me/shedaniel/math/Point` in `ClientInternals`). So the dev launch is handed
-// the library as a mod of its own. The Forge build of the same Cloth version has the classes
-// merged in, so only this loader needs it.
-val basicMathVersion = "0.6.1"
-val basicMathJar = layout.buildDirectory.file("minecheck/cloth-basic-math-$basicMathVersion.jar")
-val extractBasicMath =
-  tasks.register("extractBasicMath") {
-    val cloth =
-      configurations.detachedConfiguration(
-        dependencies.create("maven.modrinth:cloth-config:$clothConfigVersion") {
-          isTransitive = false
-        }
-      )
-    inputs.files(cloth)
-    outputs.file(basicMathJar)
-    doLast {
-      val out = basicMathJar.get().asFile
-      out.parentFile.mkdirs()
-      val nested = "META-INF/jars/basic-math-$basicMathVersion.jar"
-      ZipFile(cloth.singleFile).use { zip ->
-        val entry =
-          zip.getEntry(nested)
-            ?: throw GradleException("$nested is not in ${cloth.singleFile.name}")
-        zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it) } }
-      }
-    }
-  }
-
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.77.0+1.18.2")
-  add("modImplementation", "maven.modrinth:jei:$jeiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
-    isTransitive = false
-  }
-  add("modImplementation", "maven.modrinth:architectury-api:$architecturyVersion") {
-    isTransitive = false
-  }
-  // A plain library (no Minecraft classes), so it goes on the classpath rather than through
-  // unimined's mod remapping; the development loader still discovers it by its fabric.mod.json.
-  implementation(files(basicMathJar).builtBy(extractBasicMath))
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.46.6+1.18")
 }
 
 tasks.shadowJar {

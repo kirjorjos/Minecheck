@@ -49,15 +49,11 @@ public class ForgeEntrypoint {
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
-    // No EMI bridge on Forge: EMI 1.18.2 ships for Fabric and Quilt only, so the viewer list here
-    // is JEI and REI. The Lua API is the same on every loader.
+    // JEI is the only viewer that ships for 1.18.1 (see this module's build file), so it is the
+    // only one this line can host. The Lua API is the same on every loader.
     final List<RecipeViewer> viewers = new ArrayList<>();
     if (!dedicated && ModList.get().isLoaded("jei")) {
       viewers.add(new ForgeJeiRecipeViewer());
-    }
-    // REI's mod id is `roughlyenoughitems`; the provider reports the short id `rei`.
-    if (!dedicated && ModList.get().isLoaded("roughlyenoughitems")) {
-      viewers.add(new ForgeReiRecipeViewer());
     }
 
     PlatformServices services =
@@ -136,7 +132,7 @@ public class ForgeEntrypoint {
   private final AtomicBoolean builtinWarmed = new AtomicBoolean();
 
   /**
-   * Materialises {@link net.minecraft.core.RegistryAccess#BUILTIN} before any world or server join.
+   * Materialises {@code RegistryAccess.builtin()} before any world or server join.
    *
    * <p>That value is a lazily built, memoised copy of the builtin (datapack) registries. On 1.19.2
    * the Forge client first touches it from {@code ClientPacketListener}'s field initialiser, which
@@ -150,7 +146,7 @@ public class ForgeEntrypoint {
   private void warmBuiltinRegistryAccess() {
     long start = System.nanoTime();
     try {
-      net.minecraft.core.RegistryAccess.BUILTIN.get();
+      net.minecraft.core.RegistryAccess.builtin();
       java.util.logging.Logger.getLogger("Minecheck")
           .info(
               String.format(

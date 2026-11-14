@@ -352,13 +352,13 @@ public final class YarnCameraPlatform implements CameraPlatform {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.options.forwardKey.isPressed(),
-        mc.options.backKey.isPressed(),
-        mc.options.leftKey.isPressed(),
-        mc.options.rightKey.isPressed(),
-        mc.options.jumpKey.isPressed(),
-        mc.options.sneakKey.isPressed(),
-        mc.options.sprintKey.isPressed());
+        mc.options.keyForward.isPressed(),
+        mc.options.keyBack.isPressed(),
+        mc.options.keyLeft.isPressed(),
+        mc.options.keyRight.isPressed(),
+        mc.options.keyJump.isPressed(),
+        mc.options.keySneak.isPressed(),
+        mc.options.keySprint.isPressed());
   }
 
   private static MinecraftClient mc() {

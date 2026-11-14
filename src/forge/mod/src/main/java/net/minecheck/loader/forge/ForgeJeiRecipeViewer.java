@@ -2,20 +2,23 @@ package net.minecheck.loader.forge;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.gui.IRecipeLayoutDrawable;
 import mezz.jei.api.gui.ingredient.IRecipeSlotView;
 import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
+import mezz.jei.api.recipe.IFocus;
 import mezz.jei.api.recipe.IRecipeManager;
 import mezz.jei.api.recipe.RecipeIngredientRole;
 import mezz.jei.api.recipe.category.IRecipeCategory;
-import mezz.jei.api.recipe.transfer.IRecipeTransferHandler;
 import mezz.jei.api.runtime.IJeiRuntime;
-import mezz.jei.common.gui.recipes.layout.IRecipeLayoutInternal;
-import mezz.jei.common.recipes.RecipeTransferManager;
+import mezz.jei.gui.recipes.RecipeLayout;
+import mezz.jei.recipes.RecipeTransferManager;
+import mezz.jei.transfer.RecipeTransferUtil;
 import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.Minecraft;
@@ -26,17 +29,16 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * JEI-backed {@link RecipeViewer} for Forge.
+ * JEI-backed {@link RecipeViewer} for Forge on 1.18.1, against JEI 9.4.
  *
  * <p>JEI is a soft dependency: this class is only instantiated when the mod is loaded, and every
  * JEI type it touches is used inside method bodies, so an absent JEI is never resolved. The runtime
  * is handed over by {@link ForgeJeiPlugin}, which JEI itself instantiates.
  *
- * <p>Two things JEI exposes on 1.18.2 only through internals are reached deliberately and in one
- * place: the slot views of a laid-out recipe, and the transfer manager that owns the per-screen
- * transfer handlers (JEI 11 promoted it to the API as {@code IRecipeTransferManager}). Both reads
- * happen inside try/catch so a JEI build that moves them degrades to "no ghost slots" / "fill
- * refused" instead of breaking the script.
+ * <p>JEI 9.4 exposes no slot views and no transfer entry point on its API, so two internals are
+ * reached deliberately and in one place: the {@code RecipeLayout} behind the legacy drawable, and
+ * the transfer manager its recipes screen holds. Both reads happen inside try/catch so a JEI build
+ * that moves them degrades to "no ghost slots" / "fill refused" instead of breaking the script.
  */
 public final class ForgeJeiRecipeViewer implements RecipeViewer {
 
@@ -48,8 +50,8 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
   /** Cached private field on JEI's recipes screen; {@code null} until first looked up. */
   private static volatile Field transferManagerField;
 
-  /** Cached private field on JEI's layout drawable adapter; {@code null} until first looked up. */
-  private static volatile Field internalLayoutField;
+  /** Cached private field on JEI's legacy layout adapter; {@code null} until first looked up. */
+  private static volatile Field layoutField;
 
   static void setRuntime(IJeiRuntime value) {
     runtime = value;
@@ -72,11 +74,11 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
       if (match == null) {
         return List.of();
       }
-      IRecipeSlotsView slots = slotsView(match);
-      if (slots == null) {
+      Layout layout = layout(match);
+      if (layout == null) {
         return List.of();
       }
-      List<IRecipeSlotView> views = slots.getSlotViews(RecipeIngredientRole.INPUT);
+      List<IRecipeSlotView> views = layout.slots().getSlotViews(RecipeIngredientRole.INPUT);
       List<GhostSlot> out = new ArrayList<>(views.size());
       for (int i = 0; i < views.size(); i++) {
         out.add(new GhostSlot(i, itemIds(views.get(i))));
@@ -112,24 +114,16 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
       if (menu == null) {
         return false;
       }
-      IRecipeSlotsView slots = slotsView(match);
-      if (slots == null) {
+      Layout layout = layout(match);
+      if (layout == null) {
         return false;
       }
       RecipeTransferManager transfers = transferManager();
       if (transfers == null) {
         return false;
       }
-      @SuppressWarnings("unchecked")
-      IRecipeTransferHandler<AbstractContainerMenu, Object> handler =
-          (IRecipeTransferHandler<AbstractContainerMenu, Object>)
-              transfers.getRecipeTransferHandler(menu, (IRecipeCategory<Object>) match.category());
-      if (handler == null) {
-        return false;
-      }
-      Object error =
-          handler.transferRecipe(menu, match.recipe(), slots, client.player, maxItems <= 0, true);
-      return error == null;
+      return RecipeTransferUtil.transferRecipe(
+          transfers, menu, layout.layout(), client.player, maxItems <= 0);
     } catch (Throwable t) {
       LOG.log(Level.WARNING, String.format("JEI could not fill from recipe %s", recipeId), t);
       return false;
@@ -139,8 +133,8 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
   /** One recipe JEI knows: the category that owns it and the recipe object itself. */
   private record RecipeMatch(IRecipeCategory<?> category, Object recipe) {}
 
-  /** A laid-out recipe: its slot views plus the drawable JEI handed us (needed for transfer). */
-  private record Layout(IRecipeSlotsView slots, IRecipeLayoutDrawable drawable) {}
+  /** A laid-out recipe: its slot views plus the internal layout JEI's transfer path needs. */
+  private record Layout(IRecipeSlotsView slots, RecipeLayout<?> layout) {}
 
   private static volatile boolean probed;
 
@@ -159,15 +153,17 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
     IRecipeCategory<?> crafting =
         manager.getRecipeCategory(new ResourceLocation("minecraft", "crafting"), false);
     int craftingRecipes =
-        crafting == null ? -1 : manager.getRecipes(crafting, List.of(), true).size();
+        crafting == null ? -1 : manager.getRecipes(crafting, Collections.emptyList(), true).size();
+    int items = -1;
+    try {
+      items = rt.getIngredientManager().getAllIngredients(VanillaTypes.ITEM).size();
+    } catch (RuntimeException e) {
+      LOG.log(Level.FINE, "JEI 9.4: item ingredients are not listed", e);
+    }
     LOG.info(
         String.format(
             "JEI index: %s categories, %s recipes, sample recipe ids %s | ingredients: %s | crafting recipes: %s",
-            categories,
-            recipes,
-            sample,
-            rt.getIngredientManager().getAllItemStacks().size(),
-            craftingRecipes));
+            categories, recipes, sample, items, craftingRecipes));
   }
 
   private static volatile boolean warnedNoRuntime;
@@ -201,12 +197,12 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
     int recipeCount = 0;
     List<String> sample = new ArrayList<>();
     Iterator<IRecipeCategory<?>> categories =
-        manager.createRecipeCategoryLookup().includeHidden().get().iterator();
+        manager.getRecipeCategories(Collections.<IFocus<?>>emptyList(), false).iterator();
     while (categories.hasNext()) {
       IRecipeCategory category = categories.next();
       categoryCount++;
       Iterator<?> recipes =
-          manager.createRecipeLookup(category.getRecipeType()).includeHidden().get().iterator();
+          manager.getRecipes(category, Collections.<IFocus<?>>emptyList(), true).iterator();
       while (recipes.hasNext()) {
         Object recipe = recipes.next();
         recipeCount++;
@@ -225,8 +221,9 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
   }
 
   /**
-   * Lays the recipe out the way JEI would draw it. JEI 10's drawable carries no slot views, so they
-   * come off the internal layout that backs it.
+   * Lays the recipe out the way JEI would draw it. JEI 9.4's drawable is the legacy adapter, which
+   * carries the item/fluid groups but no slot views: those come off the {@code RecipeLayout} it
+   * wraps, which is also what the transfer path expects.
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static Layout layout(RecipeMatch match) {
@@ -237,44 +234,39 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
     IRecipeLayoutDrawable drawable =
         rt.getRecipeManager()
             .createRecipeLayoutDrawable((IRecipeCategory) match.category(), match.recipe(), null);
-    IRecipeLayoutInternal<?> internal = internalLayout(drawable);
-    return internal == null ? null : new Layout(internal.getRecipeSlots().getView(), drawable);
+    RecipeLayout<?> internal = internalLayout(drawable);
+    return internal == null ? null : new Layout(internal.getRecipeSlots().getView(), internal);
   }
 
   /**
-   * The layout behind a JEI 10 drawable. {@code createRecipeLayoutDrawable} hands back the *legacy*
-   * adapter, which is not itself an internal layout: it wraps the real one in a private field (the
-   * modern {@code RecipeLayout}). Read reflectively and cached, like the transfer manager below, so
-   * a JEI that renames the field degrades to "no ghost slots" instead of failing the script.
+   * The layout behind JEI 9.4's drawable. {@code createRecipeLayoutDrawable} hands back the
+   * *legacy* adapter, which wraps the real {@code RecipeLayout} in a private field. Read
+   * reflectively and cached, so a JEI that renames the field degrades to "no ghost slots" instead
+   * of failing the script.
    */
-  private static IRecipeLayoutInternal<?> internalLayout(IRecipeLayoutDrawable drawable) {
-    if (drawable instanceof IRecipeLayoutInternal<?> internal) {
-      return internal;
+  private static RecipeLayout<?> internalLayout(IRecipeLayoutDrawable drawable) {
+    if (drawable instanceof RecipeLayout<?> layout) {
+      return layout;
     }
     try {
-      Field field = internalLayoutField;
+      Field field = layoutField;
       Class<?> type = drawable.getClass();
       if (field == null || field.getDeclaringClass() != type) {
         field = type.getDeclaredField("recipeLayout");
         field.setAccessible(true);
-        internalLayoutField = field;
+        layoutField = field;
       }
-      return field.get(drawable) instanceof IRecipeLayoutInternal<?> internal ? internal : null;
+      return field.get(drawable) instanceof RecipeLayout<?> layout ? layout : null;
     } catch (ReflectiveOperationException | RuntimeException e) {
-      LOG.log(Level.WARNING, "JEI 10: the drawable's recipe layout is not reachable", e);
+      LOG.log(Level.WARNING, "JEI 9.4: the drawable's recipe layout is not reachable", e);
       return null;
     }
   }
 
-  private static IRecipeSlotsView slotsView(RecipeMatch match) {
-    Layout layout = layout(match);
-    return layout == null ? null : layout.slots();
-  }
-
   /**
-   * JEI 10 builds its transfer manager but never hands it out: the only reachable instance is the
-   * one {@code IJeiRuntime#getRecipesGui()} holds. Read once and cached; a JEI that renames the
-   * field yields {@code null} and fill is simply refused.
+   * JEI 9.4 builds its transfer manager but never hands it out: the only reachable instance is the
+   * one its recipes screen holds. Read once and cached; a JEI that renames the field yields {@code
+   * null} and fill is simply refused.
    */
   private static RecipeTransferManager transferManager() {
     IJeiRuntime rt = runtime;
@@ -294,7 +286,7 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
       }
       return (RecipeTransferManager) field.get(gui);
     } catch (ReflectiveOperationException | RuntimeException e) {
-      LOG.log(Level.FINE, "JEI 10: recipe transfer manager is not reachable", e);
+      LOG.log(Level.FINE, "JEI 9.4: recipe transfer manager is not reachable", e);
       return null;
     }
   }
@@ -302,7 +294,7 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
   /** The item ids a ghost slot accepts, tags already expanded to their members by JEI. */
   private static List<String> itemIds(IRecipeSlotView view) {
     List<String> ids = new ArrayList<>();
-    Iterator<ItemStack> stacks = view.getItemStacks().iterator();
+    Iterator<ItemStack> stacks = view.getIngredients(VanillaTypes.ITEM).iterator();
     while (stacks.hasNext()) {
       ItemStack stack = stacks.next();
       if (stack.isEmpty()) {
