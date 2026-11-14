@@ -32,6 +32,21 @@ repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
 }
 
+// 1.16.5's version metadata pins its dev runs to Java 8, and unimined applies that to the run
+// tasks. This mod is compiled for 17 (its mixin config asks for compatibility level JAVA_17), and a
+// Java 8 JVM cannot load class file 61 at all, so the runs are moved to 17 — a probe build boots
+// both loaders' 1.16.5 dedicated servers on 17.
+val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(17)
+
+tasks
+  .matching { it.name == "runClient" || it.name == "runServer" }
+  .configureEach {
+    (this as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.javaVersion =
+      JavaVersion.toVersion(runJavaVersion.get())
+  }
+
+// fabric.mod.json is templated so the version range cannot drift from gradle.properties; without
+// this the placeholders reach the loader verbatim and every dev run dies at mod discovery.
 tasks.processResources {
   // The one declaration of the flat world (also written into the dedicated server's
   // `generator-settings` by the lifecycle plugin), parsed by FlatWorldSettings at world creation.
