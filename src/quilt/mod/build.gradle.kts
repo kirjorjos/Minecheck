@@ -38,6 +38,9 @@ repositories {
 
 // quilt.mod.json is templated so its Minecraft bound cannot drift from gradle.properties.
 tasks.processResources {
+  // The one declaration of the flat world (also written into the dedicated server's
+  // `generator-settings` by the lifecycle plugin), parsed by FlatWorldSettings at world creation.
+  from(rootProject.file("tests/flat-world.json"))
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
   filesMatching("quilt.mod.json") {

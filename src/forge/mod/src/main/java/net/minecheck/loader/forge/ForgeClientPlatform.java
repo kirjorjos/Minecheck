@@ -25,9 +25,12 @@ import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
 import net.minecraft.world.level.levelgen.presets.WorldPreset;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
+import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -783,12 +786,24 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
-          WorldPreset flat =
+          // The flat preset supplies the seed, the structure flag and the dimension set; its
+          // overworld generator is replaced with one built from the shared declaration in
+          // tests/flat-world.json, which the harness also gives the dedicated server as
+          // `generator-settings`, so both sides build the same surface.
+          Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
+          Registry<StructureSet> structureSets =
+              registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
+          FlatLevelSource flat =
+              new FlatLevelSource(structureSets, FlatWorldSettings.settings(biomes, structureSets));
+          WorldPreset preset =
               registryAccess
                   .registryOrThrow(Registry.WORLD_PRESET_REGISTRY)
                   .getOrThrow(WorldPresets.FLAT);
           WorldGenSettings generatorOptions =
-              flat.createWorldGenSettings(options.seed(), options.structures(), false);
+              WorldGenSettings.replaceOverworldGenerator(
+                  registryAccess,
+                  preset.createWorldGenSettings(options.seed(), options.structures(), false),
+                  flat);
           mc.createWorldOpenFlows()
               .createFreshLevel(options.name(), levelSettings, registryAccess, generatorOptions);
         });
