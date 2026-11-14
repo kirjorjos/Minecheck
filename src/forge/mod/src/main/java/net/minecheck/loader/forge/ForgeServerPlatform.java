@@ -45,7 +45,19 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s.isSameThread()) {
       return action.get();
     }
-    return s.submit(action).join();
+    // Not MinecraftServer#submit: 1.16.5 only inherits it from BlockableEventLoop, and the runtime
+    // method lookup on the server class fails there. execute(Runnable) is the same seam without the
+    // signature that moved.
+    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
+    s.execute(
+        () -> {
+          try {
+            done.complete(action.get());
+          } catch (Throwable t) {
+            done.completeExceptionally(t);
+          }
+        });
+    return done.join();
   }
 
   private ServerLevel overworld() {
@@ -182,7 +194,7 @@ public class ForgeServerPlatform implements ServerPlatform {
             tag,
             level,
             loaded -> {
-              loaded.moveTo(x, y, z, loaded.getYRot(), loaded.getXRot());
+              loaded.moveTo(x, y, z, loaded.yRot, loaded.xRot);
               return loaded;
             });
     if (entity == null) {
@@ -227,7 +239,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (!tag.isEmpty()) {
       BlockEntity blockEntity = level.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.load(tag);
+        blockEntity.load(state, tag);
       }
     }
     return true;
@@ -271,10 +283,11 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     ServerLevel level = overworld();
     StructureManager manager = level.getStructureManager();
-    StructureTemplate template =
-        manager
-            .get(location)
-            .orElseThrow(() -> new IllegalArgumentException("unknown structure: " + id));
+    // 1.16.5's get() answers the template itself, null when the id is unknown.
+    StructureTemplate template = manager.get(location);
+    if (template == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlaceSettings settings = new StructurePlaceSettings().setIgnoreEntities(true);
     return template.placeInWorld(level, pos, pos, settings, level.getRandom(), 2);

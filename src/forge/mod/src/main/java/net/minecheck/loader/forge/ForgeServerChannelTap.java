@@ -15,7 +15,7 @@ import net.minecraft.network.protocol.game.ServerboundCustomPayloadPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.server.ServerLifecycleHooks;
+import net.minecraftforge.fml.server.ServerLifecycleHooks;
 
 /**
  * Dedicated-server <em>low-level frame tap</em>: the Forge-only way to observe another mod's
@@ -101,8 +101,11 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ServerboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getIdentifier();
-    FriendlyByteBuf data = packet.getData();
+    // 1.16.5's payload packets expose their channel and buffer through Forge's ICustomPacket;
+    // the mojmap class itself has only the private fields.
+    net.minecraftforge.fml.network.ICustomPacket<?> custom = packet;
+    ResourceLocation id = custom.getName();
+    FriendlyByteBuf data = custom.getInternalData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

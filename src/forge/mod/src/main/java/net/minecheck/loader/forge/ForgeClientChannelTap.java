@@ -83,8 +83,11 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ClientboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getIdentifier();
-    FriendlyByteBuf data = packet.getData();
+    // 1.16.5's payload packets expose their channel and buffer through Forge's ICustomPacket;
+    // the mojmap class itself has only the private fields.
+    net.minecraftforge.fml.network.ICustomPacket<?> custom = packet;
+    ResourceLocation id = custom.getName();
+    FriendlyByteBuf data = custom.getInternalData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

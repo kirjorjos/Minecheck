@@ -19,8 +19,9 @@ import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.ServerAddress;
 import net.minecraft.client.multiplayer.ServerData;
-import net.minecraft.client.multiplayer.resolver.ServerAddress;
+import net.minecraft.core.MappedRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.chat.CommonComponents;
@@ -38,7 +39,6 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
-import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -466,7 +466,10 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     com.mojang.blaze3d.platform.Window window = mc.getWindow();
     if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
-      window.setWindowed(request.frameWidth(), request.frameHeight());
+      // 1.16.5's Window has no setWindowed: ask GLFW directly, and let the resize be reported back
+      // over the next frames, exactly as the yarn side does.
+      org.lwjgl.glfw.GLFW.glfwSetWindowSize(
+          window.getWindow(), request.frameWidth(), request.frameHeight());
       request.retry(
           "the client window is "
               + window.getWidth()
@@ -527,7 +530,7 @@ public class ForgeClientPlatform implements ClientPlatform {
 
     com.mojang.blaze3d.platform.NativeImage image;
     try {
-      image = net.minecraft.client.Screenshot.takeScreenshot(target);
+      image = net.minecraft.client.Screenshot.takeScreenshot(target.width, target.height, target);
     } catch (RuntimeException e) {
       request.fail("framebuffer read failed: " + e.getMessage());
       return;
@@ -809,7 +812,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     Minecraft mc = mc();
     onClientThread(
         () -> {
-          RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
+          RegistryAccess.RegistryHolder registryAccess = RegistryAccess.builtin();
           // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
           // have built, dropped into the default dimension set in place of the noise overworld. Its
           // layers come from the shared declaration in tests/flat-world.json, which the harness
@@ -817,15 +820,19 @@ public class ForgeClientPlatform implements ClientPlatform {
           // gives the dedicated server as `generator-settings`, so both sides build the same
           // surface.
           Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
-          Registry<StructureSet> structureSets =
-              registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
-          FlatLevelSource flat =
-              new FlatLevelSource(structureSets, FlatWorldSettings.settings(biomes, structureSets));
+          FlatLevelSource flat = new FlatLevelSource(FlatWorldSettings.settings(biomes));
           Registry<DimensionType> dimensionTypes =
               registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
-          Registry<LevelStem> dimensions =
+          MappedRegistry<LevelStem> dimensions =
               WorldGenSettings.withOverworld(
-                  dimensionTypes, WorldGenSettings.makeDefault(registryAccess).dimensions(), flat);
+                  dimensionTypes,
+                  WorldGenSettings.makeDefault(
+                          dimensionTypes,
+                          biomes,
+                          registryAccess.registryOrThrow(
+                              Registry.NOISE_GENERATOR_SETTINGS_REGISTRY))
+                      .dimensions(),
+                  flat);
           WorldGenSettings generatorOptions =
               new WorldGenSettings(options.seed(), options.structures(), false, dimensions);
           mc.createLevel(options.name(), levelSettings, registryAccess, generatorOptions);
@@ -841,7 +848,9 @@ public class ForgeClientPlatform implements ClientPlatform {
         () -> {
           try {
             Minecraft mc = mc();
-            ConnectScreen.startConnecting(mc.screen, mc, serverAddress, info);
+            // 1.16.5 has no one-shot startConnecting: the screen connects from its own init().
+            mc.setScreen(
+                new ConnectScreen(mc.screen, mc, serverAddress.getHost(), serverAddress.getPort()));
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.startConnecting(%s:%s)",
@@ -1064,7 +1073,7 @@ public class ForgeClientPlatform implements ClientPlatform {
         p.getX(),
         p.getY(),
         p.getZ(),
-        p.getLevel().dimension().location().toString());
+        p.level.dimension().location().toString());
   }
 
   @Override
@@ -1073,8 +1082,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           if (mc.player != null) {
-            mc.player.setXRot(pitch);
-            mc.player.setYRot(yaw);
+            mc.player.xRot = pitch;
+            mc.player.yRot = yaw;
           }
         });
   }
@@ -1170,7 +1179,9 @@ public class ForgeClientPlatform implements ClientPlatform {
     net.minecraft.world.level.block.entity.BlockEntity blockEntity =
         mc.level.getBlockEntity(blockPos);
     java.util.Map<String, Object> nbt =
-        blockEntity == null ? null : nbtToMap(blockEntity.saveWithoutMetadata());
+        blockEntity == null
+            ? null
+            : nbtToMap(blockEntity.save(new net.minecraft.nbt.CompoundTag()));
     return new net.minecheck.platform.api.BlockInfo(
         net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
