@@ -39,7 +39,6 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
-import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -812,10 +811,12 @@ public class ForgeClientPlatform implements ClientPlatform {
         () -> {
           // 1.18.1 has neither RegistryAccess.BUILTIN nor the structure-set registry 1.18.2 added:
           // the flat preset is the generator the preset would have built, dropped into the default
-          // dimension set in place of the noise overworld.
+          // dimension set in place of the noise overworld. Its layers come from the shared
+          // declaration in tests/flat-world.json, which the harness also gives the dedicated server
+          // as `generator-settings`, so both sides build the same surface.
           RegistryAccess.RegistryHolder registryAccess = RegistryAccess.builtin();
           Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
-          FlatLevelSource flat = new FlatLevelSource(FlatLevelGeneratorSettings.getDefault(biomes));
+          FlatLevelSource flat = new FlatLevelSource(FlatWorldSettings.settings(biomes));
           Registry<DimensionType> dimensionTypes =
               registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
           MappedRegistry<LevelStem> dimensions =

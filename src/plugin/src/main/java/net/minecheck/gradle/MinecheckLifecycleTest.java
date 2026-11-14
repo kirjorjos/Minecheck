@@ -956,6 +956,19 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     // A village or outpost landing on those coordinates would collide with exactly the same
     // assertions, and no suite asks the generator for one (structures are spawned explicitly).
     sb.append("generate-structures=false\n");
+    // The layer stack is not written here either: `tests/flat-world.json` declares it once, and the
+    // mods bundle and parse that same file when a script creates a client world. One description,
+    // so
+    // the server's surface and the client's cannot disagree. A properties value cannot span lines,
+    // hence the newline strip.
+    Path flatWorld = getProject().getRootProject().file("tests/flat-world.json").toPath();
+    try {
+      sb.append("generator-settings=")
+          .append(Files.readString(flatWorld).replace("\n", ""))
+          .append('\n');
+    } catch (IOException e) {
+      throw new GradleException("could not read the flat world declaration " + flatWorld, e);
+    }
     String seed = getLevelSeed().getOrNull();
     if (seed != null && !seed.isBlank()) {
       sb.append("level-seed=").append(seed).append('\n');

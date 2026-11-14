@@ -38,7 +38,6 @@ import net.minecraft.world.biome.Biome;
 import net.minecraft.world.dimension.DimensionOptions;
 import net.minecraft.world.gen.GeneratorOptions;
 import net.minecraft.world.gen.chunk.FlatChunkGenerator;
-import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
@@ -771,11 +770,12 @@ public class YarnClientPlatform implements ClientPlatform {
         () -> {
           // 1.18.1 has neither the world-preset registry nor the structure-set registry 1.18.2
           // added: the flat preset is the generator the preset would have built, dropped into the
-          // default dimension set in place of the noise overworld.
+          // default dimension set in place of the noise overworld. Its layers come from the shared
+          // declaration in tests/flat-world.json, which the harness also gives the dedicated server
+          // as `generator-settings`, so both sides build the same surface.
           DynamicRegistryManager.Impl registryManager = DynamicRegistryManager.create();
           Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
-          FlatChunkGenerator flat =
-              new FlatChunkGenerator(FlatChunkGeneratorConfig.getDefaultConfig(biomes));
+          FlatChunkGenerator flat = new FlatChunkGenerator(FlatWorldSettings.config(biomes));
           SimpleRegistry<DimensionOptions> dimensions =
               GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
                   registryManager.get(Registry.DIMENSION_TYPE_KEY),
