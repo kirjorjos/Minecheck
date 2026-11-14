@@ -61,14 +61,19 @@ for _, e in pairs(minecheck.findEntities()) do
 end
 check(px ~= nil, "joined player is findable with a position")
 
--- The player is standing on solid ground, but 2 blocks east the terrain may be a hill or tree — spawning there would suffocate the cow. Probe the actual surface from high above: the first non-air block (scanning down) is the top of the highest terrain, and the platform is built on top of it.
+-- The dedicated server runs the harness's flat world (`tests/flat-world.json`): bedrock at -64,
+-- grass on top at -61, so the standing surface is SURFACE_Y. The probe below measures the surface rather than assuming the
+-- player's own feet and stops at SURFACE_Y, so a preset that moves the ground moves the floor of the
+-- scan with it.
+local SURFACE_Y = -60
+
 local bx = math.floor(px) + 2
 local bz = math.floor(pz)
 local function isAir(x, y, z)
   return minecheck.runCommand("execute if block " .. x .. " " .. y .. " " .. z .. " minecraft:air").result == 1
 end
 local surfY = nil
-for y = math.floor(py) + 48, -60, -1 do
+for y = math.floor(py) + 48, SURFACE_Y, -1 do
   if not isAir(bx, y, bz) then
     surfY = y
     break
