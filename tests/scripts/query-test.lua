@@ -175,10 +175,15 @@ check(
 -- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
 -- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
 -- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
-check(
-  minecheck.runCommand("item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1").result >= 1,
-  "client player given a sword in the hand"
-)
+-- The command moved: 1.17 replaced `replaceitem` with `item replace ... with ...`, and 1.16.5 has no
+-- `item` root at all ("Unknown or incomplete command").
+local swordCommand
+if minecheck.minecraftVersion():match("^1%.16") then
+  swordCommand = "replaceitem entity " .. player .. " hotbar.0 minecraft:netherite_sword"
+else
+  swordCommand = "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword"
+end
+check(minecheck.runCommand(swordCommand).result >= 1, "client player given a sword in the hand")
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
 -- rejected as "allows more than one" even when only one entity matches).

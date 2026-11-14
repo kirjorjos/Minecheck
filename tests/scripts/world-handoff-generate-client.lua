@@ -26,6 +26,10 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen set
 local placed = minecheck.runCommand("setblock 0 " .. MARKER_Y .. " 0 minecraft:gold_block")
 minecheck.expect(placed.success, "client placed the handoff marker") -- The block update reaches the client's own copy of the chunk a tick or two later, so this waits
 -- for what it can see rather than assuming the write was instantaneous.
+-- 1.16.5 spawns a new world's player away from 0,0 (measured at ~113,139), so the marker's chunk is
+-- not loaded on this client and the read below would see an unloaded chunk. Standing next to the
+-- marker loads it; the marker itself stays at the fixed coordinate the other two handoff scripts use.
+minecheck.runCommand("tp @s 0.5 " .. (MARKER_Y + 2) .. " 0.5")
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"

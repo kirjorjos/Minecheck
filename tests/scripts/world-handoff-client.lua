@@ -15,6 +15,10 @@ end
 
 minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "joined worldgen settled")
 
+-- The same chunk-loading step as the generating client: this line's spawn is not at 0,0, and a
+-- joined client only receives chunks around itself.
+minecheck.runCommand("tp @s 0.5 " .. (MARKER_Y + 2) .. " 0.5")
+
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"

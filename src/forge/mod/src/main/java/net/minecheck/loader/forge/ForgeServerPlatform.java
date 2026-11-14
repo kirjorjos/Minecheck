@@ -82,9 +82,9 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private static <T> T requireRegistryEntry(
       Registry<T> registry, ResourceLocation id, String what) {
-    if (!registry.containsKey(id)) {
-      throw new IllegalArgumentException("unknown " + what + ": " + id);
-    }
+    // A null get is the answer: 1.16.5's Registry interface has no containsKey(ResourceLocation),
+    // and
+    // calling it was a NoSuchMethodError at runtime rather than a compile error.
     T entry = registry.get(id);
     if (entry == null) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
@@ -144,6 +144,15 @@ public class ForgeServerPlatform implements ServerPlatform {
     ServerLevel level = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (Entity entity : level.getAllEntities()) {
+      // 1.16.5's getAllEntities() keeps an entity until the tick after it was removed, and a dying
+      // mob
+      // stays listed for its death animation. Neither is something a client can observe as present,
+      // so neither is a match for a query.
+      if (entity.removed
+          || (entity instanceof net.minecraft.world.entity.LivingEntity living
+              && !living.isAlive())) {
+        continue;
+      }
       if (typeId != null && !Registry.ENTITY_TYPE.getKey(entity.getType()).equals(typeId)) {
         continue;
       }

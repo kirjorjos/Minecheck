@@ -57,6 +57,26 @@ public class ForgeClientPlatform implements ClientPlatform {
     cameraPlatform.registerBindings();
   }
 
+  /** Set once this line's pause-on-focus-loss has been turned off for the run. */
+  private boolean unfocusedPlayAllowed;
+
+  /**
+   * Turns off 1.16.5's pause-on-focus-loss.
+   *
+   * <p>The option is gone from 1.17 on, but on this line the client pauses its integrated server
+   * whenever the window is not focused — and a Minecheck run hides that window ({@code
+   * hideGameWindow}) and never focuses it. The world then loads and pauses in the same breath, so
+   * {@code isWorldReady} never turns true: every script that creates a world timed out with the
+   * world running behind a paused server.
+   */
+  void allowUnfocusedPlay() {
+    if (unfocusedPlayAllowed) {
+      return;
+    }
+    mc().options.pauseOnLostFocus = false;
+    unfocusedPlayAllowed = true;
+  }
+
   /**
    * True while the run's view window is on screen — the human's visible surface when the game's own
    * window is hidden. The camera accepts human input while this or the game's own window has focus.

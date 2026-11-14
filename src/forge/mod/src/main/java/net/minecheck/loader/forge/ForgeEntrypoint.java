@@ -160,6 +160,7 @@ public class ForgeEntrypoint {
     client.pinRenderTickDelta();
     client.pumpViewWindow();
     if (client.isBootComplete()) {
+      client.allowUnfocusedPlay();
       e.tick();
     }
   }
