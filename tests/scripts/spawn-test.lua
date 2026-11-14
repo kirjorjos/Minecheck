@@ -19,8 +19,19 @@ local function check(result, name)
   end
 end
 
+-- The harness generates the dedicated server's world with the flat preset (`level-type=flat`,
+-- layers from `tests/flat-world.json`): bedrock at -64, two layers of dirt, grass on top at -61, so
+-- the surface is SURFACE_Y. Everything
+-- below is written relative to it, so a version whose preset moves the ground moves the fixture with
+-- it instead of leaving the fixture inside the world.
+local SURFACE_Y = -60
+-- High enough above that surface that no terrain, tree or structure can be at the fixture's
+-- coordinates. The fixture clears its own volume below, so this is a choice of neighbourhood rather
+-- than a load-bearing height.
+local FIXTURE_Y = SURFACE_Y + 160
+
 -- entity (spawned with NoAI so it stands still, keeping all tests deterministic)
-local cow = minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = 100, z = 0.5 }, { NoAI = true })
+local cow = minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = FIXTURE_Y, z = 0.5 }, { NoAI = true })
 check(cow.success, "spawnEntity cow succeeded")
 check(cow.id ~= nil and cow.id > 0, "spawnEntity returned an entity id")
 local cowFound = minecheck.waitFor(function()
@@ -30,40 +41,39 @@ check(cowFound, "cow exists on the server")
 local cowNoAi = minecheck.runCommand("execute if entity @e[type=minecraft:cow,nbt={NoAI:1b}]")
 check(cowNoAi.result > 0, "cow has NoAI flag applied")
 
--- The coordinates below are fixed world positions, but the terrain under them is generated: on one
--- Minecraft version the spot is air and on another it is solid rock (1.18.1's world has ground above
--- y=100 at spawn), which made "a placement into air" refuse and the phase fail on a version change
--- rather than on a code change. Clear the volume once so the fixture starts from the state it says
--- it starts from, on every line.
-minecheck.runCommand("fill 0 99 0 12 104 12 minecraft:air")
+-- The fixture owns its volume: clear it once, so "the first placement goes into air" is a
+-- property of this script rather than of whatever worldgen or an earlier phase left at these
+-- coordinates.
+minecheck.runCommand("fill 0 " .. (FIXTURE_Y - 1) .. " 0 12 " .. (FIXTURE_Y + 4) .. " 12 minecraft:air")
 -- And wait until that volume answers a block query: on a fast join the server may not have the
--- spawn-region chunks loaded yet, and a placement into an unloaded chunk fails without saying why
--- (the run that exposed this had the player at y=-60, i.e. still falling while the phase ran).
+-- spawn-region chunks loaded yet, and a placement into an unloaded chunk fails without saying why.
 local volumeReady = minecheck.waitFor(function()
-  return minecheck.runCommand("execute if block 5 100 5 minecraft:air").result == 1
+  return minecheck.runCommand("execute if block 5 " .. FIXTURE_Y .. " 5 minecraft:air").result == 1
 end, 120)
 if not volumeReady then
   minecheck.fail("the spawn volume never became air and loaded")
 end
 
 -- block (first placement into air succeeds; a second without replace must refuse)
-local stone = minecheck.spawnBlock("minecraft:stone", { x = 5, y = 100, z = 5 })
+local BX, BZ = 5, 5
+local function blockAtIs(block)
+  return minecheck.runCommand("execute if block " .. BX .. " " .. FIXTURE_Y .. " " .. BZ .. " " .. block).result == 1
+end
+
+local stone = minecheck.spawnBlock("minecraft:stone", { x = BX, y = FIXTURE_Y, z = BZ })
 check(stone.success, "spawnBlock stone succeeded")
-local stoneThere = minecheck.runCommand("execute if block 5 100 5 minecraft:stone")
-check(stoneThere.result == 1, "stone block is at 5 100 5")
+check(blockAtIs("minecraft:stone"), "stone block is at the fixture position")
 
-local occupied = minecheck.spawnBlock("minecraft:dirt", { x = 5, y = 100, z = 5 })
+local occupied = minecheck.spawnBlock("minecraft:dirt", { x = BX, y = FIXTURE_Y, z = BZ })
 check(not occupied.success, "spawnBlock without replace refuses an occupied position")
-local stillStone = minecheck.runCommand("execute if block 5 100 5 minecraft:stone")
-check(stillStone.result == 1, "occupied block was not overwritten")
+check(blockAtIs("minecraft:stone"), "occupied block was not overwritten")
 
-local replaced = minecheck.spawnBlock("minecraft:dirt", { x = 5, y = 100, z = 5 }, {}, true)
+local replaced = minecheck.spawnBlock("minecraft:dirt", { x = BX, y = FIXTURE_Y, z = BZ }, {}, true)
 check(replaced.success, "spawnBlock with replace=true overwrites")
-local nowDirt = minecheck.runCommand("execute if block 5 100 5 minecraft:dirt")
-check(nowDirt.result == 1, "block was replaced with dirt")
+check(blockAtIs("minecraft:dirt"), "block was replaced with dirt")
 
 -- item drop
-local diamond = minecheck.spawnItemDrop("minecraft:diamond", { x = 0.5, y = 102, z = 0.5 }, 3)
+local diamond = minecheck.spawnItemDrop("minecraft:diamond", { x = 0.5, y = FIXTURE_Y + 2, z = 0.5 }, 3)
 check(diamond.success, "spawnItemDrop diamond succeeded")
 check(diamond.id ~= nil and diamond.id > 0, "spawnItemDrop returned an entity id")
 local itemFound = minecheck.waitFor(function()
@@ -73,7 +83,7 @@ end, 5)
 check(itemFound, "diamond item drop exists on the server")
 
 -- structure
-local igloo = minecheck.spawnStructure("minecraft:igloo/top", { x = 10, y = 100, z = 10 })
+local igloo = minecheck.spawnStructure("minecraft:igloo/top", { x = 10, y = FIXTURE_Y, z = 10 })
 check(igloo.success, "spawnStructure igloo/top succeeded")
 
 -- A phase leaves the session running: the coordinator owns the player-leave wait and the stop (see
