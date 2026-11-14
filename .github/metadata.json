@@ -1,9 +1,4 @@
-{
-  "loaders": [
-    "fabric",
-    "forge",
-    "quilt"
-  ],
+{  "loaders": ["fabric", "forge"],
   "release": {
     "prefix": "MineCheck-",
     "nameFormat": "{loader}-{mc}-{version}{deobf}.jar",

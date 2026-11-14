@@ -20,20 +20,14 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "10.2.1.1002"
-val reiVersion = "8.4.778+forge"
-
-// REI's mods.toml makes both mandatory (`architectury`, `cloth_config`), left implicit on 1.18.2.
-// Both are taken from their authors' own mavens rather than Modrinth: a Modrinth version there
-// carries a Fabric and a Forge file, and the primary file — the one a bare coordinate resolves to —
-// is the Fabric jar, which FML then rejects as "cloth_config not installed".
-val clothConfigVersion = "6.5.102"
-val architecturyVersion = "4.12.94"
+// JEI's 9.4 line is the last that declares 1.18.1, and it is the only viewer that ships for the
+// version: EMI and REI publish no 1.18.1 build.
+val jeiVersion = "9.4.1.276"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("40.3.12") }
+  minecraftForge { loader("39.1.0") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -41,8 +35,6 @@ unimined.minecraft {
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
-  maven("https://maven.shedaniel.me/") { content { includeGroup("me.shedaniel.cloth") } }
-  maven("https://maven.architectury.dev/") { content { includeGroup("dev.architectury") } }
 }
 
 tasks.processResources {
@@ -83,16 +75,7 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  // EMI has no Forge artifact on 1.18.2 (Modrinth lists it for fabric/quilt only), so the Forge
-  // module is bridged against JEI/REI alone.
-  add("modImplementation", "mezz.jei:jei-1.18.2-forge:$jeiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
-  add("modImplementation", "me.shedaniel.cloth:cloth-config-forge:$clothConfigVersion") {
-    isTransitive = false
-  }
-  add("modImplementation", "dev.architectury:architectury-forge:$architecturyVersion") {
-    isTransitive = false
-  }
+  add("modImplementation", "mezz.jei:jei-1.18.1:$jeiVersion") { isTransitive = false }
 }
 
 tasks.shadowJar {

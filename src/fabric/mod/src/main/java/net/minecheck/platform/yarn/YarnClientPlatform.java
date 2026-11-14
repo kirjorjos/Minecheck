@@ -25,11 +25,11 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.structure.StructureSet;
 import net.minecraft.text.Text;
 import net.minecraft.text.TranslatableText;
 import net.minecraft.util.registry.DynamicRegistryManager;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.util.registry.SimpleRegistry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
@@ -769,16 +769,14 @@ public class YarnClientPlatform implements ClientPlatform {
     MinecraftClient mc = mc();
     onClientThread(
         () -> {
-          DynamicRegistryManager.Immutable registryManager =
-              DynamicRegistryManager.createAndLoad().toImmutable();
-          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
-          // have built, dropped into the default dimension set in place of the noise overworld.
+          // 1.18.1 has neither the world-preset registry nor the structure-set registry 1.18.2
+          // added: the flat preset is the generator the preset would have built, dropped into the
+          // default dimension set in place of the noise overworld.
+          DynamicRegistryManager.Impl registryManager = DynamicRegistryManager.create();
           Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
-          Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
           FlatChunkGenerator flat =
-              new FlatChunkGenerator(
-                  structureSets, FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets));
-          Registry<DimensionOptions> dimensions =
+              new FlatChunkGenerator(FlatChunkGeneratorConfig.getDefaultConfig(biomes));
+          SimpleRegistry<DimensionOptions> dimensions =
               GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
                   registryManager.get(Registry.DIMENSION_TYPE_KEY),
                   GeneratorOptions.getDefaultOptions(registryManager).getDimensions(),
@@ -959,7 +957,7 @@ public class YarnClientPlatform implements ClientPlatform {
    */
   private InputUtil.Key resolveKey(String key) {
     if (key.startsWith("key.")) {
-      for (KeyBinding binding : mc().options.allKeys) {
+      for (KeyBinding binding : mc().options.keysAll) {
         if (binding.getTranslationKey().equals(key)) {
           try {
             String bound = binding.getBoundKeyTranslationKey();
