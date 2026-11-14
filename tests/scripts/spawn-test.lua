@@ -30,6 +30,22 @@ check(cowFound, "cow exists on the server")
 local cowNoAi = minecheck.runCommand("execute if entity @e[type=minecraft:cow,nbt={NoAI:1b}]")
 check(cowNoAi.result > 0, "cow has NoAI flag applied")
 
+-- The coordinates below are fixed world positions, but the terrain under them is generated: on one
+-- Minecraft version the spot is air and on another it is solid rock (1.18.1's world has ground above
+-- y=100 at spawn), which made "a placement into air" refuse and the phase fail on a version change
+-- rather than on a code change. Clear the volume once so the fixture starts from the state it says
+-- it starts from, on every line.
+minecheck.runCommand("fill 0 99 0 12 104 12 minecraft:air")
+-- And wait until that volume answers a block query: on a fast join the server may not have the
+-- spawn-region chunks loaded yet, and a placement into an unloaded chunk fails without saying why
+-- (the run that exposed this had the player at y=-60, i.e. still falling while the phase ran).
+local volumeReady = minecheck.waitFor(function()
+  return minecheck.runCommand("execute if block 5 100 5 minecraft:air").result == 1
+end, 120)
+if not volumeReady then
+  minecheck.fail("the spawn volume never became air and loaded")
+end
+
 -- block (first placement into air succeeds; a second without replace must refuse)
 local stone = minecheck.spawnBlock("minecraft:stone", { x = 5, y = 100, z = 5 })
 check(stone.success, "spawnBlock stone succeeded")
