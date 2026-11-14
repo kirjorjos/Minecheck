@@ -1,6 +1,7 @@
 package net.minecheck.mixin.mojmap;
 
 import com.mojang.blaze3d.audio.Library;
+import java.nio.ByteBuffer;
 import net.minecheck.common.config.AudioPolicy;
 import net.minecraftforge.fml.loading.FMLPaths;
 import org.lwjgl.openal.ALC10;
@@ -30,8 +31,8 @@ public class SoundEngineMixin {
       at =
           @At(
               value = "INVOKE",
-              target = "Lorg/lwjgl/openal/ALC10;alcOpenDevice(Ljava/lang/CharSequence;)J"))
-  private static long minecheck$neverOpenAudioDevice(CharSequence device) {
+              target = "Lorg/lwjgl/openal/ALC10;alcOpenDevice(Ljava/nio/ByteBuffer;)J"))
+  private static long minecheck$neverOpenAudioDevice(ByteBuffer device) {
     if (AudioPolicy.muted(FMLPaths.CONFIGDIR.get())) {
       return 0L;
     }

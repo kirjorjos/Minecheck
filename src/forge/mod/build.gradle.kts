@@ -28,6 +28,21 @@ unimined.minecraft {
   defaultRemapJar = false
 }
 
+// Unimined pins a 1.16.5 run to Java 8 from the version metadata, but this mod is compiled for 17
+// (its
+// mixin config asks for compatibility level JAVA_17), and a Java 8 JVM can load neither class file
+// 61
+// nor that mixin level — the client died in MixinBootstrap with "Java 1.8, ASM 9.6". The same probe
+// that moved the yarn runs to 17 booted this line's Forge servers on it too.
+val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(17)
+
+tasks
+  .matching { it.name == "runClient" || it.name == "runServer" }
+  .configureEach {
+    (this as? xyz.wagyourtail.unimined.api.runs.RunConfig)?.javaVersion =
+      JavaVersion.toVersion(runJavaVersion.get())
+  }
+
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
