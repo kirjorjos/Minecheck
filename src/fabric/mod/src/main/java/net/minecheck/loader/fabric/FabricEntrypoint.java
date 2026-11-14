@@ -21,9 +21,6 @@ import net.minecheck.platform.api.RecipeViewer;
 import net.minecheck.platform.api.RecipeViewers;
 import net.minecheck.platform.api.ServerPlatform;
 import net.minecheck.platform.api.net.NetworkPlatform;
-import net.minecheck.platform.yarn.EmiRecipeViewer;
-import net.minecheck.platform.yarn.JeiRecipeViewer;
-import net.minecheck.platform.yarn.ReiRecipeViewer;
 import net.minecheck.platform.yarn.YarnClientNetworkPlatform;
 import net.minecheck.platform.yarn.YarnClientPlatform;
 import net.minecheck.platform.yarn.YarnServerNetworkPlatform;
@@ -49,17 +46,9 @@ public class FabricEntrypoint implements ModInitializer {
     final YarnServerNetworkPlatform serverNetwork = server ? new YarnServerNetworkPlatform() : null;
     final NetworkPlatform network = server ? serverNetwork : new YarnClientNetworkPlatform();
 
+    // No recipe viewer ships for 1.16.5 on Fabric (EMI and REI publish nothing for it, JEI's
+    // Fabric line starts at 1.18.2), so the list is empty and recipeViewer() resolves to null.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!server && loader.isModLoaded("emi")) {
-      viewers.add(new EmiRecipeViewer());
-    }
-    if (!server && loader.isModLoaded("jei")) {
-      viewers.add(new JeiRecipeViewer());
-    }
-    // REI's mod id is `roughlyenoughitems`; the provider reports the short id `rei`.
-    if (!server && loader.isModLoaded("roughlyenoughitems")) {
-      viewers.add(new ReiRecipeViewer());
-    }
 
     PlatformServices services =
         new PlatformServices() {

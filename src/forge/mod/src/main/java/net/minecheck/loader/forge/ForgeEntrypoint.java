@@ -49,16 +49,9 @@ public class ForgeEntrypoint {
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
-    // No EMI bridge on Forge: EMI 1.18.2 ships for Fabric and Quilt only, so the viewer list here
-    // is JEI and REI. The Lua API is the same on every loader.
+    // No recipe viewer is bridged on 1.16.5: EMI and REI publish nothing for it, and JEI's 7.x
+    // line predates the API these bridges were written against. The Lua API is unchanged.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("jei")) {
-      viewers.add(new ForgeJeiRecipeViewer());
-    }
-    // REI's mod id is `roughlyenoughitems`; the provider reports the short id `rei`.
-    if (!dedicated && ModList.get().isLoaded("roughlyenoughitems")) {
-      viewers.add(new ForgeReiRecipeViewer());
-    }
 
     PlatformServices services =
         new PlatformServices() {
