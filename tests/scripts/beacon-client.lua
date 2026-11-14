@@ -179,10 +179,18 @@ end
 -- EMI ships no Forge build for 1.18.2, so the priority there is JEI. The assertions name whichever
 -- one this loader actually has.
 local emiInstalled = minecheck.isModLoaded("emi")
+-- Not every version can host a viewer: 1.18.1's Fabric has no JEI, EMI or REI artifact at all, so
+-- the bridge correctly reports none and the viewer content checks below are skipped.
+local anyViewerInstalled = emiInstalled or minecheck.isModLoaded("jei") or minecheck.isModLoaded("roughlyenoughitems")
 local priorityId = emiInstalled and "emi" or "jei"
 local viewer = minecheck.recipeViewer()
-check(viewer ~= nil, "priority recipe viewer bridged")
-check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
+if anyViewerInstalled then
+  check(viewer ~= nil, "priority recipe viewer bridged")
+  check(
+    viewer ~= nil and viewer.id == priorityId,
+    "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer and viewer.id) .. ")"
+  )
+end
 check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
 
 if emiInstalled then
@@ -327,56 +335,58 @@ check(
   "server gave 4 oak planks"
 )
 
--- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
--- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
--- background thread and is still filling it when the script gets here (see the note at the top of
--- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
--- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
--- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
-local indexed = minecheck.waitFor(function()
-  return #minecheck.getRecipeSlots("minecraft:stick") > 0
-end, 30)
-if not indexed then
-  minecheck.runCommand("reload")
-  minecheck.waitFor(function()
+if anyViewerInstalled then
+  -- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
+  -- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
+  -- background thread and is still filling it when the script gets here (see the note at the top of
+  -- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
+  -- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
+  -- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
+  local indexed = minecheck.waitFor(function()
     return #minecheck.getRecipeSlots("minecraft:stick") > 0
   end, 30)
-end
-
-local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
-check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
-check(
-  minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 10, 1, "inventory") == false,
-  "an unknown recipe resolves to no source slot"
-)
-if plankGhost ~= nil then
-  local source = slotHolding("minecraft:oak_planks")
-  local dest = nil
-  for i = hotbarStart(), hotbarStart() + 8 do
-    local s = minecheck.getSlot(i, "inventory")
-    if s ~= nil and s.empty and i ~= source then
-      dest = i
-      break
-    end
+  if not indexed then
+    minecheck.runCommand("reload")
+    minecheck.waitFor(function()
+      return #minecheck.getRecipeSlots("minecraft:stick") > 0
+    end, 30)
   end
-  check(source ~= nil and dest ~= nil, "plank source and an empty destination slot found")
 
-  local okGhostDest = pcall(function()
-    minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "inventory")
-  end)
-  check(okGhostDest == false, "naming a ghost slot as the destination raises")
-
+  local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
+  check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
   check(
-    minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "inventory"),
-    "moveItem took the recipe's ingredient out of the container"
+    minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 10, 1, "inventory") == false,
+    "an unknown recipe resolves to no source slot"
   )
-  local landed = minecheck.waitFor(function()
-    local s = minecheck.getSlot(dest, "inventory")
-    return s ~= nil and not s.empty and s.id == "minecraft:oak_planks" and s.count == 1
-  end, 10)
-  check(landed, "1 oak plank landed in the destination slot")
-  check(minecheck.getSlot(source, "inventory").count == 3, "the other 3 planks stayed in the source")
-  check(countInInventory("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
+  if plankGhost ~= nil then
+    local source = slotHolding("minecraft:oak_planks")
+    local dest = nil
+    for i = hotbarStart(), hotbarStart() + 8 do
+      local s = minecheck.getSlot(i, "inventory")
+      if s ~= nil and s.empty and i ~= source then
+        dest = i
+        break
+      end
+    end
+    check(source ~= nil and dest ~= nil, "plank source and an empty destination slot found")
+
+    local okGhostDest = pcall(function()
+      minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "inventory")
+    end)
+    check(okGhostDest == false, "naming a ghost slot as the destination raises")
+
+    check(
+      minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "inventory"),
+      "moveItem took the recipe's ingredient out of the container"
+    )
+    local landed = minecheck.waitFor(function()
+      local s = minecheck.getSlot(dest, "inventory")
+      return s ~= nil and not s.empty and s.id == "minecraft:oak_planks" and s.count == 1
+    end, 10)
+    check(landed, "1 oak plank landed in the destination slot")
+    check(minecheck.getSlot(source, "inventory").count == 3, "the other 3 planks stayed in the source")
+    check(countInInventory("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
+  end
 end
 
 -- A client resource reload (the F3+T reload) late in the session: mods that rebuild an index in a
