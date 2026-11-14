@@ -44,7 +44,19 @@ public class YarnServerPlatform implements ServerPlatform {
     if (s.isOnThread()) {
       return action.get();
     }
-    return s.submit(action).join();
+    // Not MinecraftServer#submit: 1.16.5 only inherits it from ThreadExecutor, and the runtime
+    // method lookup on the server class fails there. execute(Runnable) is the same seam without the
+    // signature that moved.
+    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
+    s.execute(
+        () -> {
+          try {
+            done.complete(action.get());
+          } catch (Throwable t) {
+            done.completeExceptionally(t);
+          }
+        });
+    return done.join();
   }
 
   private ServerWorld overworld() {
