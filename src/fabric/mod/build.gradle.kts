@@ -45,6 +45,9 @@ repositories {
 // fabric.mod.json is templated so the version range cannot drift from gradle.properties; without
 // this the placeholders reach the loader verbatim and every dev run dies at mod discovery.
 tasks.processResources {
+  // The one declaration of the flat world (also written into the dedicated server's
+  // `generator-settings` by the lifecycle plugin), parsed by FlatWorldSettings at world creation.
+  from(rootProject.file("tests/flat-world.json"))
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
   filesMatching("fabric.mod.json") {

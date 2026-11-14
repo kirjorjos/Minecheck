@@ -20,15 +20,19 @@ import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.integrated.IntegratedServerLoader;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.structure.StructureSet;
 import net.minecraft.util.registry.DynamicRegistryManager;
 import net.minecraft.util.registry.Registry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
+import net.minecraft.world.biome.Biome;
+import net.minecraft.world.dimension.DimensionOptions;
 import net.minecraft.world.gen.GeneratorOptions;
 import net.minecraft.world.gen.WorldPreset;
 import net.minecraft.world.gen.WorldPresets;
+import net.minecraft.world.gen.chunk.FlatChunkGenerator;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
@@ -763,10 +767,26 @@ public class YarnClientPlatform implements ClientPlatform {
         () -> {
           DynamicRegistryManager.Immutable registryManager =
               DynamicRegistryManager.createAndLoad().toImmutable();
-          WorldPreset flat =
+          // The flat preset supplies the seed, the structure flag and the dimension set; its
+          // overworld generator is replaced with one built from the shared declaration in
+          // tests/flat-world.json, which the harness also gives the dedicated server as
+          // `generator-settings`, so both sides build the same surface.
+          Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
+          Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
+          FlatChunkGenerator flat =
+              new FlatChunkGenerator(
+                  structureSets, FlatWorldSettings.config(biomes, structureSets));
+          WorldPreset preset =
               registryManager.get(Registry.WORLD_PRESET_KEY).getOrThrow(WorldPresets.FLAT);
+          Registry<DimensionOptions> dimensions =
+              GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
+                  registryManager.get(Registry.DIMENSION_TYPE_KEY),
+                  preset
+                      .createGeneratorOptions(options.seed(), options.structures(), false)
+                      .getDimensions(),
+                  flat);
           GeneratorOptions generatorOptions =
-              flat.createGeneratorOptions(options.seed(), options.structures(), false);
+              new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
           mc.createIntegratedServerLoader()
               .createAndStart(options.name(), levelInfo, registryManager, generatorOptions);
         });
