@@ -80,10 +80,10 @@ final class FlatWorldSettings {
     Biome biome = biomes.get(new Identifier(declared.biome));
     return new FlatChunkGeneratorConfig(
         biomes,
-        new StructuresConfig(false),
+        new StructuresConfig(Optional.empty(), java.util.Map.of()),
         layers,
         false,
         false,
-        biome == null ? Optional.empty() : Optional.of(() -> biome));
+        Optional.empty());
   }
 }
