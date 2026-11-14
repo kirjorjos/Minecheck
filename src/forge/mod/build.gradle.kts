@@ -416,6 +416,9 @@ tasks.register("devHelperServerLaunch") {
 // mods.toml declares the mod version; expand it from the project version so the metadata
 // tracks the release rather than a hand-maintained literal.
 tasks.processResources {
+  // The one declaration of the flat world (also written into the dedicated server's
+  // `generator-settings` by the lifecycle plugin), parsed by FlatWorldSettings at world creation.
+  from(rootProject.file("tests/flat-world.json"))
   inputs.property("modVersion", project.version)
   filesMatching("META-INF/mods.toml") {
     expand(
