@@ -34,9 +34,13 @@ class ScriptEngineTest {
 
   /** Fake client: a join completes after {@code joinTicks} isInWorld() calls. */
   static final class FakeClient implements ClientPlatform {
+    Integer groundY = 64;
+    String groundArgs;
+
     @Override
     public Integer groundHeight(int x, int z) {
-      return 64;
+      groundArgs = x + "|" + z;
+      return groundY;
     }
 
     int joinTicks = 3;
@@ -531,9 +535,13 @@ class ScriptEngineTest {
 
   /** Fake server: an online player can be added/removed by the test. */
   static final class FakeServer implements ServerPlatform {
+    Integer groundY = 64;
+    String groundArgs;
+
     @Override
     public Integer groundHeight(int x, int z) {
-      return 64;
+      groundArgs = x + "|" + z;
+      return groundY;
     }
 
     java.util.Set<String> online = new java.util.HashSet<>();
@@ -1333,6 +1341,53 @@ class ScriptEngineTest {
     assertTrue(engine.isFinished());
     assertFalse(engine.isFailed());
     assertEquals(java.util.List.of("stop"), server.commands);
+  }
+
+  @Test
+  void groundHeightReadsTheClientHeightmap() throws Exception {
+    FakeClient client = new FakeClient();
+    client.groundY = -60;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.groundHeight(0, 0) == -60, 'expected the client heightmap')\n");
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals("0|0", client.groundArgs);
+  }
+
+  @Test
+  void groundHeightAnswersNilForAnUnloadedColumnAndFloorsItsArguments() throws Exception {
+    FakeClient client = new FakeClient();
+    client.groundY = null;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.groundHeight(4.9, -7.2) == nil, 'an unloaded column has no height')\n");
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals("4|-8", client.groundArgs);
+  }
+
+  @Test
+  void groundHeightReadsTheServerHeightmapOnADedicatedServer() throws Exception {
+    FakeServer server = new FakeServer();
+    server.groundY = 4;
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        serverEngine(
+            server,
+            ConfigData.defaults(),
+            "assert(minecheck.groundHeight(0, 0) == 4, 'expected the server heightmap')\n",
+            clock);
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals("0|0", server.groundArgs);
   }
 
   @Test
