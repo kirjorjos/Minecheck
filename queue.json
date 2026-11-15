@@ -1,20 +1,5 @@
 {
-  "entries": [
-    {
-      "compare": "1.19.2/development",
-      "enqueued_at": "2026-11-15T04:26:26Z",
-      "fork": false,
-      "head_repo": "kirjorjos/Minecheck",
-      "id": "e-60",
-      "kind": "pr",
-      "overtaken": 0,
-      "pr": "169",
-      "seq": 60,
-      "sha": "9d60c5d12491c155957edd2ce6622f9c24bec599",
-      "target": "1.19.2/development",
-      "tier": 0
-    }
-  ],
+  "entries": [],
   "holder": null,
   "last_runs": {
     "100": {
