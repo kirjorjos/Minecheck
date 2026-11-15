@@ -24,6 +24,9 @@ check(minecheck.loadChunk(0, 0), "the marker's column is force-loaded")
 local SURFACE_Y = minecheck.groundHeight(0, 0)
 check(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
+minecheck.observe("surfaceY", SURFACE_Y)
+minecheck.observe("markerY", MARKER_Y)
+minecheck.observe("markerChunkLoaded", minecheck.isChunkLoaded(0, 0))
 
 -- `runCommand` reports `success` for "the command ran", not for "the condition held": a
 -- conditional `execute if` that fails — or that runs against a chunk the server has not loaded yet

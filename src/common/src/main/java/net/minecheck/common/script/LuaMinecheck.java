@@ -100,6 +100,7 @@ public final class LuaMinecheck {
 
     // Assertions / result reporting
     minecheck.set("expect", new Expect());
+    minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
     // Utilities
@@ -806,6 +807,25 @@ public final class LuaMinecheck {
   }
 
   // ------------------------------------------------------------ assertions / result reporting
+
+  /**
+   * minecheck.observe(name, value) -> nil
+   *
+   * <p>Records a named value into the run result's {@code observations} map, for a suite that
+   * compares what the run measured against a committed baseline (e.g. the handoff suite's surface
+   * height and marker height). Unlike {@code expect} it carries no verdict: the suite decides what
+   * the value must be. Numbers and booleans are written in their Lua text form ({@code 4}, {@code
+   * true}); a later call with the same name replaces the earlier value.
+   */
+  private final class Observe extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      if (engine != null) {
+        engine.recordObservation(args.arg1().checkjstring(), args.arg(2).tojstring());
+      }
+      return LuaValue.NIL;
+    }
+  }
 
   /**
    * minecheck.expect(cond, name) -> boolean
