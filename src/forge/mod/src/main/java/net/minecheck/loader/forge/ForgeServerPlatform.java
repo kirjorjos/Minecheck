@@ -189,7 +189,9 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           ServerLevel level = overworld();
-          if (!level.isLoaded(new BlockPos(x, 0, z))) {
+          // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a
+          // height" is a property of the loaded chunk, not of one block in it.
+          if (!level.hasChunk(x >> 4, z >> 4)) {
             return null;
           }
           return level.getHeight(
