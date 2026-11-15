@@ -1334,6 +1334,8 @@ Where a player standing on block column `(x, z)` would stand: the y of the **fir
 
 **Returns** the integer y, or `nil` when that column's chunk is not loaded — the client has not been sent it, or the server has not loaded it. That is the same "no answer yet" `getBlock` reports, and it is polled the same way: wait until the read is non-`nil` before using the number.
 
+**A freshly delivered chunk can answer `0` before its heightmap is primed** — the forge client does this for a tick or two after a chunk arrives, while a dedicated server has its chunks primed as it generates them. `0` is not a surface in a world whose layers start at `0` or `-64`, so wait for a non-zero height instead of taking the first number; the handoff suite does exactly that.
+
 ```lua
 local surface = minecheck.groundHeight(0, 0)
 minecheck.expect(surface ~= nil, "the fixture's column is loaded")
