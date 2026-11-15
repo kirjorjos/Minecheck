@@ -1469,6 +1469,40 @@ class ScriptEngineTest {
   }
 
   @Test
+  void waitForChunkYieldsUntilTheClientHasTheChunk() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.waitForChunk(0, 0, 5), 'chunk never arrived')\n");
+    engine.tick(); // polls once, not there yet -> yields
+    assertFalse(engine.isFinished(), "a missing chunk waits, it does not answer inline");
+    client.chunkLoaded = true;
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals("0|0", client.chunkArgs);
+  }
+
+  @Test
+  void waitForChunkReturnsFalseOnTimeout() throws Exception {
+    FakeClient client = new FakeClient();
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(not minecheck.waitForChunk(0, 0, 1), 'a chunk that never arrives is no timeout')\n",
+            clock);
+    engine.tick();
+    clock.addAndGet(2000); // past the 1s budget
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+  }
+
+  @Test
   void waitForPlayerBlocksUntilJoin() throws Exception {
     FakeServer server = new FakeServer();
     AtomicLong clock = new AtomicLong(0);
