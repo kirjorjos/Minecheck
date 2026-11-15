@@ -1177,7 +1177,9 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.level == null) {
       throw new IllegalStateException("not in a world");
     }
-    if (!mc.level.isLoaded(new net.minecraft.core.BlockPos(x, 0, z))) {
+    // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a height"
+    // is a property of the loaded chunk, not of one block in it.
+    if (!mc.level.hasChunk(x >> 4, z >> 4)) {
       return null;
     }
     return mc.level.getHeight(
