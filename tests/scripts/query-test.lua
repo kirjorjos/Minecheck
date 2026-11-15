@@ -61,10 +61,13 @@ for _, e in pairs(minecheck.findEntities()) do
 end
 check(px ~= nil, "joined player is findable with a position")
 
--- The dedicated server runs the harness's flat world (`tests/flat-world.json`): bedrock at -64,
--- grass on top at -61, so the standing surface is SURFACE_Y. The probe below measures the surface rather than assuming the
--- player's own feet and stops at SURFACE_Y, so a preset that moves the ground moves the floor of the
--- scan with it.
+-- The dedicated server runs the harness's flat world (`tests/flat-world.json`): four layers counted
+-- up from the bottom of the world — bedrock, two of dirt, grass — so the standing surface is the top
+-- of that stack. Where the bottom sits depends on the line: 1.18 starts the layers at -64 and tops
+-- out at -60, while 1.16.5 has no negative Y at all. The probe below therefore measures the surface
+-- rather than assuming it, scanning down from the player's own feet and stopping at SURFACE_Y, a
+-- floor below every line's surface, so a preset that moves the ground moves what the scan finds
+-- instead of the floor.
 local SURFACE_Y = -60
 
 local bx = math.floor(px) + 2

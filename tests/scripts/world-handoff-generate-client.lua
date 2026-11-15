@@ -8,9 +8,11 @@
 -- Leave behind something a *freshly generated* server world could not have — a marker block at a
 -- fixed position — so the server script can prove which world it is actually running.
 --
--- The world this client creates is flat: bedrock at -64, grass on top at -61, so the surface is
--- SURFACE_Y. The marker sits well above it, where the generator leaves air. The other two handoff
--- scripts read the same height; keep the three in step.
+-- The world this client creates is flat, from that same layer declaration: the surface is the top
+-- of a stack counted up from the bottom of the world, so its height is the line's own — -60 where
+-- the layers start at -64, as on 1.18, and higher on 1.16.5, which starts them at y=0. The marker
+-- sits well above SURFACE_Y, where the generator leaves air on either. The other two handoff scripts
+-- read the same height; keep the three in step.
 local SURFACE_Y = -60
 local MARKER_Y = SURFACE_Y + 160
 

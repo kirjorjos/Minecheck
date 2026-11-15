@@ -20,10 +20,10 @@ local function check(result, name)
 end
 
 -- The harness generates the dedicated server's world with the flat preset (`level-type=flat`,
--- layers from `tests/flat-world.json`): bedrock at -64, two layers of dirt, grass on top at -61, so
--- the surface is SURFACE_Y. Everything
--- below is written relative to it, so a version whose preset moves the ground moves the fixture with
--- it instead of leaving the fixture inside the world.
+-- layers from `tests/flat-world.json`): bedrock, two layers of dirt and grass on top, counted up
+-- from the bottom of the world. SURFACE_Y is that stack's top where the layers start at -64, as on
+-- the 1.18 line (-60); 1.16.5 starts them at y=0, so its surface is higher and everything below is
+-- written relative to the same number it still clears.
 local SURFACE_Y = -60
 -- High enough above that surface that no terrain, tree or structure can be at the fixture's
 -- coordinates. The fixture clears its own volume below, so this is a choice of neighbourhood rather
