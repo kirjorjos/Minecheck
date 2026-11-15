@@ -34,6 +34,11 @@ class ScriptEngineTest {
 
   /** Fake client: a join completes after {@code joinTicks} isInWorld() calls. */
   static final class FakeClient implements ClientPlatform {
+    @Override
+    public Integer groundHeight(int x, int z) {
+      return 64;
+    }
+
     int joinTicks = 3;
     int ticks = 0;
     boolean joining;
@@ -526,6 +531,11 @@ class ScriptEngineTest {
 
   /** Fake server: an online player can be added/removed by the test. */
   static final class FakeServer implements ServerPlatform {
+    @Override
+    public Integer groundHeight(int x, int z) {
+      return 64;
+    }
+
     java.util.Set<String> online = new java.util.HashSet<>();
     java.util.List<String> commands = new java.util.ArrayList<>();
 

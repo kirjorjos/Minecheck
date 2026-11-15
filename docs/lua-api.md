@@ -1324,6 +1324,24 @@ assert(below ~= nil and below.id == "minecraft:iron_block", "pyramid block under
 
 Client-only; calling it from a server script raises `"client-only function called on dedicated server"`.
 
+### `minecheck.groundHeight(x, z) → integer | nil`
+
+Where a player standing on block column `(x, z)` would stand: the y of the **first air block above the surface**, read from the vanilla `MOTION_BLOCKING` heightmap. Use it instead of a per-version constant — the harness's flat world tops out at -60 where its layers start at -64, and at 4 on 1.16.5, which has no negative Y at all.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `x`, `z` | number | Block column; non-integer values are floored. |
+
+**Returns** the integer y, or `nil` when that column's chunk is not loaded — the client has not been sent it, or the server has not loaded it. That is the same "no answer yet" `getBlock` reports, and it is polled the same way: wait until the read is non-`nil` before using the number.
+
+```lua
+local surface = minecheck.groundHeight(0, 0)
+minecheck.expect(surface ~= nil, "the fixture's column is loaded")
+minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = surface + 1, z = 0.5 }, { NoAI = true })
+```
+
+Both sides: on the client it reads the client's heightmap (synced from the server, so only for chunks the client has), on a dedicated server the overworld's. Unlike [`getBlock`](#minecheckgetblockpos--table--nil) it is not client-only, which is what lets one fixture script run unchanged on every line.
+
 ### `minecheck.findNearbyEntities([type]) → table`
 
 **Client-only**, the client-side counterpart of [`findEntities`](#minecheckfindentitiestype-tag--table). Lists the entities the client currently knows about — the ones the server has synced into the client's loaded chunks, which is exactly what the local player can see and reach. Use it to *target* something: find it, aim at it with `lookAt`, then act (`press("key.attack")`, `mouse(1)`, …).
@@ -1658,7 +1676,7 @@ refused, and a missing file raises rather than silently doing nothing.
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
 | `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |

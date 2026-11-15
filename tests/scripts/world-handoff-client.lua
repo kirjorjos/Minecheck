@@ -2,11 +2,8 @@
 -- generated in phase A. The marker block is the proof: it only exists in that save, so a server
 -- that generated a world of its own would not have it.
 --
--- The world is the flat one the generating client built: surface at SURFACE_Y, marker well above it.
--- The same height is declared in world-handoff-generate-client.lua and world-handoff-server.lua.
-local SURFACE_Y = -60
-local MARKER_Y = SURFACE_Y + 160
-
+-- The world is the flat one the generating client built: the marker sits well above its surface, and
+-- the height is read from the joined world below rather than declared here.
 local joined = minecheck.joinServer("localhost:25565", 300)
 minecheck.expect(joined, "joined the server running the generated world")
 if not joined then
@@ -15,9 +12,20 @@ end
 
 minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "joined worldgen settled")
 
--- The same chunk-loading step as the generating client: this line's spawn is not at 0,0, and a
--- joined client only receives chunks around itself.
-minecheck.runCommand("tp @s 0.5 " .. (MARKER_Y + 2) .. " 0.5")
+-- A joined client only receives chunks around itself, and the marker's column is not at every
+-- line's spawn: step sideways onto 0,0 at the height the player already stands at (a flat world has
+-- the same ground there, so the move cannot drop them into it), which loads the column on both
+-- sides. Only then does the heightmap have an answer to read.
+minecheck.runCommand("tp @s 0.5 ~ 0.5")
+local SURFACE_Y = nil
+minecheck.expect(
+  minecheck.waitFor(function()
+    SURFACE_Y = minecheck.groundHeight(0, 0)
+    return SURFACE_Y ~= nil
+  end, 90),
+  "the marker's column is loaded, so its surface is known"
+)
+local MARKER_Y = SURFACE_Y + 160
 
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })

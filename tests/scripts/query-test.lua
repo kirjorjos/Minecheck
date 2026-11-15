@@ -64,14 +64,13 @@ check(px ~= nil, "joined player is findable with a position")
 -- The dedicated server runs the harness's flat world (`tests/flat-world.json`): four layers counted
 -- up from the bottom of the world — bedrock, two of dirt, grass — so the standing surface is the top
 -- of that stack. Where the bottom sits depends on the line: 1.18 starts the layers at -64 and tops
--- out at -60, while 1.16.5 has no negative Y at all. The probe below therefore measures the surface
--- rather than assuming it, scanning down from the player's own feet and stopping at SURFACE_Y, a
--- floor below every line's surface, so a preset that moves the ground moves what the scan finds
--- instead of the floor.
-local SURFACE_Y = -60
-
+-- out at -60, while 1.16.5 has no negative Y at all. The heightmap answers that per column, so the
+-- probe below scans down from the player's own feet and stops at the surface the world reports
+-- rather than at a height this script owns.
 local bx = math.floor(px) + 2
 local bz = math.floor(pz)
+local SURFACE_Y = minecheck.groundHeight(bx, bz)
+check(SURFACE_Y ~= nil, "the probe column is loaded, so its surface is known")
 local function isAir(x, y, z)
   return minecheck.runCommand("execute if block " .. x .. " " .. y .. " " .. z .. " minecraft:air").result == 1
 end
