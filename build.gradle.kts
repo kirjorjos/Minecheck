@@ -985,8 +985,12 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
  * / `f_12345_` for SRG), so a remapped jar contains those tokens and a dev jar contains none. No
  * member id is hardcoded, so it holds across Minecraft versions.
  */
+// 1.17 and later name their members `m_12345_` / `f_12345_`; the lines before them, 1.16.5 among
+// them, use `func_12345_a` / `field_12345_a`. Both spellings are SRG, so both count.
+val forgeProductionNames = Regex("(?:[mf]_[0-9]+_|(?:func|field)_[0-9]+_[a-zA-Z])")
+
 val productionNamespaces =
-  mapOf("fabric" to Regex("(?:method|field)_[0-9]+"), "forge" to Regex("[mf]_[0-9]+_"))
+  mapOf("fabric" to Regex("(?:method|field)_[0-9]+"), "forge" to forgeProductionNames)
 
 val checkProductionJars =
   tasks.register("checkProductionJars") {
