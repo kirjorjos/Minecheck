@@ -8,9 +8,11 @@
 -- Leave behind something a *freshly generated* server world could not have — a marker block at a
 -- fixed position — so the server script can prove which world it is actually running.
 --
--- The world this client creates is flat: bedrock at -64, grass on top at -61, so the surface is
--- SURFACE_Y. The marker sits well above it, where the generator leaves air. The other two handoff
--- scripts read the same height; keep the three in step.
+-- The world this client creates is flat, from that same layer declaration: the surface is the top
+-- of a stack counted up from the bottom of the world, so its height is the line's own — -60 where
+-- the layers start at -64, as on 1.18, and higher on 1.16.5, which starts them at y=0. The marker
+-- sits well above SURFACE_Y, where the generator leaves air on either. The other two handoff scripts
+-- read the same height; keep the three in step.
 local SURFACE_Y = -60
 local MARKER_Y = SURFACE_Y + 160
 
@@ -26,6 +28,10 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen set
 local placed = minecheck.runCommand("setblock 0 " .. MARKER_Y .. " 0 minecraft:gold_block")
 minecheck.expect(placed.success, "client placed the handoff marker") -- The block update reaches the client's own copy of the chunk a tick or two later, so this waits
 -- for what it can see rather than assuming the write was instantaneous.
+-- 1.16.5 spawns a new world's player away from 0,0 (measured at ~113,139), so the marker's chunk is
+-- not loaded on this client and the read below would see an unloaded chunk. Standing next to the
+-- marker loads it; the marker itself stays at the fixed coordinate the other two handoff scripts use.
+minecheck.runCommand("tp @s 0.5 " .. (MARKER_Y + 2) .. " 0.5")
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"
