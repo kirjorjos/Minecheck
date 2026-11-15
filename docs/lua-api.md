@@ -1368,7 +1368,19 @@ assert(minecheck.loadChunk(0, 0), "the fixture's chunk is loaded")
 local surface = minecheck.groundHeight(0, 0)
 ```
 
-A client cannot ask the server for a chunk — vanilla only sends the chunks inside the player's view distance — so calling this from a client raises rather than pretending. On a client, move the player near the column and wait on [`isChunkLoaded`](#minecheckischunkloadedchunkx-chunkz--boolean).
+A client cannot ask the server for a chunk — vanilla only sends the chunks inside the player's view distance — so calling this from a client raises rather than pretending. On a client, move the player near the column and wait with [`waitForChunk`](#minecheckwaitforchunkchunkx-chunkz-timeout--boolean).
+
+### `minecheck.waitForChunk(chunkX, chunkZ, [timeout]) → boolean`
+
+Pauses until this side holds that chunk, polling [`isChunkLoaded`](#minecheckischunkloadedchunkx-chunkz--boolean) once per tick, and returns `false` on timeout. It is the client-side companion to `loadChunk`: after moving the player onto a column, this is the wait for the chunk to arrive, instead of hand-rolling `waitFor(function() return minecheck.isChunkLoaded(x, z) end)`.
+
+```lua
+minecheck.runCommand("tp @s 0.5 ~ 0.5") -- move onto the column; the move is what makes the server send it
+minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived from the server")
+local surface = minecheck.groundHeight(0, 0)
+```
+
+**Both sides**, like `isChunkLoaded`; on a dedicated server it simply waits for the chunk to be loaded. `timeout` defaults to `config.defaultTimeout`, as for [`waitFor`](#minecheckwaitforcondition-timeout--boolean).
 
 ### `minecheck.findNearbyEntities([type]) → table`
 
@@ -1704,7 +1716,7 @@ refused, and a missing file raises rather than silently doing nothing.
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` / `waitForChunk` | ✅ | ✅ | ✅ |
 | `loadChunk` (server: force-loads a chunk) | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
