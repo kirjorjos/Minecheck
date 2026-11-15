@@ -1383,6 +1383,24 @@ public final class LuaMinecheck {
               client.keyDown("key.inventory");
               globals.yield(LuaValue.NIL);
               client.keyUp("key.inventory");
+            } else if (id.equals("sign")) {
+              // A sign's editor is opened by the client itself: the block-use path does not reach
+              // it
+              // on every version, so asking for the screen directly is what keeps one script
+              // working
+              // across the lines. `clicked` stays true so the loop below never synthesizes a click.
+              if (pos.isnil()) {
+                return LuaValue.FALSE;
+              }
+              double[] p = parsePos(pos);
+              aimX = (int) Math.floor(p[0]);
+              aimY = (int) Math.floor(p[1]);
+              aimZ = (int) Math.floor(p[2]);
+              if (!client.openSignEditor(
+                  new net.minecheck.platform.api.BlockPosition(aimX, aimY, aimZ))) {
+                return LuaValue.FALSE;
+              }
+              clicked = true;
             } else if (!pos.isnil()) {
               double[] p = parsePos(pos);
               aimX = (int) Math.floor(p[0]);
