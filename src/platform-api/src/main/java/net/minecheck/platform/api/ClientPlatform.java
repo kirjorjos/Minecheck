@@ -278,6 +278,17 @@ public interface ClientPlatform {
   void useItemOnTarget();
 
   /**
+   * Open the sign editor for the sign block at {@code pos} — the screen a right-click on a placed
+   * sign opens. This is requested directly rather than synthesized as a click because the
+   * client-side use path does not reach the editor on every version (1.16.5's {@code
+   * AbstractSignBlock.onUse} only calls {@code SignBlockEntity.onActivate}, so nothing opens the
+   * screen). Saving the text still round-trips through the server, so the block entity's text is
+   * what proves the editor did real work. Returns {@code false} when {@code pos} holds no sign.
+   * Throws when not in a world.
+   */
+  boolean openSignEditor(BlockPosition pos);
+
+  /**
    * Click the currently open screen at scaled GUI coordinates ({@code 0..scaledWidth} / {@code
    * 0..scaledHeight}), dispatching {@code mouseClicked} directly to the screen (the same call the
    * mouse handler makes for screens). {@code button}: 0 = left, 1 = right, 2 = middle. Returns
@@ -541,7 +552,7 @@ public interface ClientPlatform {
    * True when a screen matching {@code screenId} is currently open. {@code screenId} selects which
    * screen must be open: {@code null}/{@code ""} accepts any container/handled screen, a known id
    * ({@code "inventory"}, {@code "beacon"}, {@code "chest"}, {@code "crafting"}, {@code "furnace"},
-   * {@code "chat"}) matches that screen class, and an unknown id never matches.
+   * {@code "sign"}, {@code "chat"}) matches that screen class, and an unknown id never matches.
    */
   boolean isScreenOpen(String screenId);
 

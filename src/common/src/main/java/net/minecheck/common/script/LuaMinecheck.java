@@ -1383,6 +1383,24 @@ public final class LuaMinecheck {
               client.keyDown("key.inventory");
               globals.yield(LuaValue.NIL);
               client.keyUp("key.inventory");
+            } else if (id.equals("sign")) {
+              // A sign's editor is opened by the client itself: the block-use path does not reach
+              // it
+              // on every version, so asking for the screen directly is what keeps one script
+              // working
+              // across the lines. `clicked` stays true so the loop below never synthesizes a click.
+              if (pos.isnil()) {
+                return LuaValue.FALSE;
+              }
+              double[] p = parsePos(pos);
+              aimX = (int) Math.floor(p[0]);
+              aimY = (int) Math.floor(p[1]);
+              aimZ = (int) Math.floor(p[2]);
+              if (!client.openSignEditor(
+                  new net.minecheck.platform.api.BlockPosition(aimX, aimY, aimZ))) {
+                return LuaValue.FALSE;
+              }
+              clicked = true;
             } else if (!pos.isnil()) {
               double[] p = parsePos(pos);
               aimX = (int) Math.floor(p[0]);
@@ -1436,7 +1454,7 @@ public final class LuaMinecheck {
    *
    * <p>Client: non-blocking check of whether a screen is open. No id (or {@code nil}) returns true
    * when any container screen is open; a known id ({@code "inventory"}, {@code "beacon"}, {@code
-   * "chest"}, {@code "crafting"}, {@code "furnace"}) only matches that screen.
+   * "chest"}, {@code "crafting"}, {@code "furnace"}, {@code "sign"}) only matches that screen.
    */
   private final class IsScreenOpen extends VarArgFunction {
     @Override
