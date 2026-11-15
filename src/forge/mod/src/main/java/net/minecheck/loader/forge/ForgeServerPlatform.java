@@ -198,6 +198,28 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    MinecraftServer s = server;
+    if (s == null) {
+      return false;
+    }
+    return onServerThread(() -> overworld().hasChunk(chunkX, chunkZ));
+  }
+
+  @Override
+  public boolean loadChunk(int chunkX, int chunkZ) {
+    return onServerThread(
+        () -> {
+          ServerLevel level = overworld();
+          // The same forced ticket `forceload add` sets, so the chunk stays loaded for the rest of
+          // the run; reading it through makes the load synchronous rather than a later tick.
+          level.setChunkForced(chunkX, chunkZ, true);
+          level.getChunk(chunkX, chunkZ);
+          return level.hasChunk(chunkX, chunkZ);
+        });
+  }
+
+  @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
     return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
   }

@@ -43,6 +43,15 @@ class ScriptEngineTest {
       return groundY;
     }
 
+    boolean chunkLoaded;
+    String chunkArgs;
+
+    @Override
+    public boolean isChunkLoaded(int chunkX, int chunkZ) {
+      chunkArgs = chunkX + "|" + chunkZ;
+      return chunkLoaded;
+    }
+
     int joinTicks = 3;
     int ticks = 0;
     boolean joining;
@@ -542,6 +551,21 @@ class ScriptEngineTest {
     public Integer groundHeight(int x, int z) {
       groundArgs = x + "|" + z;
       return groundY;
+    }
+
+    boolean chunkLoaded;
+    java.util.List<String> loadedChunks = new java.util.ArrayList<>();
+
+    @Override
+    public boolean isChunkLoaded(int chunkX, int chunkZ) {
+      return chunkLoaded;
+    }
+
+    @Override
+    public boolean loadChunk(int chunkX, int chunkZ) {
+      loadedChunks.add(chunkX + "|" + chunkZ);
+      chunkLoaded = true;
+      return true;
     }
 
     java.util.Set<String> online = new java.util.HashSet<>();
@@ -1388,6 +1412,60 @@ class ScriptEngineTest {
     assertTrue(engine.isFinished());
     assertFalse(engine.isFailed());
     assertEquals("0|0", server.groundArgs);
+  }
+
+  @Test
+  void isChunkLoadedReadsTheClientChunkManager() throws Exception {
+    FakeClient client = new FakeClient();
+    client.chunkLoaded = true;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.isChunkLoaded(2, -3), 'expected a loaded chunk')\n");
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals("2|-3", client.chunkArgs);
+  }
+
+  @Test
+  void isChunkLoadedIsFalseForAChunkTheClientLacks() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(not minecheck.isChunkLoaded(0, 0), 'an unsent chunk is not loaded')\n");
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+  }
+
+  @Test
+  void loadChunkForceLoadsOnTheServer() throws Exception {
+    FakeServer server = new FakeServer();
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        serverEngine(
+            server,
+            ConfigData.defaults(),
+            "assert(minecheck.loadChunk(0, 0), 'loadChunk failed')\n"
+                + "assert(minecheck.isChunkLoaded(0, 0), 'the chunk is loaded afterwards')\n",
+            clock);
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed());
+    assertEquals(java.util.List.of("0|0"), server.loadedChunks);
+  }
+
+  @Test
+  void loadChunkRaisesOnAClientBecauseItCannotRequestChunks() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine = engine(client, ConfigData.defaults(), "minecheck.loadChunk(0, 0)\n");
+    runUntilFinished(engine, 10);
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
   }
 
   @Test

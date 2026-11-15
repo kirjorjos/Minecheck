@@ -1207,6 +1207,12 @@ public class YarnClientPlatform implements ClientPlatform {
     return mc.world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
   }
 
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    MinecraftClient mc = mc();
+    return mc.world != null && mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override

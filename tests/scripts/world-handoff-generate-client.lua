@@ -25,16 +25,17 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen set
 -- A fresh world spawns its player away from 0,0 on 1.16.5 (measured at ~113,139), so the marker's
 -- column is not necessarily loaded on this client and its heightmap has no answer yet. Stepping
 -- sideways onto 0,0 at the height the player already stands at loads it on both sides — the ground
--- there is the same flat layer stack — and only then is the surface readable.
+-- there is the same flat layer stack. A client cannot request a chunk (`loadChunk` is server-only),
+-- so the move is the only lever and `isChunkLoaded` is how the read below knows it is safe.
 minecheck.runCommand("tp @s 0.5 ~ 0.5")
-local SURFACE_Y = nil
 minecheck.expect(
   minecheck.waitFor(function()
-    SURFACE_Y = minecheck.groundHeight(0, 0)
-    return SURFACE_Y ~= nil
+    return minecheck.isChunkLoaded(0, 0)
   end, 90),
-  "the marker's column is loaded, so its surface is known"
+  "the marker's chunk arrived from the server"
 )
+local SURFACE_Y = minecheck.groundHeight(0, 0)
+minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
 
 -- Cheats are on by default for a Minecheck-created world, so the client can set the marker itself.
