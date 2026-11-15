@@ -1271,8 +1271,9 @@ public class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     // Label matches beat class-name matches: the label is the same string on every loader, the
-    // class
-    // name is not (`Button` here, `ButtonWidget` on yarn).
+    // class name is not (`Button` here, `ButtonWidget` on yarn), and a mapping can name an inner
+    // class after its purpose too (`BeaconCancelButton` vs `CancelButton`), so the class form is a
+    // contains match.
     java.util.List<net.minecraft.client.gui.components.AbstractWidget> byLabel =
         new java.util.ArrayList<>();
     java.util.List<net.minecraft.client.gui.components.AbstractWidget> byClass =
@@ -1288,7 +1289,7 @@ public class ForgeClientPlatform implements ClientPlatform {
           .getClass()
           .getSimpleName()
           .toLowerCase(java.util.Locale.ROOT)
-          .equals(wanted)) {
+          .contains(wanted)) {
         byClass.add(widget);
       }
     }

@@ -1261,8 +1261,8 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     // Label matches beat class-name matches: the label is the same string on every loader, the
-    // class
-    // name is not (`ButtonWidget` here, `Button` on mojmap).
+    // class name is not (`ButtonWidget` here, `Button` on mojmap), and a mapping can name an inner
+    // class after its purpose too, so the class form is a contains match.
     java.util.List<net.minecraft.client.gui.widget.ClickableWidget> byLabel =
         new java.util.ArrayList<>();
     java.util.List<net.minecraft.client.gui.widget.ClickableWidget> byClass =
@@ -1274,7 +1274,7 @@ public class YarnClientPlatform implements ClientPlatform {
       String label = widget.getMessage().getString().trim().toLowerCase(Locale.ROOT);
       if (label.equals(wanted)) {
         byLabel.add(widget);
-      } else if (widget.getClass().getSimpleName().toLowerCase(Locale.ROOT).equals(wanted)) {
+      } else if (widget.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains(wanted)) {
         byClass.add(widget);
       }
     }

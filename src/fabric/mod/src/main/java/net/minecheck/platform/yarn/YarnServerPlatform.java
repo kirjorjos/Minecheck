@@ -80,9 +80,8 @@ public class YarnServerPlatform implements ServerPlatform {
   }
 
   private static <T> T requireRegistryEntry(Registry<T> registry, Identifier id, String what) {
-    if (!registry.containsId(id)) {
-      throw new IllegalArgumentException("unknown " + what + ": " + id);
-    }
+    // A null get is the answer: 1.16.5's Registry has no containsId on the interface, and
+    // calling it was a NoSuchMethodError at runtime rather than a compile error.
     T entry = registry.get(id);
     if (entry == null) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
@@ -134,6 +133,13 @@ public class YarnServerPlatform implements ServerPlatform {
     ServerWorld world = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (Entity entity : world.iterateEntities()) {
+      // 1.16.5 keeps an entity until the tick after it was removed, and a dying mob stays listed
+      // for
+      // its death animation. Neither is observable as present on a client, so neither is a match.
+      if (entity.removed
+          || (entity instanceof net.minecraft.entity.LivingEntity living && !living.isAlive())) {
+        continue;
+      }
       if (typeId != null && !Registry.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) {
         continue;
       }
