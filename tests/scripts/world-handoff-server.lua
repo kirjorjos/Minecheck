@@ -18,17 +18,11 @@ check(minecheck.waitForPlayer(player, 180), "player " .. player .. " joined the 
 check(minecheck.waitFor(minecheck.worldGenSettled, 180), "worldgen settled before the marker check")
 
 -- The marker's column is not necessarily the server's spawn column, and an unloaded chunk has no
--- height: move the player sideways onto 0,0 at the height they already stand at (the world is flat,
--- so nothing drops), which loads the column, then take the surface from the world.
-minecheck.runCommand("tp " .. player .. " 0.5 ~ 0.5")
-local SURFACE_Y = nil
-check(
-  minecheck.waitFor(function()
-    SURFACE_Y = minecheck.groundHeight(0, 0)
-    return SURFACE_Y ~= nil
-  end, 90),
-  "the marker's column is loaded, so its surface is known"
-)
+-- height: force-load it through the platform (no `forceload` command, no teleport), then take the
+-- surface from the world.
+check(minecheck.loadChunk(0, 0), "the marker's column is force-loaded")
+local SURFACE_Y = minecheck.groundHeight(0, 0)
+check(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
 
 -- `runCommand` reports `success` for "the command ran", not for "the condition held": a
