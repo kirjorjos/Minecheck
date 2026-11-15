@@ -360,6 +360,36 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @OutputFile
   public abstract RegularFileProperty getResultFile();
 
+  /**
+   * Optional JSON of the values this run must report, keyed by {@code minecheck.observe} name.
+   *
+   * <p>Only the handoff suite sets it. A run that never observed a key — the chunk did not arrive,
+   * the script stopped early — fails with that sentence, at the observation, instead of as whatever
+   * the next assertion happened to say. The comparison itself lives in {@link HandoffBaseline}.
+   */
+  @InputFile
+  @Optional
+  @PathSensitive(PathSensitivity.RELATIVE)
+  public abstract RegularFileProperty getExpectedObservations();
+
+  /**
+   * Fails the task when a configured baseline does not match what the results observed.
+   *
+   * <p>Runs after both verdicts are known and required to have passed, so a missing observation is
+   * reported as itself rather than as a run that failed for some other reason.
+   */
+  private void requireObservations(List<RunResultDto> results) {
+    org.gradle.api.file.RegularFile baseline = getExpectedObservations().getOrNull();
+    if (baseline == null) {
+      return;
+    }
+    String mismatch = HandoffBaseline.mismatch(baseline.getAsFile().toPath(), results);
+    if (mismatch != null) {
+      throw new GradleException(
+          "Minecheck: handoff baseline " + baseline.getAsFile() + " failed: " + mismatch);
+    }
+  }
+
   @TaskAction
   public void runLifecycle() {
     String entry =
@@ -762,6 +792,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     requireCleanExit(clientExit, "client");
     requireCleanExit(serverExit, "server");
     requirePassed(clientVerdict, "client");
+    requireObservations(List.of(clientVerdict, serverVerdict));
     // A configured server script's verdict is required, not optional: "secondary" describes its
     // role in the pairing, not whether its result is checked. A server that exits without writing
     // one has proved nothing, and skipping it here is exactly how a run goes green while half of it
