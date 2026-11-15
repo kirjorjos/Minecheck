@@ -514,6 +514,30 @@ public interface ClientPlatform {
   BlockInfo getBlock(BlockPosition pos);
 
   /**
+   * The y of the first air block above the surface at block column {@code (x, z)}, read from the
+   * vanilla {@code MOTION_BLOCKING} heightmap — the height a player standing on that column stands
+   * at (one above the top solid layer of the harness's flat world).
+   *
+   * <p>Returns {@code null} when that column's chunk is not loaded on the client, mirroring {@link
+   * #getBlock(BlockPosition)}: the heightmap of a chunk the server has not sent is not a height,
+   * and a caller must not read it as one. Throws when not in a world.
+   */
+  Integer groundHeight(int x, int z);
+
+  /**
+   * True when the client holds the chunk at chunk coordinates {@code (chunkX, chunkZ)} — a full
+   * chunk the server has sent it, not a placeholder. The precondition for every client-side read at
+   * those coordinates: {@link #getBlock(BlockPosition)} and {@link #groundHeight(int, int)} answer
+   * {@code null} until this is true.
+   *
+   * <p>A client cannot ask the server for a chunk (vanilla sends only the chunks inside the
+   * player's view distance), so this is a read, not a request: to make a far column arrive, the
+   * player has to be near it. There is deliberately no client-side loader — see {@link
+   * ServerPlatform#loadChunk(int, int)}.
+   */
+  boolean isChunkLoaded(int chunkX, int chunkZ);
+
+  /**
    * True when a screen matching {@code screenId} is currently open. {@code screenId} selects which
    * screen must be open: {@code null}/{@code ""} accepts any container/handled screen, a known id
    * ({@code "inventory"}, {@code "beacon"}, {@code "chest"}, {@code "crafting"}, {@code "furnace"},

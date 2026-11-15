@@ -1151,6 +1151,27 @@ public class ForgeClientPlatform implements ClientPlatform {
         net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
 
+  @Override
+  public Integer groundHeight(int x, int z) {
+    Minecraft mc = mc();
+    if (mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a height"
+    // is a property of the loaded chunk, not of one block in it.
+    if (!mc.level.hasChunk(x >> 4, z >> 4)) {
+      return null;
+    }
+    return mc.level.getHeight(
+        net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    Minecraft mc = mc();
+    return mc.level != null && mc.level.hasChunk(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override
