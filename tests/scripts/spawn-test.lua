@@ -30,10 +30,11 @@ local SURFACE_Y = -60
 -- than a load-bearing height.
 local FIXTURE_Y = SURFACE_Y + 160
 
--- A server loads chunks around its players, and this line's world spawn is not at 0,0 (the
--- world-handoff scripts teleport for the same reason), so nothing keeps the fixture's chunk
--- loaded: without this the summons, the fill and every block query below answer "That position is
--- not loaded" for as long as the wait is willing to sit there. Load the fixture's chunk explicitly.
+-- The fixture is at fixed coordinates and a server loads chunks around its players: the spawn
+-- region usually covers 0,0, but a join that outpaces chunk loading answers "That position is not
+-- loaded", and a line whose world spawns elsewhere (1.16.5 does) never loads these chunks at all.
+-- Force-load the fixture's chunk rather than relying on spawn, so the summons and the fill below
+-- do not depend on where the world spawned.
 minecheck.runCommand("forceload add 0 0")
 
 -- entity (spawned with NoAI so it stands still, keeping all tests deterministic)
