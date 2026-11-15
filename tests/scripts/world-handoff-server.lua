@@ -21,7 +21,11 @@ check(minecheck.waitFor(minecheck.worldGenSettled, 180), "worldgen settled befor
 -- height: force-load it through the platform (no `forceload` command, no teleport), then take the
 -- surface from the world.
 check(minecheck.loadChunk(0, 0), "the marker's column is force-loaded")
-local SURFACE_Y = minecheck.groundHeight(0, 0)
+-- Read the ground beside the marker, not under it: the marker is itself a blocking block, so
+-- once it exists, the marked column's heightmap answers with the marker instead of the ground. The
+-- later phases would then place and look for their own marker 160 blocks too high — outside the
+-- world on 1.16.5. The flat world's surface is the same at both columns.
+local SURFACE_Y = minecheck.groundHeight(1, 0)
 check(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
 minecheck.observe("surfaceY", SURFACE_Y)
