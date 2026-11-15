@@ -57,6 +57,9 @@ public final class ScriptEngine {
   private String failureMessage;
   private final java.util.List<ExpectRecord> expects = new java.util.ArrayList<>();
 
+  /** Named values a suite's committed baseline is compared against; empty for ordinary runs. */
+  private final java.util.Map<String, String> observations = new java.util.LinkedHashMap<>();
+
   /**
    * Live listeners and connections the script opened (see {@code minecheck.listen}). They are
    * closed when the run ends, however it ends: a bound port outliving its script would make the
@@ -127,6 +130,20 @@ public final class ScriptEngine {
    */
   public void recordExpect(String name, boolean ok) {
     expects.add(new ExpectRecord(name != null ? name : "expect #" + (expects.size() + 1), ok));
+  }
+
+  /**
+   * Records one named observation (called from the Lua {@code minecheck.observe}).
+   *
+   * <p>An observation is a <em>value</em>, not a verdict: what the script measured — the surface it
+   * read, whether the chunk had arrived, the block it found. The run result carries them beside the
+   * expectations so a suite can compare the whole observation against a committed baseline instead
+   * of only asking whether the script's own check passed. A later value for the same name wins.
+   */
+  public void recordObservation(String name, String value) {
+    if (name != null && !name.isEmpty() && value != null) {
+      observations.put(name, value);
+    }
   }
 
   /**
@@ -277,7 +294,8 @@ public final class ScriptEngine {
             finished,
             failed,
             failureMessage,
-            java.util.List.copyOf(expects));
+            java.util.List.copyOf(expects),
+            observations.isEmpty() ? null : java.util.Map.copyOf(observations));
     try {
       RunResultWriter.write(resultFile, result);
       LOG.info(

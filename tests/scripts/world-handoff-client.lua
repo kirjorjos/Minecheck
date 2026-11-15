@@ -22,12 +22,17 @@ minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived f
 local SURFACE_Y = minecheck.groundHeight(0, 0)
 minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
+minecheck.observe("surfaceY", SURFACE_Y)
+minecheck.observe("markerY", MARKER_Y)
+minecheck.observe("markerChunkLoaded", minecheck.isChunkLoaded(0, 0))
 
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"
 end, 60)
 minecheck.expect(marked, "the joined server serves the client's own world (marker present)")
+local marker = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
+minecheck.observe("markerBlock", marker ~= nil and marker.id or "missing")
 
 minecheck.leaveWorld(60)
 minecheck.quit()

@@ -1,6 +1,7 @@
 package net.minecheck.gradle;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Plugin-local mirror of the mod's {@code run-result.json} contract.
@@ -20,7 +21,18 @@ public record RunResultDto(
     boolean finished,
     boolean failed,
     String failureMessage,
-    List<ExpectDto> expects) {
+    List<ExpectDto> expects,
+    Map<String, String> observations) {
+
+  /** The shape every caller used before observations existed. */
+  public RunResultDto(
+      String script,
+      boolean finished,
+      boolean failed,
+      String failureMessage,
+      List<ExpectDto> expects) {
+    this(script, finished, failed, failureMessage, expects, null);
+  }
 
   public long passed() {
     return expects == null ? 0 : expects.stream().filter(ExpectDto::ok).count();

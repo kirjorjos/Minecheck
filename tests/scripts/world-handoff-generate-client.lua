@@ -32,6 +32,9 @@ minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived f
 local SURFACE_Y = minecheck.groundHeight(0, 0)
 minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
+-- The values this phase measured, for the handoff baseline the suite compares against.
+minecheck.observe("surfaceY", SURFACE_Y)
+minecheck.observe("markerY", MARKER_Y)
 
 -- Cheats are on by default for a Minecheck-created world, so the client can set the marker itself.
 local placed = minecheck.runCommand("setblock 0 " .. MARKER_Y .. " 0 minecraft:gold_block")
