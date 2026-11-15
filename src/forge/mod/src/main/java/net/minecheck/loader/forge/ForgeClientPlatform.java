@@ -1312,7 +1312,15 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     net.minecraft.client.gui.components.EditBox field = findEditBox(screen);
     if (field == null) {
-      return false;
+      // Screens that own their text editing have no field child — the sign editor is one, so
+      // dispatch the characters at the screen instead.
+      boolean typed = false;
+      for (int i = 0; i < text.length(); i++) {
+        if (screen.charTyped(text.charAt(i), 0)) {
+          typed = true;
+        }
+      }
+      return typed;
     }
     if (screen.getFocused() != field) {
       screen.setInitialFocus(field);
@@ -1344,6 +1352,21 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.world.level.block.entity.BlockEntity be =
+        mc.level.getBlockEntity(new net.minecraft.core.BlockPos(pos.x(), pos.y(), pos.z()));
+    if (!(be instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign)) {
+      return false;
+    }
+    onClientThread(() -> mc.player.openTextEdit(sign));
+    return true;
+  }
+
+  @Override
   public boolean isScreenOpen(String screenId) {
     net.minecraft.client.gui.screens.Screen screen = mc().screen;
     if (screen == null) {
@@ -1362,6 +1385,7 @@ public class ForgeClientPlatform implements ClientPlatform {
                   instanceof net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
       case "chat" -> screen instanceof net.minecraft.client.gui.screens.ChatScreen;
       case "beacon" -> screen instanceof net.minecraft.client.gui.screens.inventory.BeaconScreen;
+      case "sign" -> screen instanceof net.minecraft.client.gui.screens.inventory.SignEditScreen;
       case "chest" -> screen instanceof net.minecraft.client.gui.screens.inventory.ContainerScreen;
       case "crafting" ->
           screen instanceof net.minecraft.client.gui.screens.inventory.CraftingScreen;

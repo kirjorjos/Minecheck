@@ -420,7 +420,7 @@ The click waits for that look to land: the rotation is applied on the client thr
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`. |
+| `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`, `"sign"`. |
 | `pos` | table | Block position to look at + right-click (required for block screens). |
 | `timeout` | number | Max seconds to wait (default: `config.defaultTimeout`). |
 
@@ -442,6 +442,9 @@ Non-blocking check of whether a screen is currently open. With no id (or `nil`),
 | `"inventory"` | the player inventory — the survival inventory screen **or** the creative inventory screen, which are sibling classes in 1.18.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
 | `"chat"` | the chat screen (open while typing a message/command) |
 | `"beacon"` / `"chest"` / `"crafting"` / `"furnace"` | that container screen |
+| `"sign"` | the sign editor — a placed sign, opened through the client |
+
+The sign editor is a plain screen, not a container: `slotCount`/`getSlot` do not apply to it. `openScreen("sign", pos)` asks the client for vanilla's own editor for the sign at `pos` instead of synthesizing a right-click, because the block-use path does not reach the editor on every version (1.16.5 never opens it); closing it with `Done` still saves through the server, so the block entity's text proves the round trip.
 
 The `"chat"` id is useful with [`typeText`](#minechecktypetexttext-target--boolean): wait for it to close after pressing Enter to submit the typed text.
 

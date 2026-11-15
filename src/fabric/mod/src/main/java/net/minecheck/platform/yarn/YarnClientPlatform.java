@@ -1316,7 +1316,15 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     net.minecraft.client.gui.widget.TextFieldWidget field = findTextField(screen);
     if (field == null) {
-      return false;
+      // Screens that own their text editing have no field child — the sign editor is one, so
+      // dispatch the characters at the screen instead.
+      boolean typed = false;
+      for (int i = 0; i < text.length(); i++) {
+        if (screen.charTyped(text.charAt(i), 0)) {
+          typed = true;
+        }
+      }
+      return typed;
     }
     if (screen.getFocused() != field) {
       screen.setInitialFocus(field);
@@ -1348,6 +1356,21 @@ public class YarnClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
+    MinecraftClient mc = mc();
+    if (mc.player == null || mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.block.entity.BlockEntity be =
+        mc.world.getBlockEntity(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
+    if (!(be instanceof net.minecraft.block.entity.SignBlockEntity sign)) {
+      return false;
+    }
+    onClientThread(() -> mc.player.openEditSignScreen(sign));
+    return true;
+  }
+
+  @Override
   public boolean isScreenOpen(String screenId) {
     net.minecraft.client.gui.screen.Screen screen = mc().currentScreen;
     if (screen == null) {
@@ -1365,6 +1388,7 @@ public class YarnClientPlatform implements ClientPlatform {
               || screen instanceof net.minecraft.client.gui.screen.ingame.CreativeInventoryScreen;
       case "chat" -> screen instanceof net.minecraft.client.gui.screen.ChatScreen;
       case "beacon" -> screen instanceof net.minecraft.client.gui.screen.ingame.BeaconScreen;
+      case "sign" -> screen instanceof net.minecraft.client.gui.screen.ingame.SignEditScreen;
       case "chest" ->
           screen instanceof net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
       case "crafting" -> screen instanceof net.minecraft.client.gui.screen.ingame.CraftingScreen;

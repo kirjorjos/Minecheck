@@ -86,7 +86,6 @@ local beaconSeen = minecheck.waitFor(function()
 end, 30)
 check(beaconSeen, "beacon visible in the client world")
 
-local p = minecheck.getPlayer()
 local beaconBlock = minecheck.getBlock({ x = bx, y = by, z = bz })
 check(beaconBlock ~= nil and beaconBlock.id == "minecraft:beacon", "getBlock reads the beacon block")
 check(beaconBlock ~= nil and beaconBlock.nbt ~= nil, "getBlock returns the beacon's block entity nbt")
@@ -94,53 +93,58 @@ local ironBlock = minecheck.getBlock({ x = bx, y = by - 1, z = bz })
 check(ironBlock ~= nil and ironBlock.id == "minecraft:iron_block", "getBlock reads the pyramid block below")
 check(ironBlock ~= nil and ironBlock.nbt == nil, "plain blocks have no block entity nbt")
 
-local opened = minecheck.openScreen("beacon", { x = p.pos.x, y = p.pos.y - 0.5, z = p.pos.z }, 10)
-check(opened, "beacon screen opened")
-check(minecheck.isScreenOpen("beacon") == true, "isScreenOpen(beacon) is true")
-
-local count = minecheck.slotCount("beacon")
-check(count == 37, "beacon menu exposes 37 slots (got " .. count .. ")")
-local slot = minecheck.getSlot(0, "beacon")
-check(slot.empty, "beacon payment slot is empty")
-
-local clicked = minecheck.clickGui(4, 4)
-check(clicked, "clickGui dispatched to the beacon screen")
-check(minecheck.isScreenOpen("beacon") == true, "beacon screen still open after click")
-
-local moved1 = minecheck.moveItem(28, 1, nil, "beacon")
-check(moved1, "moveItem dispatched emerald to main slot 1")
-local inMain = minecheck.waitFor(function()
-  local s = minecheck.getSlot(1, "beacon")
-  return s ~= nil and not s.empty and s.id == "minecraft:emerald"
+-- The screen mechanics are asserted on a sign, not on the beacon's menu. The sign editor is the same
+-- screen on every version — one text field and a `Done` button carrying that label — while the beacon
+-- menu is not: its slot count, its payment slot and its cancel button's class name all differ across
+-- versions, and a line that predates the beacon cannot run them at all. The sign stands on top of the
+-- beacon, so it is also the block over it.
+local sy = by + 1
+minecheck.runCommand("setblock " .. bx .. " " .. sy .. " " .. bz .. " minecraft:oak_sign")
+local signPlaced = minecheck.waitFor(function()
+  local b = minecheck.getBlock({ x = bx, y = sy, z = bz })
+  return b ~= nil and b.id == "minecraft:oak_sign"
 end, 10)
-check(inMain, "emerald landed in main slot 1")
-check(minecheck.getSlot(28, "beacon").empty, "hotbar slot emptied after the move")
+check(signPlaced, "sign placed over the beacon")
 
-local moved2 = minecheck.moveItem(1, 0, nil, "beacon")
-check(moved2, "moveItem dispatched emerald into the payment slot")
-local paid = minecheck.waitFor(function()
-  local s = minecheck.getSlot(0, "beacon")
-  return s ~= nil and not s.empty and s.id == "minecraft:emerald"
+-- Step off the beacon onto the pyramid's top layer: the sign now holds the space the player stood
+-- in, and its editor is opened by right-clicking it from outside.
+minecheck.runCommand("tp @s " .. (bx + 1.5) .. " " .. by .. " " .. (bz + 0.5))
+local beside = minecheck.waitFor(function()
+  local pl = minecheck.getPlayer()
+  return pl ~= nil and math.floor(pl.pos.y) == by
 end, 10)
-check(paid, "emerald landed in the beacon payment slot")
-local paidStack = minecheck.getSlot(0, "beacon")
-check(paidStack.count == 1, "payment slot holds 1 emerald (got " .. paidStack.count .. ")")
-check(minecheck.getSlot(1, "beacon").empty, "main slot 1 emptied after the payment move")
+check(beside, "client stepped off the beacon beside the sign")
 
--- Element-id form: the beacon screen's cancel button, addressed by its label (the portable id — the
--- widget class differs per mapping). Clicking it is a real button press, so it closes the screen.
+-- The editor is opened through the harness: `openScreen("sign", pos)` asks the client for vanilla's
+-- own sign editor instead of synthesizing a right-click, which is what keeps this block running on
+-- every line — 1.16.5's block-use path never reaches the editor, so a click there opens nothing.
+local opened = minecheck.openScreen("sign", { x = bx, y = sy, z = bz }, 10)
+check(opened, "sign editor opened")
+check(minecheck.isScreenOpen("sign") == true, "isScreenOpen(sign) is true")
 check(minecheck.clickGui("NoSuchButton") == false, "an unknown element id is not found")
--- The beacon's buttons are icon buttons that pass an empty component on 1.16.5
--- (BeaconScreenButton -> TextComponent.EMPTY), so there is no label to match and the widget class
--- name is the id: `BeaconCancelButton` on mojmap, `CancelButton` on yarn.
-local cancelled = minecheck.clickGui("Cancel")
-  or minecheck.clickGui("BeaconCancelButton")
-  or minecheck.clickGui("CancelButton")
-check(cancelled, "clickGui found the beacon screen's cancel button")
-local closed2 = minecheck.waitFor(function()
-  return not minecheck.isScreenOpen()
-end, 5)
-check(closed2, "beacon screen closed by the element-id click")
+
+local typed = minecheck.typeText("minecheck")
+check(typed, "typeText typed into the sign editor")
+check(minecheck.isScreenOpen("sign") == true, "sign editor still open after typing")
+
+-- Addressed by label, like every other element id: the widget class behind it is mapping-dependent.
+local saved = minecheck.clickGui("Done")
+check(saved, "clickGui found the sign editor's Done button")
+local closed = minecheck.waitFor(function()
+  return not minecheck.isScreenOpen("sign")
+end, 10)
+check(closed, "sign editor closed after Done")
+
+-- The text proves the round trip reached the block, not just the field: the editor saves through the
+-- server, which writes the line into the block entity the client reads back.
+local wroteText = minecheck.waitFor(function()
+  local s = minecheck.getBlock({ x = bx, y = sy, z = bz })
+  return s ~= nil
+    and s.nbt ~= nil
+    and type(s.nbt.Text1) == "string"
+    and string.find(s.nbt.Text1, "minecheck", 1, true) ~= nil
+end, 10)
+check(wroteText, "the sign saved the typed text")
 
 local function ghostItemIds(viewerId, recipeId)
   local slots = minecheck.getRecipeSlots(recipeId, viewerId)
@@ -249,11 +253,6 @@ check(minecheck.slotCount("inventory") > 0, "inventory has slots")
 local function hotbarStart()
   return minecheck.slotCount("inventory") > 46 and 45 or 36
 end
-
--- The payment round trip is asserted in its own script, so both outcomes vanilla allows - back in
--- the inventory by pickup, or still on the ground as the dropped stack - are exercised by a
--- regression guard that runs without a server (see `beacon-payment.lua`).
-minecheck.runScript("beacon-payment.lua")
 
 local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
