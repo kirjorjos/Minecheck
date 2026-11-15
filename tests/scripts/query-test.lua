@@ -61,10 +61,13 @@ for _, e in pairs(minecheck.findEntities()) do
 end
 check(px ~= nil, "joined player is findable with a position")
 
--- The dedicated server runs the harness's flat world (`tests/flat-world.json`): bedrock at -64,
--- grass on top at -61, so the standing surface is SURFACE_Y. The probe below measures the surface rather than assuming the
--- player's own feet and stops at SURFACE_Y, so a preset that moves the ground moves the floor of the
--- scan with it.
+-- The dedicated server runs the harness's flat world (`tests/flat-world.json`): four layers counted
+-- up from the bottom of the world — bedrock, two of dirt, grass — so the standing surface is the top
+-- of that stack. Where the bottom sits depends on the line: 1.18 starts the layers at -64 and tops
+-- out at -60, while 1.16.5 has no negative Y at all. The probe below therefore measures the surface
+-- rather than assuming it, scanning down from the player's own feet and stopping at SURFACE_Y, a
+-- floor below every line's surface, so a preset that moves the ground moves what the scan finds
+-- instead of the floor.
 local SURFACE_Y = -60
 
 local bx = math.floor(px) + 2
@@ -175,10 +178,15 @@ check(
 -- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
 -- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
 -- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
-check(
-  minecheck.runCommand("item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1").result >= 1,
-  "client player given a sword in the hand"
-)
+-- The command moved: 1.17 replaced `replaceitem` with `item replace ... with ...`, and 1.16.5 has no
+-- `item` root at all ("Unknown or incomplete command").
+local swordCommand
+if minecheck.minecraftVersion():match("^1%.16") then
+  swordCommand = "replaceitem entity " .. player .. " hotbar.0 minecraft:netherite_sword"
+else
+  swordCommand = "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword"
+end
+check(minecheck.runCommand(swordCommand).result >= 1, "client player given a sword in the hand")
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
 -- rejected as "allows more than one" even when only one entity matches).
