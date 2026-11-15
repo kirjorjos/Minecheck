@@ -30,6 +30,12 @@ local SURFACE_Y = -60
 -- than a load-bearing height.
 local FIXTURE_Y = SURFACE_Y + 160
 
+-- A server loads chunks around its players, and this line's world spawn is not at 0,0 (the
+-- world-handoff scripts teleport for the same reason), so nothing keeps the fixture's chunk
+-- loaded: without this the summons, the fill and every block query below answer "That position is
+-- not loaded" for as long as the wait is willing to sit there. Load the fixture's chunk explicitly.
+minecheck.runCommand("forceload add 0 0")
+
 -- entity (spawned with NoAI so it stands still, keeping all tests deterministic)
 local cow = minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = FIXTURE_Y, z = 0.5 }, { NoAI = true })
 check(cow.success, "spawnEntity cow succeeded")
