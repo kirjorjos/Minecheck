@@ -1171,6 +1171,19 @@ public class ForgeClientPlatform implements ClientPlatform {
         net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
 
+  @Override
+  public Integer groundHeight(int x, int z) {
+    Minecraft mc = mc();
+    if (mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    if (!mc.level.isLoaded(new net.minecraft.core.BlockPos(x, 0, z))) {
+      return null;
+    }
+    return mc.level.getHeight(
+        net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override

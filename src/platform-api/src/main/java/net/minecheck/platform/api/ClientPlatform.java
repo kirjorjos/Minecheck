@@ -514,6 +514,17 @@ public interface ClientPlatform {
   BlockInfo getBlock(BlockPosition pos);
 
   /**
+   * The y of the first air block above the surface at block column {@code (x, z)}, read from the
+   * vanilla {@code MOTION_BLOCKING} heightmap — the height a player standing on that column stands
+   * at (one above the top solid layer of the harness's flat world).
+   *
+   * <p>Returns {@code null} when that column's chunk is not loaded on the client, mirroring {@link
+   * #getBlock(BlockPosition)}: the heightmap of a chunk the server has not sent is not a height,
+   * and a caller must not read it as one. Throws when not in a world.
+   */
+  Integer groundHeight(int x, int z);
+
+  /**
    * True when a screen matching {@code screenId} is currently open. {@code screenId} selects which
    * screen must be open: {@code null}/{@code ""} accepts any container/handled screen, a known id
    * ({@code "inventory"}, {@code "beacon"}, {@code "chest"}, {@code "crafting"}, {@code "furnace"},

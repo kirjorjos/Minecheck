@@ -154,6 +154,18 @@ public class YarnServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public Integer groundHeight(int x, int z) {
+    return onServerThread(
+        () -> {
+          ServerWorld world = overworld();
+          if (!world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
+            return null;
+          }
+          return world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+        });
+  }
+
+  @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
     return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
   }
