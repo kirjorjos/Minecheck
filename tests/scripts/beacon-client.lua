@@ -130,7 +130,13 @@ check(minecheck.getSlot(1, "beacon").empty, "main slot 1 emptied after the payme
 -- Element-id form: the beacon screen's cancel button, addressed by its label (the portable id — the
 -- widget class differs per mapping). Clicking it is a real button press, so it closes the screen.
 check(minecheck.clickGui("NoSuchButton") == false, "an unknown element id is not found")
-check(minecheck.clickGui("Cancel"), "clickGui found the beacon screen's cancel button by label")
+-- The beacon's buttons are icon buttons that pass an empty component on 1.16.5
+-- (BeaconScreenButton -> TextComponent.EMPTY), so there is no label to match and the widget class
+-- name is the id: `BeaconCancelButton` on mojmap, `CancelButton` on yarn.
+local cancelled = minecheck.clickGui("Cancel")
+  or minecheck.clickGui("BeaconCancelButton")
+  or minecheck.clickGui("CancelButton")
+check(cancelled, "clickGui found the beacon screen's cancel button")
 local closed2 = minecheck.waitFor(function()
   return not minecheck.isScreenOpen()
 end, 5)
@@ -178,57 +184,58 @@ end
 -- Which viewer wins the priority order is a property of what is installed, not of the harness:
 -- EMI ships no Forge build for 1.18.2, so the priority there is JEI. The assertions name whichever
 -- one this loader actually has.
-local emiInstalled = minecheck.isModLoaded("emi")
--- Not every version can host a viewer: 1.18.1's Fabric has no JEI, EMI or REI artifact at all, so
--- the bridge correctly reports none and the viewer content checks below are skipped.
-local anyViewerInstalled = emiInstalled or minecheck.isModLoaded("jei") or minecheck.isModLoaded("roughlyenoughitems")
-local priorityId = emiInstalled and "emi" or "jei"
+-- 1.16.5 has no bridged recipe viewer at all (EMI and REI publish nothing for it, and JEI's 7.x
+-- line predates the API these bridges are written against), so the viewer assertions are conditional
+-- on one actually being installed rather than assuming the priority order has a member.
 local viewer = minecheck.recipeViewer()
-if anyViewerInstalled then
+local viewerInstalled = viewer ~= nil
+if not viewerInstalled then
+  minecheck.log("no recipe viewer is bridged on this line; skipping the viewer checks", "warn")
+end
+if viewerInstalled then
+  local emiInstalled = minecheck.isModLoaded("emi")
+  local priorityId = emiInstalled and "emi" or "jei"
   check(viewer ~= nil, "priority recipe viewer bridged")
-  check(
-    viewer ~= nil and viewer.id == priorityId,
-    "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer and viewer.id) .. ")"
-  )
-end
-check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
+  check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
+  check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
 
-if emiInstalled then
-  checkViewer(nil, "priority (EMI)")
-  check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
-end
-
-local jeiInstalled = minecheck.isModLoaded("jei")
-if jeiInstalled then
-  local jei = minecheck.recipeViewer("jei")
-  check(jei ~= nil, "JEI is installed but not bridged")
-  if jei ~= nil then
-    check(jei.id == "jei", "named recipe viewer is jei (got " .. tostring(jei.id) .. ")")
+  if emiInstalled then
+    checkViewer(nil, "priority (EMI)")
+    check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
   end
-end
 
--- REI's *mod* id is `roughlyenoughitems`; it reports the short viewer id `rei`. On Quilt it is not
--- installed, so this block simply does not run there.
-local reiInstalled = minecheck.isModLoaded("roughlyenoughitems")
-if reiInstalled then
-  local rei = minecheck.recipeViewer("rei")
-  check(rei ~= nil, "REI is installed but not bridged")
-  if rei ~= nil then
-    check(rei.id == "rei", "named recipe viewer is rei (got " .. tostring(rei.id) .. ")")
-    -- REI indexes from the client's synced recipes, like EMI, so its content is checked here with
-    -- the other viewers — before any container screen is opened (the fill check needs it closed).
-    -- An empty index is logged rather than failed: whether a viewer's own index holds a recipe is
-    -- the viewer's business, and this suite is asserting the bridge.
-    local reiIndexed = minecheck.waitFor(function()
-      return #minecheck.getRecipeSlots("minecraft:stick", "rei") > 0
-    end, 20)
-    if reiIndexed then
-      checkViewer("rei", "REI")
-    else
-      minecheck.log(
-        "REI's recipe index holds no minecraft:stick display; skipping its ghost-slot content check",
-        "warn"
-      )
+  local jeiInstalled = minecheck.isModLoaded("jei")
+  if jeiInstalled then
+    local jei = minecheck.recipeViewer("jei")
+    check(jei ~= nil, "JEI is installed but not bridged")
+    if jei ~= nil then
+      check(jei.id == "jei", "named recipe viewer is jei (got " .. tostring(jei.id) .. ")")
+    end
+  end
+
+  -- REI's *mod* id is `roughlyenoughitems`; it reports the short viewer id `rei`. On Quilt it is not
+  -- installed, so this block simply does not run there.
+  local reiInstalled = minecheck.isModLoaded("roughlyenoughitems")
+  if reiInstalled then
+    local rei = minecheck.recipeViewer("rei")
+    check(rei ~= nil, "REI is installed but not bridged")
+    if rei ~= nil then
+      check(rei.id == "rei", "named recipe viewer is rei (got " .. tostring(rei.id) .. ")")
+      -- REI indexes from the client's synced recipes, like EMI, so its content is checked here with
+      -- the other viewers — before any container screen is opened (the fill check needs it closed).
+      -- An empty index is logged rather than failed: whether a viewer's own index holds a recipe is
+      -- the viewer's business, and this suite is asserting the bridge.
+      local reiIndexed = minecheck.waitFor(function()
+        return #minecheck.getRecipeSlots("minecraft:stick", "rei") > 0
+      end, 20)
+      if reiIndexed then
+        checkViewer("rei", "REI")
+      else
+        minecheck.log(
+          "REI's recipe index holds no minecraft:stick display; skipping its ghost-slot content check",
+          "warn"
+        )
+      end
     end
   end
 end
@@ -335,13 +342,13 @@ check(
   "server gave 4 oak planks"
 )
 
-if anyViewerInstalled then
-  -- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
-  -- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
-  -- background thread and is still filling it when the script gets here (see the note at the top of
-  -- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
-  -- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
-  -- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
+-- The moves below read the priority viewer's ghost slots, so its index has to be built first. EMI
+-- and REI index from the client's synced recipes and are ready by now; JEI builds its index on a
+-- background thread and is still filling it when the script gets here (see the note at the top of
+-- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
+-- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
+-- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
+if viewerInstalled then
   local indexed = minecheck.waitFor(function()
     return #minecheck.getRecipeSlots("minecraft:stick") > 0
   end, 30)

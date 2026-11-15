@@ -1181,6 +1181,24 @@ public class YarnClientPlatform implements ClientPlatform {
         net.minecraft.util.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
 
+  @Override
+  public Integer groundHeight(int x, int z) {
+    MinecraftClient mc = mc();
+    if (mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    if (!mc.world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
+      return null;
+    }
+    return mc.world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    MinecraftClient mc = mc();
+    return mc.world != null && mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override
