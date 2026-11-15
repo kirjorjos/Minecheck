@@ -166,6 +166,28 @@ public class YarnServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    MinecraftServer s = server;
+    if (s == null) {
+      return false;
+    }
+    return onServerThread(() -> overworld().getChunkManager().isChunkLoaded(chunkX, chunkZ));
+  }
+
+  @Override
+  public boolean loadChunk(int chunkX, int chunkZ) {
+    return onServerThread(
+        () -> {
+          ServerWorld world = overworld();
+          // The same forced ticket `forceload add` sets, so the chunk stays loaded for the rest of
+          // the run; reading it through makes the load synchronous rather than a later tick.
+          world.setChunkForced(chunkX, chunkZ, true);
+          world.getChunk(chunkX, chunkZ);
+          return world.getChunkManager().isChunkLoaded(chunkX, chunkZ);
+        });
+  }
+
+  @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
     return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
   }

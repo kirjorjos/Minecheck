@@ -1188,6 +1188,12 @@ public class ForgeClientPlatform implements ClientPlatform {
         net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
   }
 
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    Minecraft mc = mc();
+    return mc.level != null && mc.level.hasChunk(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override

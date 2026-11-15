@@ -140,6 +140,8 @@ public final class LuaMinecheck {
     minecheck.set("getCrosshairBlock", new GetCrosshairBlock());
     minecheck.set("getBlock", new GetBlock());
     minecheck.set("groundHeight", new GroundHeight());
+    minecheck.set("isChunkLoaded", new IsChunkLoaded());
+    minecheck.set("loadChunk", new LoadChunk());
     minecheck.set("findNearbyEntities", new FindNearbyEntities());
 
     // GUI / inventory (client)
@@ -1255,6 +1257,62 @@ public final class LuaMinecheck {
         throw wrap("groundHeight", e);
       }
       return y == null ? LuaValue.NIL : LuaValue.valueOf(y.intValue());
+    }
+  }
+
+  /**
+   * minecheck.isChunkLoaded(chunkX, chunkZ) -> boolean
+   *
+   * <p>Both sides: whether this side holds that chunk — on the client a chunk the server has sent,
+   * on the server one that is loaded (by a nearby player, by {@code loadChunk}, or by an earlier
+   * read). The precondition for a read at those coordinates: {@code getBlock} and {@code
+   * groundHeight} answer {@code nil} until this is true.
+   */
+  private final class IsChunkLoaded extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      boolean loaded;
+      try {
+        if (client != null) {
+          loaded = client.isChunkLoaded(chunkX, chunkZ);
+        } else {
+          requireServer();
+          loaded = server.isChunkLoaded(chunkX, chunkZ);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("isChunkLoaded", e);
+      }
+      return LuaValue.valueOf(loaded);
+    }
+  }
+
+  /**
+   * minecheck.loadChunk(chunkX, chunkZ) -> boolean
+   *
+   * <p>Server only: force-loads that chunk (the ticket {@code forceload add} sets, so it stays
+   * loaded) and returns true once it is. Raises on a client, which cannot make the server send it a
+   * chunk — vanilla only sends the chunks inside the player's view distance, so a client has to be
+   * moved near a column to receive it.
+   */
+  private final class LoadChunk extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      if (client != null) {
+        throw new LuaError(
+            "loadChunk is server-only: a client receives only the chunks the server sends around the player");
+      }
+      requireServer();
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      boolean loaded;
+      try {
+        loaded = server.loadChunk(chunkX, chunkZ);
+      } catch (RuntimeException e) {
+        throw wrap("loadChunk", e);
+      }
+      return LuaValue.valueOf(loaded);
     }
   }
 
