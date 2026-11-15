@@ -77,6 +77,38 @@ public interface ServerPlatform {
   java.util.List<EntityInfo> findEntities(String type, String tag);
 
   /**
+   * The y of the first air block above the surface at block column {@code (x, z)} in the overworld,
+   * read from the vanilla {@code MOTION_BLOCKING} heightmap — where a player standing on that
+   * column would stand.
+   *
+   * <p>Mirrors {@link ClientPlatform#groundHeight(int, int)}, including {@code null} for a column
+   * whose chunk is not loaded: an unloaded chunk's heightmap has no answer, so a script that needs
+   * the height of a column away from the player has to load it first.
+   */
+  Integer groundHeight(int x, int z);
+
+  /**
+   * True when the overworld has the chunk at chunk coordinates {@code (chunkX, chunkZ)} loaded —
+   * generated and ticking, by any route (a player nearby, a forced chunk, an earlier read).
+   */
+  boolean isChunkLoaded(int chunkX, int chunkZ);
+
+  /**
+   * Force-load the chunk at chunk coordinates {@code (chunkX, chunkZ)} in the overworld and return
+   * true once it is loaded.
+   *
+   * <p>This is the platform's replacement for the {@code forceload} command, which only exists from
+   * 1.14: it marks the chunk forced (the same ticket vanilla's command adds, so it stays loaded for
+   * the rest of the run) and reads it through once so the load is not left to a later tick. A
+   * fixture that summons into or queries a fixed column calls this instead of hoping the spawn
+   * region covers it.
+   *
+   * <p>Server-only by nature: a client cannot make the server send it a chunk, which is why there
+   * is no client-side counterpart — see {@link ClientPlatform#isChunkLoaded(int, int)}.
+   */
+  boolean loadChunk(int chunkX, int chunkZ);
+
+  /**
    * True once this server's own overworld chunk generation has settled (no pending chunk work).
    * Mirrors {@link ClientPlatform#isWorldGenSettled()} for the dedicated-server case: a server
    * script can wait on this before e.g. asserting worldgen-related state, and it is never "not
