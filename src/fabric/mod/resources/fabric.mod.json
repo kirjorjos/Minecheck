@@ -12,14 +12,13 @@
   "entrypoints": {
     "main": [
       "net.minecheck.loader.fabric.FabricEntrypoint"
-    ],
-    "jei_mod_plugin": [
-      "net.minecheck.platform.yarn.MinecheckJeiPlugin"
     ]
   },
   "depends": {
     "fabricloader": ">=0.14.22",
-    "fabric-api": "*",
+    "fabric-lifecycle-events-v1": "*",
+    "fabric-key-binding-api-v1": "*",
+    "fabric-networking-api-v1": "*",
     "minecraft": ">=${minecraft_version} <${minecraft_next}"
   }
 }

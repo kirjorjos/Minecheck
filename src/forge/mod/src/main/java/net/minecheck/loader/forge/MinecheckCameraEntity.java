@@ -17,7 +17,7 @@ import net.minecraft.world.level.Level;
 final class MinecheckCameraEntity extends Entity {
 
   MinecheckCameraEntity(Level level) {
-    super(EntityType.MARKER, level);
+    super(EntityType.ARMOR_STAND, level);
     setNoGravity(true);
     this.noPhysics = true;
   }

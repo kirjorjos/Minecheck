@@ -49,16 +49,9 @@ public class ForgeEntrypoint {
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
-    // No EMI bridge on Forge: EMI 1.18.2 ships for Fabric and Quilt only, so the viewer list here
-    // is JEI and REI. The Lua API is the same on every loader.
+    // No recipe viewer is bridged on 1.16.5: EMI and REI publish nothing for it, and JEI's 7.x
+    // line predates the API these bridges were written against. The Lua API is unchanged.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("jei")) {
-      viewers.add(new ForgeJeiRecipeViewer());
-    }
-    // REI's mod id is `roughlyenoughitems`; the provider reports the short id `rei`.
-    if (!dedicated && ModList.get().isLoaded("roughlyenoughitems")) {
-      viewers.add(new ForgeReiRecipeViewer());
-    }
 
     PlatformServices services =
         new PlatformServices() {
@@ -133,35 +126,6 @@ public class ForgeEntrypoint {
     event.enqueueWork(client::installCameraBindings);
   }
 
-  private final AtomicBoolean builtinWarmed = new AtomicBoolean();
-
-  /**
-   * Materialises {@link net.minecraft.core.RegistryAccess#BUILTIN} before any world or server join.
-   *
-   * <p>That value is a lazily built, memoised copy of the builtin (datapack) registries. On 1.19.2
-   * the Forge client first touches it from {@code ClientPacketListener}'s field initialiser, which
-   * runs <em>after</em> the login registry snapshot has been applied: built from that post-sync
-   * state, encoding fails to resolve even {@code minecraft:air} ("Unknown registry element in
-   * minecraft:block: Block{minecraft:air}") and the join never completes — the server logs the
-   * player in, then the client drops the connection about a second later, with no world and no
-   * client-side error. Building it at boot, while the registries are still pristine, is the state
-   * the value is meant to hold, so the login path finds it already there.
-   */
-  private void warmBuiltinRegistryAccess() {
-    long start = System.nanoTime();
-    try {
-      net.minecraft.core.RegistryAccess.BUILTIN.get();
-      java.util.logging.Logger.getLogger("Minecheck")
-          .info(
-              String.format(
-                  "built the builtin registry copy in %d ms, before any world join",
-                  (System.nanoTime() - start) / 1_000_000));
-    } catch (RuntimeException e) {
-      java.util.logging.Logger.getLogger("Minecheck")
-          .warning(String.format("could not build the builtin registry copy: %s", e));
-    }
-  }
-
   /**
    * Per-frame hook for the screenshot suite: a capture must read a frame drawn after it cleared the
    * chat, and a render tick is the only thing that says "a frame was drawn" (a client tick is not —
@@ -192,13 +156,11 @@ public class ForgeEntrypoint {
     if (e == null || e.isFinished()) {
       return;
     }
-    if (client.isBootComplete() && builtinWarmed.compareAndSet(false, true)) {
-      warmBuiltinRegistryAccess();
-    }
     client.pinClientClock();
     client.pinRenderTickDelta();
     client.pumpViewWindow();
     if (client.isBootComplete()) {
+      client.allowUnfocusedPlay();
       e.tick();
     }
   }
@@ -238,7 +200,7 @@ public class ForgeEntrypoint {
       return;
     }
     // 1.18.2's ServerTickEvent carries no server reference.
-    MinecraftServer s = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+    MinecraftServer s = net.minecraftforge.fml.server.ServerLifecycleHooks.getCurrentServer();
     if (s == null) {
       return;
     }

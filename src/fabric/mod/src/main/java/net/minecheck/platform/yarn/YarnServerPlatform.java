@@ -13,7 +13,7 @@ import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtHelper;
+import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.Structure;
@@ -44,7 +44,19 @@ public class YarnServerPlatform implements ServerPlatform {
     if (s.isOnThread()) {
       return action.get();
     }
-    return s.submit(action).join();
+    // Not MinecraftServer#submit: 1.16.5 only inherits it from ThreadExecutor, and the runtime
+    // method lookup on the server class fails there. execute(Runnable) is the same seam without the
+    // signature that moved.
+    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
+    s.execute(
+        () -> {
+          try {
+            done.complete(action.get());
+          } catch (Throwable t) {
+            done.completeExceptionally(t);
+          }
+        });
+    return done.join();
   }
 
   private ServerWorld overworld() {
@@ -61,16 +73,15 @@ public class YarnServerPlatform implements ServerPlatform {
       return new NbtCompound();
     }
     try {
-      return NbtHelper.fromNbtProviderString(nbt);
+      return StringNbtReader.parse(nbt);
     } catch (CommandSyntaxException e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
   }
 
   private static <T> T requireRegistryEntry(Registry<T> registry, Identifier id, String what) {
-    if (!registry.containsId(id)) {
-      throw new IllegalArgumentException("unknown " + what + ": " + id);
-    }
+    // A null get is the answer: 1.16.5's Registry has no containsId on the interface, and
+    // calling it was a NoSuchMethodError at runtime rather than a compile error.
     T entry = registry.get(id);
     if (entry == null) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
@@ -122,6 +133,13 @@ public class YarnServerPlatform implements ServerPlatform {
     ServerWorld world = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (Entity entity : world.iterateEntities()) {
+      // 1.16.5 keeps an entity until the tick after it was removed, and a dying mob stays listed
+      // for
+      // its death animation. Neither is observable as present on a client, so neither is a match.
+      if (entity.removed
+          || (entity instanceof net.minecraft.entity.LivingEntity living && !living.isAlive())) {
+        continue;
+      }
       if (typeId != null && !Registry.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) {
         continue;
       }
@@ -130,7 +148,7 @@ public class YarnServerPlatform implements ServerPlatform {
       }
       out.add(
           new net.minecheck.platform.api.EntityInfo(
-              entity.getId(),
+              entity.getEntityId(),
               Registry.ENTITY_TYPE.getId(entity.getType()).toString(),
               entity.getX(),
               entity.getY(),
@@ -172,7 +190,7 @@ public class YarnServerPlatform implements ServerPlatform {
             compound,
             world,
             loaded -> {
-              loaded.refreshPositionAndAngles(x, y, z, loaded.getYaw(), loaded.getPitch());
+              loaded.refreshPositionAndAngles(x, y, z, loaded.getYaw(1.0f), loaded.getPitch(1.0f));
               return loaded;
             });
     if (entity == null) {
@@ -182,10 +200,10 @@ public class YarnServerPlatform implements ServerPlatform {
       mob.initialize(
           world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null, null);
     }
-    if (!world.spawnNewEntityAndPassengers(entity)) {
+    if (!world.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
-    return entity.getId();
+    return entity.getEntityId();
   }
 
   @Override
@@ -213,7 +231,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.readNbt(compound);
+        blockEntity.fromTag(state, compound);
       }
     }
     return true;
@@ -236,13 +254,13 @@ public class YarnServerPlatform implements ServerPlatform {
     stack.setCount(count);
     NbtCompound compound = parseNbt(nbt);
     if (!compound.isEmpty()) {
-      stack.setNbt(compound);
+      stack.setTag(compound);
     }
     ItemEntity itemEntity = new ItemEntity(world, x, y, z, stack);
     if (!world.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
-    return itemEntity.getId();
+    return itemEntity.getEntityId();
   }
 
   @Override
@@ -257,10 +275,10 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     ServerWorld world = overworld();
     StructureManager manager = world.getStructureManager();
-    Structure template =
-        manager
-            .getStructure(identifier)
-            .orElseThrow(() -> new IllegalArgumentException("unknown structure: " + id));
+    Structure template = manager.getStructure(identifier);
+    if (template == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlacementData placementData = new StructurePlacementData().setIgnoreEntities(true);
     return template.place(world, pos, pos, placementData, world.getRandom(), 2);

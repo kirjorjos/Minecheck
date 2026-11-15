@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -17,7 +16,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
-import net.minecraftforge.client.ClientRegistry;
+import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.loading.FMLPaths;
 import org.lwjgl.glfw.GLFW;
 
@@ -119,11 +118,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     toggleKey =
-        new KeyMapping(
-            "key.minecheck.camera.toggle",
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_F4,
-            "key.categories.minecheck");
+        new KeyMapping("key.minecheck.camera.toggle", GLFW.GLFW_KEY_F4, "key.categories.minecheck");
     ClientRegistry.registerKeyBinding(toggleKey);
   }
 
@@ -222,10 +217,9 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     CameraPose start =
-        new CameraPose(
-            player.getX(), player.getEyeY(), player.getZ(), player.getYRot(), player.getXRot());
-    baseYaw = player.getYRot();
-    basePitch = player.getXRot();
+        new CameraPose(player.getX(), player.getEyeY(), player.getZ(), player.yRot, player.xRot);
+    baseYaw = player.yRot;
+    basePitch = player.xRot;
     if (!controller.attach(start)) {
       return;
     }
@@ -258,7 +252,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       if (mc.cameraEntity == entity) {
         mc.cameraEntity = mc.player;
       }
-      entity.discard();
+      entity.remove();
     }
     LOG.info("Minecheck: camera detached");
   }
@@ -273,8 +267,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     entity.yo = entity.getY();
     entity.zo = entity.getZ();
     entity.setPos(pose.x(), pose.y(), pose.z());
-    entity.setYRot(pose.yaw());
-    entity.setXRot(pose.pitch());
+    entity.yRot = pose.yaw();
+    entity.xRot = pose.pitch();
   }
 
   // ------------------------------------------------------------------ input
@@ -311,14 +305,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    */
   private void steer(LocalPlayer player, boolean allowed) {
     if (!allowed || mc().screen != null) {
-      baseYaw = player.getYRot();
-      basePitch = player.getXRot();
+      baseYaw = player.yRot;
+      basePitch = player.xRot;
       return;
     }
-    float yawDelta = Mth.wrapDegrees(player.getYRot() - (float) baseYaw);
-    float pitchDelta = player.getXRot() - (float) basePitch;
-    player.setYRot((float) baseYaw);
-    player.setXRot((float) basePitch);
+    float yawDelta = Mth.wrapDegrees(player.yRot - (float) baseYaw);
+    float pitchDelta = player.xRot - (float) basePitch;
+    player.yRot = (float) baseYaw;
+    player.xRot = (float) basePitch;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) {
       return;
     }

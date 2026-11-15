@@ -26,10 +26,6 @@ include(":fabric-mod")
 
 project(":fabric-mod").projectDir = file("src/fabric/mod")
 
-include(":quilt-mod")
-
-project(":quilt-mod").projectDir = file("src/quilt/mod")
-
 include(":forge-mod")
 
 project(":forge-mod").projectDir = file("src/forge/mod")

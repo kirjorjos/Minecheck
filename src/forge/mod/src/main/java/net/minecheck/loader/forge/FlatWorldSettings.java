@@ -10,13 +10,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import net.minecraft.core.Registry;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.levelgen.StructureSettings;
 import net.minecraft.world.level.levelgen.flat.FlatLayerInfo;
 import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
-import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 /**
  * The flat world every Minecheck suite runs in, built from the declaration the harness also hands
@@ -68,24 +67,24 @@ final class FlatWorldSettings {
   }
 
   /** The declared world, laid over the preset this version would build so nothing else shifts. */
-  static FlatLevelGeneratorSettings settings(
-      Registry<Biome> biomes, Registry<StructureSet> structureSets) {
+  static FlatLevelGeneratorSettings settings(Registry<Biome> biomes) {
     Declaration declared = declaration();
     List<FlatLayerInfo> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
       Block block = Registry.BLOCK.get(new ResourceLocation(layer.block));
       layers.add(new FlatLayerInfo(layer.height, block));
     }
-    FlatLevelGeneratorSettings base = FlatLevelGeneratorSettings.getDefault(biomes, structureSets);
-    // No structure overrides: the declaration describes bare ground, and the suites place the
-    // structures they assert on themselves.
-    FlatLevelGeneratorSettings settings = base.withLayers(layers, Optional.empty());
-    // A registry-backed holder, not Holder.direct: a direct holder is not a registry element, and
-    // the game refuses to write a level whose flat settings name one.
-    biomes
-        .getHolder(
-            ResourceKey.create(Registry.BIOME_REGISTRY, new ResourceLocation(declared.biome)))
-        .ifPresent(settings::setBiome);
+    // No structures: the declaration describes bare ground, and the suites place the structures
+    // they assert on themselves. 1.16.5 has no StructureSet registry, so the flat settings carry a
+    // StructureSettings instead, and an empty one places nothing.
+    StructureSettings structures = new StructureSettings(Optional.empty(), java.util.Map.of());
+    FlatLevelGeneratorSettings settings =
+        new FlatLevelGeneratorSettings(structures, biomes).withLayers(layers, structures);
+    Biome biome = biomes.get(new ResourceLocation(declared.biome));
+    if (biome == null) {
+      throw new IllegalStateException(RESOURCE + " names an unknown biome: " + declared.biome);
+    }
+    settings.setBiome(() -> biome);
     return settings;
   }
 }

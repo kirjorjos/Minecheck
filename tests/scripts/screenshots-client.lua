@@ -108,13 +108,18 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world gener
 -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
 -- random spot near the world spawn, and two runs standing a block apart see different terrain. The
 -- teleport sets the position and the rotation (yaw 0, pitch 90 = straight down) in one go.
+-- The surface height is the world's, not a constant: 1.18's flat preset tops out at -60, while
+-- 1.16.5 has no negative Y at all — its flat surface is the top of the layer list, measured here from
+-- the player the world spawned standing on it.
+local SURFACE_Y = math.floor(minecheck.getPlayer().pos.y)
+
 local function atPinnedSpot()
   local player = minecheck.getPlayer()
-  return player ~= nil and player.pos.x == 0.5 and player.pos.y == -60.0 and player.pos.z == 0.5
+  return player ~= nil and player.pos.x == 0.5 and player.pos.y == SURFACE_Y and player.pos.z == 0.5
 end
 
 local function stand()
-  command("tp @s 0.5 -60 0.5 0 90")
+  command("tp @s 0.5 " .. SURFACE_Y .. " 0.5 0 90")
   -- The command travels to the server and back, so the move lands a tick or two later.
   minecheck.expect(minecheck.waitFor(atPinnedSpot, 5), "the player stands on the pinned spot")
   local player = minecheck.getPlayer()
@@ -152,8 +157,8 @@ minecheck.expect(night.width == frameWidth, "world-night is " .. frameWidth .. "
 -- CreativeInventoryScreen and its tabs are item models: the compass and clock needles are
 -- re-derived on every frame, which measured 24-56 pixels moving on *every* consecutive frame — a
 -- picture no amount of settling makes reproducible. A block menu has no such element.
-command("setblock 1 -60 0 minecraft:crafting_table")
-local tablePos = { x = 1, y = -60, z = 0 }
+command("setblock 1 " .. SURFACE_Y .. " 0 minecraft:crafting_table")
+local tablePos = { x = 1, y = SURFACE_Y, z = 0 }
 minecheck.expect(
   minecheck.waitFor(function()
     return minecheck.getBlock(tablePos) ~= nil
@@ -165,12 +170,12 @@ minecheck.expect(
 -- a ray to it grazes the edge and the click that opens the menu hits nothing. `openScreen` with a
 -- position aims and clicks in one step, so the aim is confirmed here instead and the click follows
 -- the crosshair.
-local tableCentre = { x = 1.5, y = -59.5, z = 0.5 }
+local tableCentre = { x = 1.5, y = SURFACE_Y + 0.5, z = 0.5 }
 minecheck.expect(minecheck.lookAt(tableCentre.x, tableCentre.y, tableCentre.z), "aimed at the table")
 minecheck.expect(
   minecheck.waitFor(function()
     local hit = minecheck.getTargetBlock(minecheck.getPlayer())
-    return hit ~= nil and hit.x == 1 and hit.y == -60 and hit.z == 0
+    return hit ~= nil and hit.x == 1 and hit.y == SURFACE_Y and hit.z == 0
   end, 10),
   "the crosshair is on the table"
 )

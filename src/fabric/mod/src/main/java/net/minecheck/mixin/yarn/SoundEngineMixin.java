@@ -1,5 +1,6 @@
 package net.minecheck.mixin.yarn;
 
+import java.nio.ByteBuffer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecheck.common.config.AudioPolicy;
 import net.minecraft.client.sound.SoundEngine;
@@ -36,8 +37,8 @@ public class SoundEngineMixin {
       at =
           @At(
               value = "INVOKE",
-              target = "Lorg/lwjgl/openal/ALC10;alcOpenDevice(Ljava/lang/CharSequence;)J"))
-  private static long minecheck$neverOpenAudioDevice(CharSequence device) {
+              target = "Lorg/lwjgl/openal/ALC10;alcOpenDevice(Ljava/nio/ByteBuffer;)J"))
+  private static long minecheck$neverOpenAudioDevice(ByteBuffer device) {
     if (AudioPolicy.muted(FabricLoader.getInstance().getConfigDir())) {
       return 0L;
     }

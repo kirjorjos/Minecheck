@@ -187,7 +187,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
       return;
     }
     MinecraftClient mc = mc();
-    if (mc.player == null || mc.world == null || camera.getWorld() != mc.world) {
+    if (mc.player == null || mc.world == null || camera.world != mc.world) {
       detach();
       return;
     }
@@ -232,14 +232,18 @@ public final class YarnCameraPlatform implements CameraPlatform {
     }
     CameraPose start =
         new CameraPose(
-            player.getX(), player.getEyeY(), player.getZ(), player.getYaw(), player.getPitch());
-    baseYaw = player.getYaw();
-    basePitch = player.getPitch();
+            player.getX(),
+            player.getEyeY(),
+            player.getZ(),
+            player.getYaw(1.0f),
+            player.getPitch(1.0f));
+    baseYaw = player.getYaw(1.0f);
+    basePitch = player.getPitch(1.0f);
     if (!controller.attach(start)) {
       return;
     }
     MinecheckCameraEntity entity = new MinecheckCameraEntity(world);
-    entity.setId(CAMERA_ENTITY_ID);
+    entity.setEntityId(CAMERA_ENTITY_ID);
     // Placed before the first publish so the old position is the camera's, not the origin: without
     // this the first rendered frame would interpolate the camera in from 0,0,0.
     entity.setPos(start.x(), start.y(), start.z());
@@ -262,7 +266,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
       if (mc.cameraEntity == entity) {
         mc.cameraEntity = mc.player;
       }
-      entity.discard();
+      entity.remove();
     }
     LOG.info("Minecheck: camera detached");
   }
@@ -277,8 +281,8 @@ public final class YarnCameraPlatform implements CameraPlatform {
     entity.prevY = entity.getY();
     entity.prevZ = entity.getZ();
     entity.setPos(pose.x(), pose.y(), pose.z());
-    entity.setYaw(pose.yaw());
-    entity.setPitch(pose.pitch());
+    entity.yaw = pose.yaw();
+    entity.pitch = pose.pitch();
   }
 
   // ------------------------------------------------------------------ input
@@ -315,14 +319,14 @@ public final class YarnCameraPlatform implements CameraPlatform {
    */
   private void steer(ClientPlayerEntity player, boolean allowed) {
     if (!allowed || mc().currentScreen != null) {
-      baseYaw = player.getYaw();
-      basePitch = player.getPitch();
+      baseYaw = player.getYaw(1.0f);
+      basePitch = player.getPitch(1.0f);
       return;
     }
-    float yawDelta = MathHelper.wrapDegrees(player.getYaw() - baseYaw);
-    float pitchDelta = player.getPitch() - basePitch;
-    player.setYaw(baseYaw);
-    player.setPitch(basePitch);
+    float yawDelta = MathHelper.wrapDegrees(player.getYaw(1.0f) - baseYaw);
+    float pitchDelta = player.getPitch(1.0f) - basePitch;
+    player.yaw = baseYaw;
+    player.pitch = basePitch;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) {
       return;
     }
@@ -352,13 +356,13 @@ public final class YarnCameraPlatform implements CameraPlatform {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.options.forwardKey.isPressed(),
-        mc.options.backKey.isPressed(),
-        mc.options.leftKey.isPressed(),
-        mc.options.rightKey.isPressed(),
-        mc.options.jumpKey.isPressed(),
-        mc.options.sneakKey.isPressed(),
-        mc.options.sprintKey.isPressed());
+        mc.options.keyForward.isPressed(),
+        mc.options.keyBack.isPressed(),
+        mc.options.keyLeft.isPressed(),
+        mc.options.keyRight.isPressed(),
+        mc.options.keyJump.isPressed(),
+        mc.options.keySneak.isPressed(),
+        mc.options.keySprint.isPressed());
   }
 
   private static MinecraftClient mc() {

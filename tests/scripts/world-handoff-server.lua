@@ -23,6 +23,10 @@ check(minecheck.waitFor(minecheck.worldGenSettled, 180), "worldgen settled befor
 -- `runCommand` reports `success` for "the command ran", not for "the condition held": a
 -- conditional `execute if` that fails — or that runs against a chunk the server has not loaded yet
 -- — returns 0 successes without throwing. So the count is the assertion, and it is polled.
+-- The marker's chunk has to be loaded for the conditional check to see it, and this line's world
+-- spawn is not at 0,0: stand the joined player next to the marker first.
+minecheck.runCommand("tp " .. player .. " 0.5 " .. (MARKER_Y + 2) .. " 0.5")
+
 local function markerPresent()
   return minecheck.runCommand("execute if block 0 " .. MARKER_Y .. " 0 minecraft:gold_block").result >= 1
 end

@@ -442,7 +442,33 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
     } catch (IOException e) {
       throw failure("could not write user_jvm_args.txt in " + workdir + ": " + e);
     }
-    return List.of("bash", "run.sh", "nogui");
+    // 1.17 and later install a `run.sh` that puts `libraries/` on the classpath itself. The 1.16
+    // installer predates it and leaves `forge-<mc>-<version>.jar`, whose ServerMain builds that
+    // classpath from the libraries directory and launches the server, so it is started with `-jar`.
+    if (Files.isRegularFile(workdir.resolve("run.sh"))) {
+      return List.of("bash", "run.sh", "nogui");
+    }
+    Path launcher = workdir.resolve("forge-" + minecraft + "-" + version + ".jar");
+    if (!Files.isRegularFile(launcher)) {
+      throw failure(
+          "the Forge installer produced neither run.sh nor "
+              + launcher.getFileName()
+              + " in "
+              + workdir);
+    }
+    return List.of(
+        java,
+        "-Xmx1536M",
+        // A 1.16.5 server predates Java 17 and its modlauncher reflects into these JDK internals,
+        // so it dies in SecureJarHandler's static init without them. The flags are the dev run's
+        // own (see the launch descriptor's jvmArgs), minus the dev-only unprotect agent.
+        "-XX:+IgnoreUnrecognizedVMOptions",
+        "--add-exports=java.base/sun.security.util=ALL-UNNAMED",
+        "--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming",
+        "--add-opens=java.base/java.util.jar=ALL-UNNAMED",
+        "-jar",
+        launcher.getFileName().toString(),
+        "nogui");
   }
 
   /**

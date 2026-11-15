@@ -1,8 +1,7 @@
 {
   "loaders": [
     "fabric",
-    "forge",
-    "quilt"
+    "forge"
   ],
   "release": {
     "prefix": "MineCheck-",
