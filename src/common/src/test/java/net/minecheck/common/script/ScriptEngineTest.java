@@ -489,6 +489,15 @@ class ScriptEngineTest {
     java.util.List<net.minecheck.platform.api.EntityInfo> clientEntities =
         new java.util.ArrayList<>();
 
+    net.minecheck.platform.api.BlockPosition signEditorPos;
+
+    @Override
+    public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
+      signEditorPos = pos;
+      openNow("sign");
+      return true;
+    }
+
     @Override
     public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
       java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
