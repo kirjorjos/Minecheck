@@ -185,6 +185,19 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public Integer groundHeight(int x, int z) {
+    return onServerThread(
+        () -> {
+          ServerLevel level = overworld();
+          if (!level.isLoaded(new BlockPos(x, 0, z))) {
+            return null;
+          }
+          return level.getHeight(
+              net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+        });
+  }
+
+  @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
     return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
   }
