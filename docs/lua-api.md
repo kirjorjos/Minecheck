@@ -1612,7 +1612,7 @@ There is no `passed`/`total` pair in the file: the plugin counts them from `expe
 
 Records a named value into `observations`. An observation is what the run **measured**, not a verdict: numbers and booleans are written in their Lua text form (`4`, `true`), and a later call with the same name replaces the earlier one.
 
-It exists so a suite can compare a whole observation against a committed baseline instead of only asking whether the script's own check passed. The world-handoff suite is the one that uses it: it records the surface height it read, the marker height it placed and whether the marker's chunk had arrived, and the Gradle task compares them against `tests/baselines/handoff.json`. A regression there then fails as "the handoff never reported surfaceY" — pointing at the chunk — rather than as whatever the next assertion happened to say.
+It exists so a suite can compare a whole observation against a committed baseline instead of only asking whether the script's own check passed. The world-handoff suite is the one that uses it: it records the surface height it read, the marker height it placed and whether the marker's chunk had arrived, and the Gradle task compares them against `tests/handoff-baseline.json`. A regression there then fails as "the handoff never reported surfaceY" — pointing at the chunk — rather than as whatever the next assertion happened to say.
 
 ```lua
 minecheck.observe("surfaceY", SURFACE_Y)
