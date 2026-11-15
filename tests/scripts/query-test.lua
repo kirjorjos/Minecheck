@@ -69,13 +69,22 @@ check(px ~= nil, "joined player is findable with a position")
 -- rather than at a height this script owns.
 local bx = math.floor(px) + 2
 local bz = math.floor(pz)
-local SURFACE_Y = minecheck.groundHeight(bx, bz)
-check(SURFACE_Y ~= nil, "the probe column is loaded, so its surface is known")
+-- The player's chunk arrives before its heightmap is primed: an immediate read answers 0, which
+-- sits above the scan below and would make it hunt for a surface it can never reach. Zero is not a
+-- surface in this world (the flat layers start at 0 or -64), so wait for the heightmap.
+local SURFACE_Y
+local surfaceKnown = minecheck.waitFor(function()
+  SURFACE_Y = minecheck.groundHeight(bx, bz)
+  return SURFACE_Y ~= nil and SURFACE_Y ~= 0
+end, 90)
+check(surfaceKnown, "the probe column is loaded, so its surface is known")
 local function isAir(x, y, z)
   return minecheck.runCommand("execute if block " .. x .. " " .. y .. " " .. z .. " minecraft:air").result == 1
 end
 local surfY = nil
-for y = math.floor(py) + 48, SURFACE_Y, -1 do
+-- `groundHeight` answers where a player would stand — the first air above the surface — so the scan
+-- starts one below it, at the top block of the stack, and walks down from the player's feet.
+for y = math.floor(py) + 48, SURFACE_Y - 1, -1 do
   if not isAir(bx, y, bz) then
     surfY = y
     break
