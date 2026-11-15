@@ -1342,6 +1342,34 @@ minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = surface + 1, z = 0.5 }, { 
 
 Both sides: on the client it reads the client's heightmap (synced from the server, so only for chunks the client has), on a dedicated server the overworld's. Unlike [`getBlock`](#minecheckgetblockpos--table--nil) it is not client-only, which is what lets one fixture script run unchanged on every line.
 
+### `minecheck.isChunkLoaded(chunkX, chunkZ) → boolean`
+
+Whether this side holds the chunk at those **chunk** coordinates (block `x >> 4`, `z >> 4`) — on the client a chunk the server has sent, on a dedicated server one that is loaded by any route. It is the precondition for a read at those coordinates: `getBlock` and `groundHeight` answer `nil` until this is true.
+
+```lua
+minecheck.expect(
+  minecheck.waitFor(function()
+    return minecheck.isChunkLoaded(0, 0)
+  end, 90),
+  "the fixture's chunk arrived"
+)
+```
+
+Both sides, like `groundHeight`.
+
+### `minecheck.loadChunk(chunkX, chunkZ) → boolean`
+
+**Server-only.** Force-loads that chunk — the same ticket `forceload add` sets, so it stays loaded for the rest of the run — reads it through so the load is not left to a later tick, and returns `true` once it is loaded.
+
+This is the platform's replacement for the `forceload` command, which only exists from 1.14, and for teleporting a player at a column just to make the server load it.
+
+```lua
+assert(minecheck.loadChunk(0, 0), "the fixture's chunk is loaded")
+local surface = minecheck.groundHeight(0, 0)
+```
+
+A client cannot ask the server for a chunk — vanilla only sends the chunks inside the player's view distance — so calling this from a client raises rather than pretending. On a client, move the player near the column and wait on [`isChunkLoaded`](#minecheckischunkloadedchunkx-chunkz--boolean).
+
 ### `minecheck.findNearbyEntities([type]) → table`
 
 **Client-only**, the client-side counterpart of [`findEntities`](#minecheckfindentitiestype-tag--table). Lists the entities the client currently knows about — the ones the server has synced into the client's loaded chunks, which is exactly what the local player can see and reach. Use it to *target* something: find it, aim at it with `lookAt`, then act (`press("key.attack")`, `mouse(1)`, …).
@@ -1676,7 +1704,8 @@ refused, and a missing file raises rather than silently doing nothing.
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` | ✅ | ✅ | ✅ |
+| `loadChunk` (server: force-loads a chunk) | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
 | `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
