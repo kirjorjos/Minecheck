@@ -8,11 +8,11 @@
 -- Leave behind something a *freshly generated* server world could not have — a marker block at a
 -- fixed position — so the server script can prove which world it is actually running.
 --
--- The world this client creates is flat: bedrock at -64, grass on top at -61, so the surface is
--- SURFACE_Y. The marker sits well above it, where the generator leaves air. The other two handoff
--- scripts read the same height; keep the three in step.
-local SURFACE_Y = -60
-local MARKER_Y = SURFACE_Y + 160
+-- The world this client creates is flat, from that same layer declaration: the surface is the top
+-- of a stack counted up from the bottom of the world, so its height is the line's own — -60 where
+-- the layers start at -64, as on 1.18, and 4 on 1.16.5, which starts them at y=0. The marker sits
+-- well above that surface, where the generator leaves air on either. The height is read from the
+-- world below, so all three handoff scripts agree by construction rather than by a copied constant.
 
 local created = minecheck.createWorld({ name = "minecheck_world", seed = 424242 })
 minecheck.expect(created, "client generated the handoff world")
@@ -22,14 +22,37 @@ end
 
 minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen settled")
 
+-- A fresh world spawns its player away from 0,0 on 1.16.5 (measured at ~113,139), so the marker's
+-- column is not necessarily loaded on this client and its heightmap has no answer yet. Stepping
+-- sideways onto 0,0 at the height the player already stands at loads it on both sides — the ground
+-- there is the same flat layer stack. A client cannot request a chunk (`loadChunk` is server-only),
+-- so the move is the only lever and `waitForChunk` is how the read below knows it is safe.
+minecheck.runCommand("tp @s 0.5 ~ 0.5")
+minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived from the server")
+-- Read the ground beside the marker, not under it: the marker is itself a blocking block, so
+-- once it exists, the marked column's heightmap answers with the marker instead of the ground. The
+-- later phases would then place and look for their own marker 160 blocks too high — outside the
+-- world on 1.16.5. The flat world's surface is the same at both columns.
+-- A chunk can be "loaded" before its heightmap is primed: on the forge client the first read here
+-- answers 0, and the same read two seconds later answers 4. Zero is not a surface in these worlds
+-- (their layers start at 0 or -64), so a non-zero height is the heightmap answering.
+local SURFACE_Y
+local function surfaceKnown()
+  local height = minecheck.groundHeight(1, 0)
+  SURFACE_Y = height
+  return height ~= nil and height ~= 0
+end
+minecheck.expect(minecheck.waitFor(surfaceKnown, 90), "the marker's surface is known")
+local MARKER_Y = SURFACE_Y + 160
+-- The values this phase measured, for the handoff baseline the suite compares against.
+minecheck.observe("surfaceY", SURFACE_Y)
+minecheck.observe("markerY", MARKER_Y)
+
 -- Cheats are on by default for a Minecheck-created world, so the client can set the marker itself.
 local placed = minecheck.runCommand("setblock 0 " .. MARKER_Y .. " 0 minecraft:gold_block")
-minecheck.expect(placed.success, "client placed the handoff marker") -- The block update reaches the client's own copy of the chunk a tick or two later, so this waits
+minecheck.expect(placed.success, "client placed the handoff marker")
+-- The block update reaches the client's own copy of the chunk a tick or two later, so this waits
 -- for what it can see rather than assuming the write was instantaneous.
--- 1.16.5 spawns a new world's player away from 0,0 (measured at ~113,139), so the marker's chunk is
--- not loaded on this client and the read below would see an unloaded chunk. Standing next to the
--- marker loads it; the marker itself stays at the fixed coordinate the other two handoff scripts use.
-minecheck.runCommand("tp @s 0.5 " .. (MARKER_Y + 2) .. " 0.5")
 local marked = minecheck.waitFor(function()
   local b = minecheck.getBlock({ x = 0, y = MARKER_Y, z = 0 })
   return b ~= nil and b.id == "minecraft:gold_block"

@@ -61,19 +61,30 @@ for _, e in pairs(minecheck.findEntities()) do
 end
 check(px ~= nil, "joined player is findable with a position")
 
--- The dedicated server runs the harness's flat world (`tests/flat-world.json`): bedrock at -64,
--- grass on top at -61, so the standing surface is SURFACE_Y. The probe below measures the surface rather than assuming the
--- player's own feet and stops at SURFACE_Y, so a preset that moves the ground moves the floor of the
--- scan with it.
-local SURFACE_Y = -60
-
+-- The dedicated server runs the harness's flat world (`tests/flat-world.json`): four layers counted
+-- up from the bottom of the world — bedrock, two of dirt, grass — so the standing surface is the top
+-- of that stack. Where the bottom sits depends on the line: 1.18 starts the layers at -64 and tops
+-- out at -60, while 1.16.5 has no negative Y at all. The heightmap answers that per column, so the
+-- probe below scans down from the player's own feet and stops at the surface the world reports
+-- rather than at a height this script owns.
 local bx = math.floor(px) + 2
 local bz = math.floor(pz)
+-- The player's chunk arrives before its heightmap is primed: an immediate read answers 0, which
+-- sits above the scan below and would make it hunt for a surface it can never reach. Zero is not a
+-- surface in this world (the flat layers start at 0 or -64), so wait for the heightmap.
+local SURFACE_Y
+local surfaceKnown = minecheck.waitFor(function()
+  SURFACE_Y = minecheck.groundHeight(bx, bz)
+  return SURFACE_Y ~= nil and SURFACE_Y ~= 0
+end, 90)
+check(surfaceKnown, "the probe column is loaded, so its surface is known")
 local function isAir(x, y, z)
   return minecheck.runCommand("execute if block " .. x .. " " .. y .. " " .. z .. " minecraft:air").result == 1
 end
 local surfY = nil
-for y = math.floor(py) + 48, SURFACE_Y, -1 do
+-- `groundHeight` answers where a player would stand — the first air above the surface — so the scan
+-- starts one below it, at the top block of the stack, and walks down from the player's feet.
+for y = math.floor(py) + 48, SURFACE_Y - 1, -1 do
   if not isAir(bx, y, bz) then
     surfY = y
     break

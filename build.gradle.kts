@@ -369,6 +369,7 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
     worldName = "minecheck_world"
     serverPort = "25565"
     xvfbRun = true
+    expectedObservations.set(layout.projectDirectory.file("tests/handoff-baseline.json"))
 
     resultFile.set(
       layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
