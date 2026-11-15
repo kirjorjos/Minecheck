@@ -16,14 +16,9 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "joined world
 -- line's spawn: step sideways onto 0,0 at the height the player already stands at (a flat world has
 -- the same ground there, so the move cannot drop them into it). A client cannot ask for a chunk —
 -- `loadChunk` is server-only for exactly that reason — so the move is what makes the server send it,
--- and `isChunkLoaded` is what says it arrived.
+-- and `waitForChunk` is the wait for it to arrive.
 minecheck.runCommand("tp @s 0.5 ~ 0.5")
-minecheck.expect(
-  minecheck.waitFor(function()
-    return minecheck.isChunkLoaded(0, 0)
-  end, 90),
-  "the marker's chunk arrived from the server"
-)
+minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived from the server")
 local SURFACE_Y = minecheck.groundHeight(0, 0)
 minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160

@@ -26,14 +26,9 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 90), "worldgen set
 -- column is not necessarily loaded on this client and its heightmap has no answer yet. Stepping
 -- sideways onto 0,0 at the height the player already stands at loads it on both sides — the ground
 -- there is the same flat layer stack. A client cannot request a chunk (`loadChunk` is server-only),
--- so the move is the only lever and `isChunkLoaded` is how the read below knows it is safe.
+-- so the move is the only lever and `waitForChunk` is how the read below knows it is safe.
 minecheck.runCommand("tp @s 0.5 ~ 0.5")
-minecheck.expect(
-  minecheck.waitFor(function()
-    return minecheck.isChunkLoaded(0, 0)
-  end, 90),
-  "the marker's chunk arrived from the server"
-)
+minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived from the server")
 local SURFACE_Y = minecheck.groundHeight(0, 0)
 minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160

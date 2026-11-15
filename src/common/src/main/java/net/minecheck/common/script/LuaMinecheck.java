@@ -108,6 +108,7 @@ public final class LuaMinecheck {
     minecheck.set("wait", new Wait());
     minecheck.set("waitFor", new WaitFor());
     minecheck.set("sleepUntil", new WaitFor());
+    minecheck.set("waitForChunk", new WaitForChunk());
     minecheck.set("worldGenSettled", new WorldGenSettled());
     minecheck.set("side", new Side());
     minecheck.set("minecraftVersion", new MinecraftVersion());
@@ -3244,6 +3245,46 @@ public final class LuaMinecheck {
           action
               + ": no server tick has run in this process — the tick clock belongs to the server,"
               + " and this client does not run the one it is playing on");
+    }
+  }
+
+  /**
+   * minecheck.waitForChunk(chunkX, chunkZ, [timeout]) -> boolean
+   *
+   * <p>Both sides: pauses until this side holds that chunk, polling {@link #isChunkLoaded(int,
+   * int)} once per tick, and returns false on timeout. The client-side companion to {@code
+   * loadChunk}: a client cannot ask the server for a chunk, so after moving the player onto a
+   * column it waits for the chunk to arrive instead of hand-rolling {@code waitFor(function()
+   * return minecheck.isChunkLoaded(x, z) end)}.
+   */
+  private final class WaitForChunk extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      long deadline = deadline(args, 3);
+      try {
+        while (true) {
+          boolean loaded;
+          if (client != null) {
+            loaded = client.isChunkLoaded(chunkX, chunkZ);
+          } else {
+            requireServer();
+            loaded = server.isChunkLoaded(chunkX, chunkZ);
+          }
+          if (loaded) {
+            return LuaValue.TRUE;
+          }
+          if (clock.getAsLong() > deadline) {
+            return LuaValue.FALSE;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+      } catch (LuaError e) {
+        throw e;
+      } catch (RuntimeException e) {
+        throw wrap("waitForChunk", e);
+      }
     }
   }
 
