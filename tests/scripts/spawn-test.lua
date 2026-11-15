@@ -22,24 +22,17 @@ end
 -- The fixture is at fixed coordinates and a server loads chunks around its players: the spawn
 -- region usually covers 0,0, but a join that outpaces chunk loading answers "That position is not
 -- loaded", and a line whose world spawns elsewhere (1.16.5 does) never loads these chunks at all.
--- Force-load the fixture's chunk rather than relying on spawn, so the summons and the fill below
--- do not depend on where the world spawned.
-minecheck.runCommand("forceload add 0 0")
+-- Force-load the fixture's chunk through the platform rather than the `forceload` command (1.14+),
+-- so the summons, the fill and the queries below do not depend on where the world spawned.
+check(minecheck.loadChunk(0, 0), "the fixture's chunk is force-loaded")
 
 -- The harness generates the dedicated server's world with the flat preset (`level-type=flat`,
 -- layers from `tests/flat-world.json`): bedrock, two layers of dirt and grass on top, counted up
 -- from the bottom of the world. The heightmap reports where that stack's surface is on this line —
 -- -60 where the layers start at -64, four where 1.16.5 starts them at y=0 — so nothing below is
--- written against a height this script owns. Force-loading applies over the next ticks, so wait for
--- the column to have an answer rather than reading it once.
-local SURFACE_Y = nil
-check(
-  minecheck.waitFor(function()
-    SURFACE_Y = minecheck.groundHeight(0, 0)
-    return SURFACE_Y ~= nil
-  end, 120),
-  "the fixture's chunk is loaded, so its surface is known"
-)
+-- written against a height this script owns.
+local SURFACE_Y = minecheck.groundHeight(0, 0)
+check(SURFACE_Y ~= nil, "the fixture's surface is known")
 -- High enough above that surface that no terrain, tree or structure can be at the fixture's
 -- coordinates. The fixture clears its own volume below, so this is a choice of neighbourhood rather
 -- than a load-bearing height.
