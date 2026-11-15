@@ -33,8 +33,16 @@ minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived f
 -- once it exists, the marked column's heightmap answers with the marker instead of the ground. The
 -- later phases would then place and look for their own marker 160 blocks too high — outside the
 -- world on 1.16.5. The flat world's surface is the same at both columns.
-local SURFACE_Y = minecheck.groundHeight(1, 0)
-minecheck.expect(SURFACE_Y ~= nil, "the marker's surface is known")
+-- A chunk can be "loaded" before its heightmap is primed: on the forge client the first read here
+-- answers 0, and the same read two seconds later answers 4. Zero is not a surface in these worlds
+-- (their layers start at 0 or -64), so a non-zero height is the heightmap answering.
+local SURFACE_Y
+local function surfaceKnown()
+  local height = minecheck.groundHeight(1, 0)
+  SURFACE_Y = height
+  return height ~= nil and height ~= 0
+end
+minecheck.expect(minecheck.waitFor(surfaceKnown, 90), "the marker's surface is known")
 local MARKER_Y = SURFACE_Y + 160
 -- The values this phase measured, for the handoff baseline the suite compares against.
 minecheck.observe("surfaceY", SURFACE_Y)
