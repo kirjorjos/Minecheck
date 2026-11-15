@@ -139,6 +139,7 @@ public final class LuaMinecheck {
     minecheck.set("getTargetBlock", new GetTargetBlock());
     minecheck.set("getCrosshairBlock", new GetCrosshairBlock());
     minecheck.set("getBlock", new GetBlock());
+    minecheck.set("groundHeight", new GroundHeight());
     minecheck.set("findNearbyEntities", new FindNearbyEntities());
 
     // GUI / inventory (client)
@@ -1226,6 +1227,34 @@ public final class LuaMinecheck {
         t.set("nbt", nbtToLua(info.nbt()));
       }
       return t;
+    }
+  }
+
+  /**
+   * minecheck.groundHeight(x, z) -> integer|nil
+   *
+   * <p>Both sides: the y of the first air block above the surface at block column {@code (x, z)},
+   * from the vanilla {@code MOTION_BLOCKING} heightmap — where a player standing on that column
+   * stands. {@code nil} when that column's chunk is not loaded (the client has not been sent it, or
+   * the server has not loaded it), so a baked-in surface height is never needed: read the world.
+   */
+  private final class GroundHeight extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int x = (int) Math.floor(args.checkdouble(1));
+      int z = (int) Math.floor(args.checkdouble(2));
+      Integer y;
+      try {
+        if (client != null) {
+          y = client.groundHeight(x, z);
+        } else {
+          requireServer();
+          y = server.groundHeight(x, z);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("groundHeight", e);
+      }
+      return y == null ? LuaValue.NIL : LuaValue.valueOf(y.intValue());
     }
   }
 

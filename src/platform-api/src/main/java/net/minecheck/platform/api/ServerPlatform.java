@@ -77,6 +77,17 @@ public interface ServerPlatform {
   java.util.List<EntityInfo> findEntities(String type, String tag);
 
   /**
+   * The y of the first air block above the surface at block column {@code (x, z)} in the overworld,
+   * read from the vanilla {@code MOTION_BLOCKING} heightmap — where a player standing on that
+   * column would stand.
+   *
+   * <p>Mirrors {@link ClientPlatform#groundHeight(int, int)}, including {@code null} for a column
+   * whose chunk is not loaded: an unloaded chunk's heightmap has no answer, so a script that needs
+   * the height of a column away from the player has to load it first.
+   */
+  Integer groundHeight(int x, int z);
+
+  /**
    * True once this server's own overworld chunk generation has settled (no pending chunk work).
    * Mirrors {@link ClientPlatform#isWorldGenSettled()} for the dedicated-server case: a server
    * script can wait on this before e.g. asserting worldgen-related state, and it is never "not

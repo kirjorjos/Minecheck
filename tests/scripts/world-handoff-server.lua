@@ -3,11 +3,8 @@
 -- being generated here. The marker block is what proves that: `execute if block` succeeds only in
 -- the save the client created.
 --
--- The staged save is the flat world the client built: surface at SURFACE_Y, marker well above it.
--- The same height is declared in world-handoff-generate-client.lua and world-handoff-client.lua.
-local SURFACE_Y = -60
-local MARKER_Y = SURFACE_Y + 160
-
+-- The staged save is the flat world the client built: the marker sits well above its surface, and
+-- the height is read from the loaded world below rather than declared here.
 local player = "Dev"
 
 local function check(result, name)
@@ -20,13 +17,24 @@ end
 check(minecheck.waitForPlayer(player, 180), "player " .. player .. " joined the handoff server")
 check(minecheck.waitFor(minecheck.worldGenSettled, 180), "worldgen settled before the marker check")
 
+-- The marker's column is not necessarily the server's spawn column, and an unloaded chunk has no
+-- height: move the player sideways onto 0,0 at the height they already stand at (the world is flat,
+-- so nothing drops), which loads the column, then take the surface from the world.
+minecheck.runCommand("tp " .. player .. " 0.5 ~ 0.5")
+local SURFACE_Y = nil
+check(
+  minecheck.waitFor(function()
+    SURFACE_Y = minecheck.groundHeight(0, 0)
+    return SURFACE_Y ~= nil
+  end, 90),
+  "the marker's column is loaded, so its surface is known"
+)
+local MARKER_Y = SURFACE_Y + 160
+
 -- `runCommand` reports `success` for "the command ran", not for "the condition held": a
 -- conditional `execute if` that fails — or that runs against a chunk the server has not loaded yet
 -- — returns 0 successes without throwing. So the count is the assertion, and it is polled.
--- The marker's chunk has to be loaded for the conditional check to see it, and this line's world
--- spawn is not at 0,0: stand the joined player next to the marker first.
-minecheck.runCommand("tp " .. player .. " 0.5 " .. (MARKER_Y + 2) .. " 0.5")
-
+-- The marker's column was loaded above, so the conditional check below can see it.
 local function markerPresent()
   return minecheck.runCommand("execute if block 0 " .. MARKER_Y .. " 0 minecraft:gold_block").result >= 1
 end
