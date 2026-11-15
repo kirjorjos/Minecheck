@@ -19,23 +19,31 @@ local function check(result, name)
   end
 end
 
--- The harness generates the dedicated server's world with the flat preset (`level-type=flat`,
--- layers from `tests/flat-world.json`): bedrock, two layers of dirt and grass on top, counted up
--- from the bottom of the world. SURFACE_Y is that stack's top where the layers start at -64, as on
--- the 1.18 line (-60); 1.16.5 starts them at y=0, so its surface is higher and everything below is
--- written relative to the same number it still clears.
-local SURFACE_Y = -60
--- High enough above that surface that no terrain, tree or structure can be at the fixture's
--- coordinates. The fixture clears its own volume below, so this is a choice of neighbourhood rather
--- than a load-bearing height.
-local FIXTURE_Y = SURFACE_Y + 160
-
 -- The fixture is at fixed coordinates and a server loads chunks around its players: the spawn
 -- region usually covers 0,0, but a join that outpaces chunk loading answers "That position is not
 -- loaded", and a line whose world spawns elsewhere (1.16.5 does) never loads these chunks at all.
 -- Force-load the fixture's chunk rather than relying on spawn, so the summons and the fill below
 -- do not depend on where the world spawned.
 minecheck.runCommand("forceload add 0 0")
+
+-- The harness generates the dedicated server's world with the flat preset (`level-type=flat`,
+-- layers from `tests/flat-world.json`): bedrock, two layers of dirt and grass on top, counted up
+-- from the bottom of the world. The heightmap reports where that stack's surface is on this line —
+-- -60 where the layers start at -64, four where 1.16.5 starts them at y=0 — so nothing below is
+-- written against a height this script owns. Force-loading applies over the next ticks, so wait for
+-- the column to have an answer rather than reading it once.
+local SURFACE_Y = nil
+check(
+  minecheck.waitFor(function()
+    SURFACE_Y = minecheck.groundHeight(0, 0)
+    return SURFACE_Y ~= nil
+  end, 120),
+  "the fixture's chunk is loaded, so its surface is known"
+)
+-- High enough above that surface that no terrain, tree or structure can be at the fixture's
+-- coordinates. The fixture clears its own volume below, so this is a choice of neighbourhood rather
+-- than a load-bearing height.
+local FIXTURE_Y = SURFACE_Y + 160
 
 -- entity (spawned with NoAI so it stands still, keeping all tests deterministic)
 local cow = minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = FIXTURE_Y, z = 0.5 }, { NoAI = true })
