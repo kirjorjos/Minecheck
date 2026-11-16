@@ -196,6 +196,7 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
               + captures
               + " — the script did not call captureScreenshot");
     }
+    boolean report = getReport().getOrElse(false);
     if (result.failed()) {
       String message =
           "Minecheck screenshot baselines FAILED ("
@@ -203,22 +204,28 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
               + "):\n\n"
               + String.join("\n\n", result.failures())
               + "\n";
-      if (getReport().getOrElse(false)) {
-        // Report mode: the divergence is the PR's finding, not its failure. Same text, printed
-        // where the workflow and the comment job can pick it up, plus the paths on their own.
-        getLogger().warn(message);
-        getLogger()
-            .lifecycle(
-                "Minecheck: {} of {} {} capture(s) differ from the compared tree{}",
-                result.failures().size(),
-                result.total(),
-                loader,
-                REPORT_HINT);
-        writeReport(result.failures(), active);
-        writeManifest(result, active);
-      } else {
+      if (!report) {
         throw new GradleException(message);
       }
+      // Report mode: the divergence is the PR's finding, not its failure. Same text, printed
+      // where the workflow and the comment job can pick it up, plus the paths on their own.
+      getLogger().warn(message);
+      getLogger()
+          .lifecycle(
+              "Minecheck: {} of {} {} capture(s) differ from the compared tree{}",
+              result.failures().size(),
+              result.total(),
+              loader,
+              REPORT_HINT);
+    }
+    if (report) {
+      // Written whether or not the comparison failed. A baseline no capture produced is
+      // deliberately a warning (a suite may cover only part of a tree), yet its `deletion` entry
+      // is the only thing that tells the post-merge chore to `git rm` the file. Gating these
+      // writes on `failed()` left exactly those entries unwritten: a branch that dropped a scene
+      // reported the deletion in its comment and kept the picture for ever.
+      writeReport(result.failures(), active);
+      writeManifest(result, active);
     }
     getLogger()
         .lifecycle(
@@ -298,12 +305,14 @@ public abstract class MinecheckScreenshotBaselines extends DefaultTask {
   }
 
   /**
-   * Writes the mismatch classes the determinism pass reads: one JSON line per mismatch, {@code
-   * tests/baselines/<loader>/<file>.png} plus {@code addition}, {@code change} or {@code deletion}.
+   * Writes the mismatch classes the determinism pass and the post-merge chore read: one JSON line
+   * per mismatch, {@code tests/baselines/<loader>/<file>.png} plus {@code addition}, {@code change}
+   * or {@code deletion}.
    *
    * <p>A missing baseline is an addition, a differing picture is a change, and a baseline no
    * capture produced is a deletion. The three are deliberately kept apart: the rerun's verdict
-   * depends on which one it is looking at.
+   * depends on which one it is looking at, and a deletion is what the chore removes from the
+   * committed tree after the merge.
    */
   private void writeManifest(ScreenshotBaselines.Result result, Path active) {
     if (!getManifestFile().isPresent()) {
