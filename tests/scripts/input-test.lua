@@ -85,6 +85,15 @@ expect(
   end, 5),
   "the crosshair landed on the block below the player"
 )
+-- The same wait for the *renderer's* crosshair. The middles clicks below act on it, not on the
+-- raycast above, so a rotation the script can already see is not yet a crosshair a click can use.
+expect(
+  minecheck.waitFor(function()
+    local hit = minecheck.getCrosshairBlock()
+    return hit ~= nil and hit.x == feetBlock.x and hit.y == feetBlock.y and hit.z == feetBlock.z
+  end, 30),
+  "the renderer's crosshair reached the block below (crosshair on " .. blockLabel(minecheck.getCrosshairBlock()) .. ")"
+)
 
 local target = minecheck.getTargetBlock(start)
 expect(target ~= nil, "crosshair on a block when looking down")
@@ -103,27 +112,80 @@ expect(pickedBlock ~= nil and pickedBlock.id ~= "minecraft:air", "read the block
 -- press lands on nothing and the click is simply gone. Press until the effect is observed instead —
 -- each press spans a tick, so the presses themselves are what let the crosshair catch up.
 
--- The creative inventory screen is not the survival one: slots 0..44 are the item-list tabs and the
--- player's hotbar is 45..53 (slotCount 54), so a read at 36..44 returns tab contents and says
--- nothing about the hand.
-local function hotbarHolds(itemId)
-  if not minecheck.openScreen("inventory", nil, 10) then
-    return false
-  end
-  local found = minecheck.waitFor(function()
-    for i = 45, 53 do
-      local s = minecheck.getSlot(i, "inventory")
+-- The hand is read through a chest rather than the inventory screen. A chest's menu is the same
+-- menu on every version and in every gamemode — 27 chest slots, then the player's main inventory
+-- (27..53) and hotbar (54..62) — while the creative inventory screen is not: its item tabs occupy
+-- 0..44 and push the hotbar to 45..53, so a read there is a fact about one screen on one line.
+local CHEST_SLOTS = 27
+local PLAYER_SLOTS = 27
+local HOTBAR_FIRST = CHEST_SLOTS + PLAYER_SLOTS
+
+-- Directly above the player's head, two rows above the feet, and derived from `target` — the same
+-- raycast the dig and place cells below come from, so all of them describe one position even if
+-- `start` has gone stale. Every cell this script digs or places into sits on the feet row or one
+-- below, in a column beside the player, so a chest two rows up in the player's own column can never
+-- be one of them. It also never sits under the downward crosshair the pick step uses, so a pick can
+-- only ever copy the ground block into the hand.
+local chestPos = { x = target.x, y = target.y + 3, z = target.z }
+local chestAim = { x = chestPos.x + 0.5, y = chestPos.y + 0.5, z = chestPos.z + 0.5 }
+minecheck.runCommand("setblock " .. chestPos.x .. " " .. chestPos.y .. " " .. chestPos.z .. " minecraft:chest")
+expect(
+  minecheck.waitFor(function()
+    local b = minecheck.getBlock(chestPos)
+    return b ~= nil and b.id == "minecraft:chest"
+  end, 10),
+  "chest placed above the player's head"
+)
+
+-- Reading the hand opens a chest, which points the camera at it, and a press acts on the *renderer's*
+-- crosshair: a press still in flight when the camera arrives copies the chest into the hand instead of
+-- the ground block, and the place step then puts a chest in the world (seen on CI). So every read ends
+-- by aiming back down and waiting for the crosshair itself, the batch is allowed to land before the
+-- read moves the camera, and the read selects the slot the picked block landed in.
+local function aimBackDown()
+  minecheck.look(90, 0)
+  return minecheck.waitFor(function()
+    local hit = minecheck.getCrosshairBlock()
+    return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z
+  end, 30)
+end
+
+-- The hotbar slot that holds the item, as a chest-menu index (54..62), or nil.
+local function hotbarSlotHolding(itemId)
+  local found = nil
+  minecheck.waitFor(function()
+    for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+      local s = minecheck.getSlot(i, "chest")
       if s ~= nil and not s.empty and s.id == itemId then
+        found = i
         return true
       end
     end
     return false
   end, 10)
-  minecheck.press("Escape")
-  minecheck.waitFor(function()
+  return found
+end
+
+-- The place step spends the *selected* slot, so reading the hotbar is not enough on its own: the
+-- hotbar can hold the picked block while the selection sits on something else, and a press that lands
+-- on the chest puts a chest in the hand exactly that way. Select the slot the block was found in, by
+-- its hotbar number key, so the hand is the block the assertion below is about.
+local function handHolds(itemId)
+  local opened = minecheck.openScreen("chest", chestAim, 10)
+  local found = nil
+  if opened then
+    found = hotbarSlotHolding(itemId)
+    minecheck.press("Escape")
+  end
+  -- The presses are meant for the world: a screen that stayed open takes them as slot clicks.
+  local closed = minecheck.waitFor(function()
     return not minecheck.isScreenOpen()
   end, 5)
-  return found
+  local aimed = aimBackDown()
+  if not (opened and found ~= nil and closed and aimed) then
+    return false
+  end
+  return minecheck.keyPress("key.hotbar." .. (found - HOTBAR_FIRST + 1))
 end
 
 local picked = false
@@ -131,17 +193,19 @@ for _ = 1, 3 do
   for _ = 1, 20 do
     minecheck.mousePress(2)
   end
-  picked = hotbarHolds(pickedBlock.id)
+  -- The read moves the camera to the chest: let the batch land first, so no press is spent on the
+  -- chest once it does.
+  minecheck.wait(0.2)
+  picked = handHolds(pickedBlock.id)
   if picked then
     break
   end
-  minecheck.look(90, 0)
   minecheck.waitFor(function()
     local hit = minecheck.getTargetBlock(start)
     return hit ~= nil and hit.x == target.x and hit.y == target.y and hit.z == target.z
   end, 5)
 end
-expect(picked, "middle-click put the picked block in the hotbar")
+expect(picked, "middle-click put the picked block in the selected hotbar slot")
 
 -- A press acts on the *renderer's* crosshair, not on the raycast the script can compute: the
 -- crosshair is refreshed once per frame, so waiting for the script's own raycast to carry the block
@@ -203,6 +267,20 @@ expect(
 -- surface makes the click's own face UP, which is what picks the cell above it.
 local besidePos = { x = target.x, y = target.y, z = target.z + 1 }
 local placePos = { x = besidePos.x, y = besidePos.y + 1, z = besidePos.z }
+-- The step asserts a click put a block in that cell, so the cell has to start empty: anything
+-- already there would be read as the placed block and reported as the wrong one.
+local function placeCellFree()
+  local b = minecheck.getBlock(placePos)
+  return b ~= nil and b.id == "minecraft:air"
+end
+if not placeCellFree() then
+  local before = minecheck.getBlock(placePos)
+  minecheck.runCommand("setblock " .. placePos.x .. " " .. placePos.y .. " " .. placePos.z .. " minecraft:air")
+  expect(
+    minecheck.waitFor(placeCellFree, 10),
+    "the cell above the block beside the player starts empty (was " .. tostring(before and before.id) .. ")"
+  )
+end
 minecheck.lookAt(besidePos.x + 0.5, besidePos.y + 1.0, besidePos.z + 0.5)
 minecheck.waitFor(function()
   local hit = minecheck.getTargetBlock(minecheck.getPlayer())
