@@ -244,33 +244,50 @@ if viewerInstalled then
   end
 end
 
-local inv2 = minecheck.openScreen("inventory", nil, 10)
-check(inv2, "inventory reopened")
-check(minecheck.slotCount("inventory") > 0, "inventory has slots")
--- The hotbar's first slot is not a constant: the survival handler puts it at 36, while the creative
--- inventory puts the item-list tabs at 0..44 and the hotbar at 45..53 (slotCount 54). A read at 36
--- on the creative screen returns a tab item and says nothing about the player's hotbar.
-local function hotbarStart()
-  return minecheck.slotCount("inventory") > 46 and 45 or 36
-end
+-- The container assertions are read through a chest, not the player inventory screen. A chest's
+-- menu is the same menu on every version and in every gamemode — 27 chest slots, then the player's
+-- main inventory (27..53) and hotbar (54..62) — while the inventory screen is not: the survival
+-- handler puts the hotbar at 36..44, the creative screen puts its item tabs at 0..44 and the hotbar
+-- at 45..53, so a read at a fixed offset means different things per line and per gamemode. A chest
+-- is also a real block, which keeps the whole container path (open, move, read) under test.
+local CHEST_SLOTS = 27
+local PLAYER_SLOTS = 27
+local HOTBAR_FIRST = CHEST_SLOTS + PLAYER_SLOTS
 
-local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
+-- Placed beside the player's column so it is in reach without moving, and clear of the beacon, the
+-- sign and the pyramid blocks read above.
+local chestPos = { x = bx + 2, y = by, z = bz }
+local chestAim = { x = bx + 2.5, y = by + 0.5, z = bz + 0.5 }
+minecheck.runCommand("setblock " .. chestPos.x .. " " .. chestPos.y .. " " .. chestPos.z .. " minecraft:chest")
+check(
+  minecheck.waitFor(function()
+    local b = minecheck.getBlock(chestPos)
+    return b ~= nil and b.id == "minecraft:chest"
+  end, 10),
+  "client sees the chest placed beside the pyramid"
+)
+
+local chest = minecheck.openScreen("chest", chestAim, 10)
+check(chest, "chest opened")
+check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest slots plus the player's 36")
+
+local sword = minecheck.getSlot(HOTBAR_FIRST + 1, "chest")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
 check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
 local redstoneReady = minecheck.waitFor(function()
-  local s = minecheck.getSlot(hotbarStart() + 2, "inventory")
+  local s = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8
 end, 30)
 check(redstoneReady, "server gave the 8-redstone stack (third hotbar slot)")
-local partial = minecheck.moveItem(hotbarStart() + 2, 10, 3, "inventory")
+local partial = minecheck.moveItem(HOTBAR_FIRST + 2, 0, 3, "chest")
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
-  local s = minecheck.getSlot(10, "inventory")
+  local s = minecheck.getSlot(0, "chest")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 3
 end, 10)
-check(moved3, "destination holds exactly 3 redstone")
-local leftOver = minecheck.getSlot(hotbarStart() + 2, "inventory")
+check(moved3, "the chest's first slot holds exactly 3 redstone")
+local leftOver = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
 check(leftOver.id == "minecraft:redstone" and leftOver.count == 5, "source keeps the remaining 5 redstone")
 
 local typed = minecheck.typeText("give @s minecraft:diamond 2", "command")
@@ -284,25 +301,27 @@ local chatClosed = minecheck.waitFor(function()
 end, 5)
 check(chatClosed, "chat screen closed after submitting the typed command")
 
-local inv3 = minecheck.openScreen("inventory", nil, 10)
-check(inv3, "inventory reopened for the typeText check")
+local inv3 = minecheck.openScreen("chest", chestAim, 10)
+check(inv3, "chest reopened for the typeText check")
+-- Anywhere in the container: the hand's slot is the client's business, and the container also holds
+-- the player's main inventory, which the creative screen does not show at all.
 local gotDiamonds = minecheck.waitFor(function()
-  for i = hotbarStart(), hotbarStart() + 8 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:diamond" and s.count == 2 then
       return true
     end
   end
   return false
 end, 20)
-check(gotDiamonds, "typed /give command executed (2 diamonds in the hotbar)")
+check(gotDiamonds, "typed /give command executed (2 diamonds in the container)")
 
 -- Recipe-viewer ghost slots are "part of the GUI": a ghost slot can be the *source* of a slot move.
 -- It names the ingredient the viewer shows (the same 0-based `index` getRecipeSlots reports) — the
 -- viewer's slots are display-only, so the item itself still comes out of the open container.
 local function slotHolding(itemId)
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == itemId then
       return i
     end
@@ -310,10 +329,10 @@ local function slotHolding(itemId)
   return nil
 end
 
-local function countInInventory(itemId)
+local function countInContainer(itemId)
   local total = 0
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == itemId then
       total = total + s.count
     end
@@ -336,7 +355,7 @@ end
 minecheck.runCommand("give @s minecraft:oak_planks 4")
 check(
   minecheck.waitFor(function()
-    return countInInventory("minecraft:oak_planks") == 4
+    return countInContainer("minecraft:oak_planks") == 4
   end, 30),
   "server gave 4 oak planks"
 )
@@ -361,14 +380,14 @@ if viewerInstalled then
   local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
   check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
   check(
-    minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 10, 1, "inventory") == false,
+    minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 0, 1, "chest") == false,
     "an unknown recipe resolves to no source slot"
   )
   if plankGhost ~= nil then
     local source = slotHolding("minecraft:oak_planks")
     local dest = nil
-    for i = hotbarStart(), hotbarStart() + 8 do
-      local s = minecheck.getSlot(i, "inventory")
+    for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+      local s = minecheck.getSlot(i, "chest")
       if s ~= nil and s.empty and i ~= source then
         dest = i
         break
@@ -377,21 +396,21 @@ if viewerInstalled then
     check(source ~= nil and dest ~= nil, "plank source and an empty destination slot found")
 
     local okGhostDest = pcall(function()
-      minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "inventory")
+      minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "chest")
     end)
     check(okGhostDest == false, "naming a ghost slot as the destination raises")
 
     check(
-      minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "inventory"),
+      minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "chest"),
       "moveItem took the recipe's ingredient out of the container"
     )
     local landed = minecheck.waitFor(function()
-      local s = minecheck.getSlot(dest, "inventory")
+      local s = minecheck.getSlot(dest, "chest")
       return s ~= nil and not s.empty and s.id == "minecraft:oak_planks" and s.count == 1
     end, 10)
     check(landed, "1 oak plank landed in the destination slot")
-    check(minecheck.getSlot(source, "inventory").count == 3, "the other 3 planks stayed in the source")
-    check(countInInventory("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
+    check(minecheck.getSlot(source, "chest").count == 3, "the other 3 planks stayed in the source")
+    check(countInContainer("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
   end
 end
 
@@ -401,9 +420,9 @@ end
 check(minecheck.reloadResources(30), "client resource reload finished mid-session")
 
 -- `checkViewer` asserts that a fill is refused when no container is open, and the ghost-slot moves
--- above left the inventory open: close it with the same key that opened it before probing JEI.
+-- above left the chest open: close it before probing JEI.
 if minecheck.isScreenOpen() then
-  minecheck.keyPress("key.inventory")
+  minecheck.press("Escape")
   minecheck.waitFor(function()
     return not minecheck.isScreenOpen()
   end, 5)
