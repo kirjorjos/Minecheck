@@ -100,6 +100,7 @@ public final class LuaMinecheck {
 
     // Assertions / result reporting
     minecheck.set("expect", new Expect());
+    minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
     // Utilities
@@ -108,6 +109,7 @@ public final class LuaMinecheck {
     minecheck.set("wait", new Wait());
     minecheck.set("waitFor", new WaitFor());
     minecheck.set("sleepUntil", new WaitFor());
+    minecheck.set("waitForChunk", new WaitForChunk());
     minecheck.set("worldGenSettled", new WorldGenSettled());
     minecheck.set("side", new Side());
     minecheck.set("minecraftVersion", new MinecraftVersion());
@@ -139,6 +141,9 @@ public final class LuaMinecheck {
     minecheck.set("getTargetBlock", new GetTargetBlock());
     minecheck.set("getCrosshairBlock", new GetCrosshairBlock());
     minecheck.set("getBlock", new GetBlock());
+    minecheck.set("groundHeight", new GroundHeight());
+    minecheck.set("isChunkLoaded", new IsChunkLoaded());
+    minecheck.set("loadChunk", new LoadChunk());
     minecheck.set("findNearbyEntities", new FindNearbyEntities());
 
     // GUI / inventory (client)
@@ -804,6 +809,25 @@ public final class LuaMinecheck {
   // ------------------------------------------------------------ assertions / result reporting
 
   /**
+   * minecheck.observe(name, value) -> nil
+   *
+   * <p>Records a named value into the run result's {@code observations} map, for a suite that
+   * compares what the run measured against a committed baseline (e.g. the handoff suite's surface
+   * height and marker height). Unlike {@code expect} it carries no verdict: the suite decides what
+   * the value must be. Numbers and booleans are written in their Lua text form ({@code 4}, {@code
+   * true}); a later call with the same name replaces the earlier value.
+   */
+  private final class Observe extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      if (engine != null) {
+        engine.recordObservation(args.arg1().checkjstring(), args.arg(2).tojstring());
+      }
+      return LuaValue.NIL;
+    }
+  }
+
+  /**
    * minecheck.expect(cond, name) -> boolean
    *
    * <p>Records a named pass/fail into the run result and returns the boolean so the script can
@@ -1229,6 +1253,90 @@ public final class LuaMinecheck {
     }
   }
 
+  /**
+   * minecheck.groundHeight(x, z) -> integer|nil
+   *
+   * <p>Both sides: the y of the first air block above the surface at block column {@code (x, z)},
+   * from the vanilla {@code MOTION_BLOCKING} heightmap — where a player standing on that column
+   * stands. {@code nil} when that column's chunk is not loaded (the client has not been sent it, or
+   * the server has not loaded it), so a baked-in surface height is never needed: read the world.
+   */
+  private final class GroundHeight extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int x = (int) Math.floor(args.checkdouble(1));
+      int z = (int) Math.floor(args.checkdouble(2));
+      Integer y;
+      try {
+        if (client != null) {
+          y = client.groundHeight(x, z);
+        } else {
+          requireServer();
+          y = server.groundHeight(x, z);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("groundHeight", e);
+      }
+      return y == null ? LuaValue.NIL : LuaValue.valueOf(y.intValue());
+    }
+  }
+
+  /**
+   * minecheck.isChunkLoaded(chunkX, chunkZ) -> boolean
+   *
+   * <p>Both sides: whether this side holds that chunk — on the client a chunk the server has sent,
+   * on the server one that is loaded (by a nearby player, by {@code loadChunk}, or by an earlier
+   * read). The precondition for a read at those coordinates: {@code getBlock} and {@code
+   * groundHeight} answer {@code nil} until this is true.
+   */
+  private final class IsChunkLoaded extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      boolean loaded;
+      try {
+        if (client != null) {
+          loaded = client.isChunkLoaded(chunkX, chunkZ);
+        } else {
+          requireServer();
+          loaded = server.isChunkLoaded(chunkX, chunkZ);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("isChunkLoaded", e);
+      }
+      return LuaValue.valueOf(loaded);
+    }
+  }
+
+  /**
+   * minecheck.loadChunk(chunkX, chunkZ) -> boolean
+   *
+   * <p>Server only: force-loads that chunk (the ticket {@code forceload add} sets, so it stays
+   * loaded) and returns true once it is. Raises on a client, which cannot make the server send it a
+   * chunk — vanilla only sends the chunks inside the player's view distance, so a client has to be
+   * moved near a column to receive it.
+   */
+  private final class LoadChunk extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      if (client != null) {
+        throw new LuaError(
+            "loadChunk is server-only: a client receives only the chunks the server sends around the player");
+      }
+      requireServer();
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      boolean loaded;
+      try {
+        loaded = server.loadChunk(chunkX, chunkZ);
+      } catch (RuntimeException e) {
+        throw wrap("loadChunk", e);
+      }
+      return LuaValue.valueOf(loaded);
+    }
+  }
+
   // ------------------------------------------------------------ GUI / inventory (client)
 
   /**
@@ -1275,6 +1383,24 @@ public final class LuaMinecheck {
               client.keyDown("key.inventory");
               globals.yield(LuaValue.NIL);
               client.keyUp("key.inventory");
+            } else if (id.equals("sign")) {
+              // A sign's editor is opened by the client itself: the block-use path does not reach
+              // it
+              // on every version, so asking for the screen directly is what keeps one script
+              // working
+              // across the lines. `clicked` stays true so the loop below never synthesizes a click.
+              if (pos.isnil()) {
+                return LuaValue.FALSE;
+              }
+              double[] p = parsePos(pos);
+              aimX = (int) Math.floor(p[0]);
+              aimY = (int) Math.floor(p[1]);
+              aimZ = (int) Math.floor(p[2]);
+              if (!client.openSignEditor(
+                  new net.minecheck.platform.api.BlockPosition(aimX, aimY, aimZ))) {
+                return LuaValue.FALSE;
+              }
+              clicked = true;
             } else if (!pos.isnil()) {
               double[] p = parsePos(pos);
               aimX = (int) Math.floor(p[0]);
@@ -1328,7 +1454,7 @@ public final class LuaMinecheck {
    *
    * <p>Client: non-blocking check of whether a screen is open. No id (or {@code nil}) returns true
    * when any container screen is open; a known id ({@code "inventory"}, {@code "beacon"}, {@code
-   * "chest"}, {@code "crafting"}, {@code "furnace"}) only matches that screen.
+   * "chest"}, {@code "crafting"}, {@code "furnace"}, {@code "sign"}) only matches that screen.
    */
   private final class IsScreenOpen extends VarArgFunction {
     @Override
@@ -3157,6 +3283,46 @@ public final class LuaMinecheck {
           action
               + ": no server tick has run in this process — the tick clock belongs to the server,"
               + " and this client does not run the one it is playing on");
+    }
+  }
+
+  /**
+   * minecheck.waitForChunk(chunkX, chunkZ, [timeout]) -> boolean
+   *
+   * <p>Both sides: pauses until this side holds that chunk, polling {@link #isChunkLoaded(int,
+   * int)} once per tick, and returns false on timeout. The client-side companion to {@code
+   * loadChunk}: a client cannot ask the server for a chunk, so after moving the player onto a
+   * column it waits for the chunk to arrive instead of hand-rolling {@code waitFor(function()
+   * return minecheck.isChunkLoaded(x, z) end)}.
+   */
+  private final class WaitForChunk extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      int chunkX = (int) Math.floor(args.checkdouble(1));
+      int chunkZ = (int) Math.floor(args.checkdouble(2));
+      long deadline = deadline(args, 3);
+      try {
+        while (true) {
+          boolean loaded;
+          if (client != null) {
+            loaded = client.isChunkLoaded(chunkX, chunkZ);
+          } else {
+            requireServer();
+            loaded = server.isChunkLoaded(chunkX, chunkZ);
+          }
+          if (loaded) {
+            return LuaValue.TRUE;
+          }
+          if (clock.getAsLong() > deadline) {
+            return LuaValue.FALSE;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+      } catch (LuaError e) {
+        throw e;
+      } catch (RuntimeException e) {
+        throw wrap("waitForChunk", e);
+      }
     }
   }
 

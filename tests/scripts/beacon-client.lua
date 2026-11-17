@@ -86,7 +86,6 @@ local beaconSeen = minecheck.waitFor(function()
 end, 30)
 check(beaconSeen, "beacon visible in the client world")
 
-local p = minecheck.getPlayer()
 local beaconBlock = minecheck.getBlock({ x = bx, y = by, z = bz })
 check(beaconBlock ~= nil and beaconBlock.id == "minecraft:beacon", "getBlock reads the beacon block")
 check(beaconBlock ~= nil and beaconBlock.nbt ~= nil, "getBlock returns the beacon's block entity nbt")
@@ -94,47 +93,58 @@ local ironBlock = minecheck.getBlock({ x = bx, y = by - 1, z = bz })
 check(ironBlock ~= nil and ironBlock.id == "minecraft:iron_block", "getBlock reads the pyramid block below")
 check(ironBlock ~= nil and ironBlock.nbt == nil, "plain blocks have no block entity nbt")
 
-local opened = minecheck.openScreen("beacon", { x = p.pos.x, y = p.pos.y - 0.5, z = p.pos.z }, 10)
-check(opened, "beacon screen opened")
-check(minecheck.isScreenOpen("beacon") == true, "isScreenOpen(beacon) is true")
-
-local count = minecheck.slotCount("beacon")
-check(count == 37, "beacon menu exposes 37 slots (got " .. count .. ")")
-local slot = minecheck.getSlot(0, "beacon")
-check(slot.empty, "beacon payment slot is empty")
-
-local clicked = minecheck.clickGui(4, 4)
-check(clicked, "clickGui dispatched to the beacon screen")
-check(minecheck.isScreenOpen("beacon") == true, "beacon screen still open after click")
-
-local moved1 = minecheck.moveItem(28, 1, nil, "beacon")
-check(moved1, "moveItem dispatched emerald to main slot 1")
-local inMain = minecheck.waitFor(function()
-  local s = minecheck.getSlot(1, "beacon")
-  return s ~= nil and not s.empty and s.id == "minecraft:emerald"
+-- The screen mechanics are asserted on a sign, not on the beacon's menu. The sign editor is the same
+-- screen on every version — one text field and a `Done` button carrying that label — while the beacon
+-- menu is not: its slot count, its payment slot and its cancel button's class name all differ across
+-- versions, and a line that predates the beacon cannot run them at all. The sign stands on top of the
+-- beacon, so it is also the block over it.
+local sy = by + 1
+minecheck.runCommand("setblock " .. bx .. " " .. sy .. " " .. bz .. " minecraft:oak_sign")
+local signPlaced = minecheck.waitFor(function()
+  local b = minecheck.getBlock({ x = bx, y = sy, z = bz })
+  return b ~= nil and b.id == "minecraft:oak_sign"
 end, 10)
-check(inMain, "emerald landed in main slot 1")
-check(minecheck.getSlot(28, "beacon").empty, "hotbar slot emptied after the move")
+check(signPlaced, "sign placed over the beacon")
 
-local moved2 = minecheck.moveItem(1, 0, nil, "beacon")
-check(moved2, "moveItem dispatched emerald into the payment slot")
-local paid = minecheck.waitFor(function()
-  local s = minecheck.getSlot(0, "beacon")
-  return s ~= nil and not s.empty and s.id == "minecraft:emerald"
+-- Step off the beacon onto the pyramid's top layer: the sign now holds the space the player stood
+-- in, and its editor is opened by right-clicking it from outside.
+minecheck.runCommand("tp @s " .. (bx + 1.5) .. " " .. by .. " " .. (bz + 0.5))
+local beside = minecheck.waitFor(function()
+  local pl = minecheck.getPlayer()
+  return pl ~= nil and math.floor(pl.pos.y) == by
 end, 10)
-check(paid, "emerald landed in the beacon payment slot")
-local paidStack = minecheck.getSlot(0, "beacon")
-check(paidStack.count == 1, "payment slot holds 1 emerald (got " .. paidStack.count .. ")")
-check(minecheck.getSlot(1, "beacon").empty, "main slot 1 emptied after the payment move")
+check(beside, "client stepped off the beacon beside the sign")
 
--- Element-id form: the beacon screen's cancel button, addressed by its label (the portable id — the
--- widget class differs per mapping). Clicking it is a real button press, so it closes the screen.
+-- The editor is opened through the harness: `openScreen("sign", pos)` asks the client for vanilla's
+-- own sign editor instead of synthesizing a right-click, which is what keeps this block running on
+-- every line — 1.16.5's block-use path never reaches the editor, so a click there opens nothing.
+local opened = minecheck.openScreen("sign", { x = bx, y = sy, z = bz }, 10)
+check(opened, "sign editor opened")
+check(minecheck.isScreenOpen("sign") == true, "isScreenOpen(sign) is true")
 check(minecheck.clickGui("NoSuchButton") == false, "an unknown element id is not found")
-check(minecheck.clickGui("Cancel"), "clickGui found the beacon screen's cancel button by label")
-local closed2 = minecheck.waitFor(function()
-  return not minecheck.isScreenOpen()
-end, 5)
-check(closed2, "beacon screen closed by the element-id click")
+
+local typed = minecheck.typeText("minecheck")
+check(typed, "typeText typed into the sign editor")
+check(minecheck.isScreenOpen("sign") == true, "sign editor still open after typing")
+
+-- Addressed by label, like every other element id: the widget class behind it is mapping-dependent.
+local saved = minecheck.clickGui("Done")
+check(saved, "clickGui found the sign editor's Done button")
+local closed = minecheck.waitFor(function()
+  return not minecheck.isScreenOpen("sign")
+end, 10)
+check(closed, "sign editor closed after Done")
+
+-- The text proves the round trip reached the block, not just the field: the editor saves through the
+-- server, which writes the line into the block entity the client reads back.
+local wroteText = minecheck.waitFor(function()
+  local s = minecheck.getBlock({ x = bx, y = sy, z = bz })
+  return s ~= nil
+    and s.nbt ~= nil
+    and type(s.nbt.Text1) == "string"
+    and string.find(s.nbt.Text1, "minecheck", 1, true) ~= nil
+end, 10)
+check(wroteText, "the sign saved the typed text")
 
 local function ghostItemIds(viewerId, recipeId)
   local slots = minecheck.getRecipeSlots(recipeId, viewerId)
@@ -178,85 +188,106 @@ end
 -- Which viewer wins the priority order is a property of what is installed, not of the harness:
 -- EMI ships no Forge build for 1.18.2, so the priority there is JEI. The assertions name whichever
 -- one this loader actually has.
-local emiInstalled = minecheck.isModLoaded("emi")
-local priorityId = emiInstalled and "emi" or "jei"
+-- 1.16.5 has no bridged recipe viewer at all (EMI and REI publish nothing for it, and JEI's 7.x
+-- line predates the API these bridges are written against), so the viewer assertions are conditional
+-- on one actually being installed rather than assuming the priority order has a member.
 local viewer = minecheck.recipeViewer()
-check(viewer ~= nil, "priority recipe viewer bridged")
-check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
-check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
-
-if emiInstalled then
-  checkViewer(nil, "priority (EMI)")
-  check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
+local viewerInstalled = viewer ~= nil
+if not viewerInstalled then
+  minecheck.log("no recipe viewer is bridged on this line; skipping the viewer checks", "warn")
 end
+if viewerInstalled then
+  local emiInstalled = minecheck.isModLoaded("emi")
+  local priorityId = emiInstalled and "emi" or "jei"
+  check(viewer ~= nil, "priority recipe viewer bridged")
+  check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
+  check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
 
-local jeiInstalled = minecheck.isModLoaded("jei")
-if jeiInstalled then
-  local jei = minecheck.recipeViewer("jei")
-  check(jei ~= nil, "JEI is installed but not bridged")
-  if jei ~= nil then
-    check(jei.id == "jei", "named recipe viewer is jei (got " .. tostring(jei.id) .. ")")
+  if emiInstalled then
+    checkViewer(nil, "priority (EMI)")
+    check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
   end
-end
 
--- REI's *mod* id is `roughlyenoughitems`; it reports the short viewer id `rei`. On Quilt it is not
--- installed, so this block simply does not run there.
-local reiInstalled = minecheck.isModLoaded("roughlyenoughitems")
-if reiInstalled then
-  local rei = minecheck.recipeViewer("rei")
-  check(rei ~= nil, "REI is installed but not bridged")
-  if rei ~= nil then
-    check(rei.id == "rei", "named recipe viewer is rei (got " .. tostring(rei.id) .. ")")
-    -- REI indexes from the client's synced recipes, like EMI, so its content is checked here with
-    -- the other viewers — before any container screen is opened (the fill check needs it closed).
-    -- An empty index is logged rather than failed: whether a viewer's own index holds a recipe is
-    -- the viewer's business, and this suite is asserting the bridge.
-    local reiIndexed = minecheck.waitFor(function()
-      return #minecheck.getRecipeSlots("minecraft:stick", "rei") > 0
-    end, 20)
-    if reiIndexed then
-      checkViewer("rei", "REI")
-    else
-      minecheck.log(
-        "REI's recipe index holds no minecraft:stick display; skipping its ghost-slot content check",
-        "warn"
-      )
+  local jeiInstalled = minecheck.isModLoaded("jei")
+  if jeiInstalled then
+    local jei = minecheck.recipeViewer("jei")
+    check(jei ~= nil, "JEI is installed but not bridged")
+    if jei ~= nil then
+      check(jei.id == "jei", "named recipe viewer is jei (got " .. tostring(jei.id) .. ")")
+    end
+  end
+
+  -- REI's *mod* id is `roughlyenoughitems`; it reports the short viewer id `rei`. On Quilt it is not
+  -- installed, so this block simply does not run there.
+  local reiInstalled = minecheck.isModLoaded("roughlyenoughitems")
+  if reiInstalled then
+    local rei = minecheck.recipeViewer("rei")
+    check(rei ~= nil, "REI is installed but not bridged")
+    if rei ~= nil then
+      check(rei.id == "rei", "named recipe viewer is rei (got " .. tostring(rei.id) .. ")")
+      -- REI indexes from the client's synced recipes, like EMI, so its content is checked here with
+      -- the other viewers — before any container screen is opened (the fill check needs it closed).
+      -- An empty index is logged rather than failed: whether a viewer's own index holds a recipe is
+      -- the viewer's business, and this suite is asserting the bridge.
+      local reiIndexed = minecheck.waitFor(function()
+        return #minecheck.getRecipeSlots("minecraft:stick", "rei") > 0
+      end, 20)
+      if reiIndexed then
+        checkViewer("rei", "REI")
+      else
+        minecheck.log(
+          "REI's recipe index holds no minecraft:stick display; skipping its ghost-slot content check",
+          "warn"
+        )
+      end
     end
   end
 end
 
-local inv2 = minecheck.openScreen("inventory", nil, 10)
-check(inv2, "inventory reopened")
-check(minecheck.slotCount("inventory") > 0, "inventory has slots")
--- The hotbar's first slot is not a constant: the survival handler puts it at 36, while the creative
--- inventory puts the item-list tabs at 0..44 and the hotbar at 45..53 (slotCount 54). A read at 36
--- on the creative screen returns a tab item and says nothing about the player's hotbar.
-local function hotbarStart()
-  return minecheck.slotCount("inventory") > 46 and 45 or 36
-end
+-- The container assertions are read through a chest, not the player inventory screen. A chest's
+-- menu is the same menu on every version and in every gamemode — 27 chest slots, then the player's
+-- main inventory (27..53) and hotbar (54..62) — while the inventory screen is not: the survival
+-- handler puts the hotbar at 36..44, the creative screen puts its item tabs at 0..44 and the hotbar
+-- at 45..53, so a read at a fixed offset means different things per line and per gamemode. A chest
+-- is also a real block, which keeps the whole container path (open, move, read) under test.
+local CHEST_SLOTS = 27
+local PLAYER_SLOTS = 27
+local HOTBAR_FIRST = CHEST_SLOTS + PLAYER_SLOTS
 
--- The payment round trip is asserted in its own script, so both outcomes vanilla allows - back in
--- the inventory by pickup, or still on the ground as the dropped stack - are exercised by a
--- regression guard that runs without a server (see `beacon-payment.lua`).
-minecheck.runScript("beacon-payment.lua")
+-- Placed beside the player's column so it is in reach without moving, and clear of the beacon, the
+-- sign and the pyramid blocks read above.
+local chestPos = { x = bx + 2, y = by, z = bz }
+local chestAim = { x = bx + 2.5, y = by + 0.5, z = bz + 0.5 }
+minecheck.runCommand("setblock " .. chestPos.x .. " " .. chestPos.y .. " " .. chestPos.z .. " minecraft:chest")
+check(
+  minecheck.waitFor(function()
+    local b = minecheck.getBlock(chestPos)
+    return b ~= nil and b.id == "minecraft:chest"
+  end, 10),
+  "client sees the chest placed beside the pyramid"
+)
 
-local sword = minecheck.getSlot(hotbarStart() + 1, "inventory")
+local chest = minecheck.openScreen("chest", chestAim, 10)
+check(chest, "chest opened")
+check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest slots plus the player's 36")
+
+local sword = minecheck.getSlot(HOTBAR_FIRST + 1, "chest")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
 check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
 local redstoneReady = minecheck.waitFor(function()
-  local s = minecheck.getSlot(hotbarStart() + 2, "inventory")
+  local s = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8
 end, 30)
 check(redstoneReady, "server gave the 8-redstone stack (third hotbar slot)")
-local partial = minecheck.moveItem(hotbarStart() + 2, 10, 3, "inventory")
+local partial = minecheck.moveItem(HOTBAR_FIRST + 2, 0, 3, "chest")
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
-  local s = minecheck.getSlot(10, "inventory")
+  local s = minecheck.getSlot(0, "chest")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 3
 end, 10)
-check(moved3, "destination holds exactly 3 redstone")
-local leftOver = minecheck.getSlot(hotbarStart() + 2, "inventory")
+check(moved3, "the chest's first slot holds exactly 3 redstone")
+local leftOver = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
 check(leftOver.id == "minecraft:redstone" and leftOver.count == 5, "source keeps the remaining 5 redstone")
 
 local typed = minecheck.typeText("give @s minecraft:diamond 2", "command")
@@ -270,25 +301,27 @@ local chatClosed = minecheck.waitFor(function()
 end, 5)
 check(chatClosed, "chat screen closed after submitting the typed command")
 
-local inv3 = minecheck.openScreen("inventory", nil, 10)
-check(inv3, "inventory reopened for the typeText check")
+local inv3 = minecheck.openScreen("chest", chestAim, 10)
+check(inv3, "chest reopened for the typeText check")
+-- Anywhere in the container: the hand's slot is the client's business, and the container also holds
+-- the player's main inventory, which the creative screen does not show at all.
 local gotDiamonds = minecheck.waitFor(function()
-  for i = hotbarStart(), hotbarStart() + 8 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:diamond" and s.count == 2 then
       return true
     end
   end
   return false
 end, 20)
-check(gotDiamonds, "typed /give command executed (2 diamonds in the hotbar)")
+check(gotDiamonds, "typed /give command executed (2 diamonds in the container)")
 
 -- Recipe-viewer ghost slots are "part of the GUI": a ghost slot can be the *source* of a slot move.
 -- It names the ingredient the viewer shows (the same 0-based `index` getRecipeSlots reports) — the
 -- viewer's slots are display-only, so the item itself still comes out of the open container.
 local function slotHolding(itemId)
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == itemId then
       return i
     end
@@ -296,10 +329,10 @@ local function slotHolding(itemId)
   return nil
 end
 
-local function countInInventory(itemId)
+local function countInContainer(itemId)
   local total = 0
-  for i = 0, minecheck.slotCount("inventory") - 1 do
-    local s = minecheck.getSlot(i, "inventory")
+  for i = 0, minecheck.slotCount("chest") - 1 do
+    local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == itemId then
       total = total + s.count
     end
@@ -322,7 +355,7 @@ end
 minecheck.runCommand("give @s minecraft:oak_planks 4")
 check(
   minecheck.waitFor(function()
-    return countInInventory("minecraft:oak_planks") == 4
+    return countInContainer("minecraft:oak_planks") == 4
   end, 30),
   "server gave 4 oak planks"
 )
@@ -333,50 +366,52 @@ check(
 -- the viewer section) — on Forge a bare `getRecipeSlots` reports no ghost slots until it is done.
 -- Wait for the index and ask the server for a recipe re-sync only if it never arrives: a viewer
 -- that indexes from the client's synced recipes is ready here, JEI may still be building its own.
-local indexed = minecheck.waitFor(function()
-  return #minecheck.getRecipeSlots("minecraft:stick") > 0
-end, 30)
-if not indexed then
-  minecheck.runCommand("reload")
-  minecheck.waitFor(function()
+if viewerInstalled then
+  local indexed = minecheck.waitFor(function()
     return #minecheck.getRecipeSlots("minecraft:stick") > 0
   end, 30)
-end
-
-local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
-check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
-check(
-  minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 10, 1, "inventory") == false,
-  "an unknown recipe resolves to no source slot"
-)
-if plankGhost ~= nil then
-  local source = slotHolding("minecraft:oak_planks")
-  local dest = nil
-  for i = hotbarStart(), hotbarStart() + 8 do
-    local s = minecheck.getSlot(i, "inventory")
-    if s ~= nil and s.empty and i ~= source then
-      dest = i
-      break
-    end
+  if not indexed then
+    minecheck.runCommand("reload")
+    minecheck.waitFor(function()
+      return #minecheck.getRecipeSlots("minecraft:stick") > 0
+    end, 30)
   end
-  check(source ~= nil and dest ~= nil, "plank source and an empty destination slot found")
 
-  local okGhostDest = pcall(function()
-    minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "inventory")
-  end)
-  check(okGhostDest == false, "naming a ghost slot as the destination raises")
-
+  local plankGhost = ghostIndexOf("minecraft:stick", "minecraft:oak_planks")
+  check(plankGhost ~= nil, "the stick recipe has a plank-backed ghost slot")
   check(
-    minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "inventory"),
-    "moveItem took the recipe's ingredient out of the container"
+    minecheck.moveItem({ recipe = "minecheck:not_a_recipe", slot = 0 }, 0, 1, "chest") == false,
+    "an unknown recipe resolves to no source slot"
   )
-  local landed = minecheck.waitFor(function()
-    local s = minecheck.getSlot(dest, "inventory")
-    return s ~= nil and not s.empty and s.id == "minecraft:oak_planks" and s.count == 1
-  end, 10)
-  check(landed, "1 oak plank landed in the destination slot")
-  check(minecheck.getSlot(source, "inventory").count == 3, "the other 3 planks stayed in the source")
-  check(countInInventory("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
+  if plankGhost ~= nil then
+    local source = slotHolding("minecraft:oak_planks")
+    local dest = nil
+    for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+      local s = minecheck.getSlot(i, "chest")
+      if s ~= nil and s.empty and i ~= source then
+        dest = i
+        break
+      end
+    end
+    check(source ~= nil and dest ~= nil, "plank source and an empty destination slot found")
+
+    local okGhostDest = pcall(function()
+      minecheck.moveItem(source, { recipe = "minecraft:stick", slot = plankGhost }, 1, "chest")
+    end)
+    check(okGhostDest == false, "naming a ghost slot as the destination raises")
+
+    check(
+      minecheck.moveItem({ recipe = "minecraft:stick", slot = plankGhost }, dest, 1, "chest"),
+      "moveItem took the recipe's ingredient out of the container"
+    )
+    local landed = minecheck.waitFor(function()
+      local s = minecheck.getSlot(dest, "chest")
+      return s ~= nil and not s.empty and s.id == "minecraft:oak_planks" and s.count == 1
+    end, 10)
+    check(landed, "1 oak plank landed in the destination slot")
+    check(minecheck.getSlot(source, "chest").count == 3, "the other 3 planks stayed in the source")
+    check(countInContainer("minecraft:oak_planks") == 4, "no planks were lost in the ghost move")
+  end
 end
 
 -- A client resource reload (the F3+T reload) late in the session: mods that rebuild an index in a
@@ -385,9 +420,9 @@ end
 check(minecheck.reloadResources(30), "client resource reload finished mid-session")
 
 -- `checkViewer` asserts that a fill is refused when no container is open, and the ghost-slot moves
--- above left the inventory open: close it with the same key that opened it before probing JEI.
+-- above left the chest open: close it before probing JEI.
 if minecheck.isScreenOpen() then
-  minecheck.keyPress("key.inventory")
+  minecheck.press("Escape")
   minecheck.waitFor(function()
     return not minecheck.isScreenOpen()
   end, 5)
