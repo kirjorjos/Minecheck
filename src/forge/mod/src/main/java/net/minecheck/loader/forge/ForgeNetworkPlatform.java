@@ -42,6 +42,18 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
   private final boolean registered;
   private volatile Consumer<MinecheckPacket> receiver = packet -> {};
 
+  /**
+   * Forge 35 (1.16.4) has no {@code acceptMissingOr}: it exposes the marker strings instead. The
+   * check accepts our version, a peer with no Minecheck channel ({@code ABSENT}) and a vanilla
+   * client, which is what the newer helper does on the lines above this one.
+   */
+  private static java.util.function.Predicate<String> acceptMissingOr(String version) {
+    return remote ->
+        remote.equals(version)
+            || remote.equals(NetworkRegistry.ABSENT)
+            || remote.equals(NetworkRegistry.ACCEPTVANILLA);
+  }
+
   public ForgeNetworkPlatform(boolean dedicated) {
     this.dedicated = dedicated;
     boolean ok;
@@ -52,8 +64,8 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
               () -> VERSION,
               // Tolerate a peer without Minecheck: the channel is for testing, it must not make a
               // vanilla client unable to join this server.
-              NetworkRegistry.acceptMissingOr(VERSION),
-              NetworkRegistry.acceptMissingOr(VERSION));
+              acceptMissingOr(VERSION),
+              acceptMissingOr(VERSION));
       channel.registerMessage(
           0,
           MinecheckC2SMessage.class,

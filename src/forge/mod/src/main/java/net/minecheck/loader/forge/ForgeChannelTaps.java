@@ -46,7 +46,12 @@ final class ForgeChannelTaps {
     }
     String anchor = null;
     for (Map.Entry<String, ChannelHandler> entry : pipeline.toMap().entrySet()) {
-      if (entry.getValue() instanceof Connection) {
+      ChannelHandler handler = entry.getValue();
+      // Matched by name as well as by type: the handler in the pipeline is a remapped vanilla
+      // class, and a type check alone silently degrades to the blind fallback below when it is not
+      // the exact class this module compiles against.
+      if (handler instanceof Connection
+          || handler.getClass().getName().equals("net.minecraft.network.Connection")) {
         anchor = entry.getKey();
         break;
       }
@@ -54,12 +59,25 @@ final class ForgeChannelTaps {
     try {
       if (anchor != null) {
         pipeline.addBefore(anchor, HANDLER_NAME, tap);
+      } else if (pipeline.get("packet_handler") != null) {
+        // Vanilla's own name for the Connection stage, used when the type check found nothing.
+        anchor = "packet_handler";
+        pipeline.addBefore(anchor, HANDLER_NAME, tap);
       } else {
+        // Last resort, and blind by construction: a simple-channel handler downstream consumes the
+        // payload, so nothing reaches a handler added after it.
         pipeline.addLast(HANDLER_NAME, tap);
+        LOG.warning(
+            String.format(
+                "Minecheck: no Connection handler to anchor the %s channel tap in front of —"
+                    + " the tap is blind (pipeline %s)",
+                label, pipeline.names()));
+        return true;
       }
       LOG.info(
           String.format(
-              "Minecheck: installed the %s channel tap (%s)", label, channel.remoteAddress()));
+              "Minecheck: installed the %s channel tap before '%s' (%s, pipeline %s)",
+              label, anchor, channel.remoteAddress(), pipeline.names()));
       return true;
     } catch (RuntimeException e) {
       LOG.warning(String.format("Minecheck: could not install the %s channel tap: %s", label, e));

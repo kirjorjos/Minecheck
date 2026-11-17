@@ -15,7 +15,7 @@ import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.options.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.MathHelper;

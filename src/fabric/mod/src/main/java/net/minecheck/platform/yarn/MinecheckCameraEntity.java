@@ -2,7 +2,7 @@ package net.minecheck.platform.yarn;
 
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Packet;
 import net.minecraft.world.World;
 
@@ -38,10 +38,10 @@ final class MinecheckCameraEntity extends Entity {
 
   /** Nothing worth saving: the pose lives in the platform and is rebuilt on attach. */
   @Override
-  public void writeCustomDataToNbt(NbtCompound nbt) {}
+  public void writeCustomDataToTag(CompoundTag nbt) {}
 
   @Override
-  public void readCustomDataFromNbt(NbtCompound nbt) {}
+  public void readCustomDataFromTag(CompoundTag nbt) {}
 
   /** No tracked data: the camera has no state a client and server would need to agree on. */
   @Override

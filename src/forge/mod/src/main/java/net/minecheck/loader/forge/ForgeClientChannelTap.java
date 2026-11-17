@@ -53,7 +53,11 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
    * false to the script).
    */
   static boolean observe(String channel, Consumer<byte[]> observer) {
-    OBSERVERS.computeIfAbsent(channel, key -> new CopyOnWriteArrayList<>()).add(observer);
+    // Replaced, not appended: Forge constructs this line's entrypoint twice, and an older engine
+    // instance's observer would otherwise keep receiving the payloads — decoding them into a
+    // history no script polls — while the live engine's inbox stayed empty. One engine owns a
+    // channel at a time.
+    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
     return install();
   }
 
