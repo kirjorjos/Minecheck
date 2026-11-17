@@ -1,21 +1,13 @@
 {
-  "entries": [
-    {
-      "compare": "",
-      "enqueued_at": "2026-11-17T23:19:19Z",
-      "fork": false,
-      "head_repo": "",
-      "id": "e-6",
-      "kind": "chore",
-      "overtaken": 0,
-      "pr": "",
-      "seq": 6,
-      "sha": "9c400b4e6239153c6c5d779ae91012c9fe7d6e10",
-      "target": "1.16.4/development",
-      "tier": -1
-    }
-  ],
-  "holder": null,
+  "entries": [],
+  "holder": {
+    "granted_at": "2026-11-17T23:19:21Z",
+    "id": "e-6",
+    "kind": "chore",
+    "lease_until": "2026-11-18T00:49:21Z",
+    "pr": "",
+    "sha": "9c400b4e6239153c6c5d779ae91012c9fe7d6e10"
+  },
   "last_runs": {
     "203": {
       "at": "2026-11-17T21:33:19Z",
