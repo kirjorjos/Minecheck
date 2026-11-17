@@ -18,3 +18,7 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
+
+## Added
+
+- First release of Minecheck for Minecraft 1.19, shipping the Fabric, Forge and Quilt builds.
