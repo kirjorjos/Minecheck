@@ -65,7 +65,10 @@ tasks.processResources {
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16")
+  // 0.42.0+1.16 is only published for 1.16.5: Modrinth lists nothing above 0.29.3+1.16 for
+  // 1.16.4, so a 1.16.4 user cannot install the newer API. Pinning the newest release the version
+  // actually has keeps `bootPackagedJars` testing a jar a user can satisfy.
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.29.3+1.16")
 }
 
 tasks.shadowJar {
