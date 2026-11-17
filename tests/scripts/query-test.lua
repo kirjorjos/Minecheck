@@ -61,14 +61,30 @@ for _, e in pairs(minecheck.findEntities()) do
 end
 check(px ~= nil, "joined player is findable with a position")
 
--- The player is standing on solid ground, but 2 blocks east the terrain may be a hill or tree — spawning there would suffocate the cow. Probe the actual surface from high above: the first non-air block (scanning down) is the top of the highest terrain, and the platform is built on top of it.
+-- The dedicated server runs the harness's flat world (`tests/flat-world.json`): four layers counted
+-- up from the bottom of the world — bedrock, two of dirt, grass — so the standing surface is the top
+-- of that stack. Where the bottom sits depends on the line: 1.18 starts the layers at -64 and tops
+-- out at -60, while 1.16.5 has no negative Y at all. The heightmap answers that per column, so the
+-- probe below scans down from the player's own feet and stops at the surface the world reports
+-- rather than at a height this script owns.
 local bx = math.floor(px) + 2
 local bz = math.floor(pz)
+-- The player's chunk arrives before its heightmap is primed: an immediate read answers 0, which
+-- sits above the scan below and would make it hunt for a surface it can never reach. Zero is not a
+-- surface in this world (the flat layers start at 0 or -64), so wait for the heightmap.
+local SURFACE_Y
+local surfaceKnown = minecheck.waitFor(function()
+  SURFACE_Y = minecheck.groundHeight(bx, bz)
+  return SURFACE_Y ~= nil and SURFACE_Y ~= 0
+end, 90)
+check(surfaceKnown, "the probe column is loaded, so its surface is known")
 local function isAir(x, y, z)
   return minecheck.runCommand("execute if block " .. x .. " " .. y .. " " .. z .. " minecraft:air").result == 1
 end
 local surfY = nil
-for y = math.floor(py) + 48, -60, -1 do
+-- `groundHeight` answers where a player would stand — the first air above the surface — so the scan
+-- starts one below it, at the top block of the stack, and walks down from the player's feet.
+for y = math.floor(py) + 48, SURFACE_Y - 1, -1 do
   if not isAir(bx, y, bz) then
     surfY = y
     break
@@ -170,10 +186,15 @@ check(
 -- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
 -- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
 -- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
-check(
-  minecheck.runCommand("item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword 1").result >= 1,
-  "client player given a sword in the hand"
-)
+-- The command moved: 1.17 replaced `replaceitem` with `item replace ... with ...`, and 1.16.5 has no
+-- `item` root at all ("Unknown or incomplete command").
+local swordCommand
+if minecheck.minecraftVersion():match("^1%.16") then
+  swordCommand = "replaceitem entity " .. player .. " hotbar.0 minecraft:netherite_sword"
+else
+  swordCommand = "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword"
+end
+check(minecheck.runCommand(swordCommand).result >= 1, "client player given a sword in the hand")
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
 -- rejected as "allows more than one" even when only one entity matches).

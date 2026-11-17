@@ -420,7 +420,7 @@ The click waits for that look to land: the rotation is applied on the client thr
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`. |
+| `id` | string | Screen id: `"inventory"`, `"beacon"`, `"chest"`, `"crafting"`, `"furnace"`, `"sign"`. |
 | `pos` | table | Block position to look at + right-click (required for block screens). |
 | `timeout` | number | Max seconds to wait (default: `config.defaultTimeout`). |
 
@@ -442,6 +442,9 @@ Non-blocking check of whether a screen is currently open. With no id (or `nil`),
 | `"inventory"` | the player inventory — the survival inventory screen **or** the creative inventory screen, which are sibling classes in 1.18.2 (see the note on [`openScreen`](#minecheckopenscreenid-pos-timeout--boolean)) |
 | `"chat"` | the chat screen (open while typing a message/command) |
 | `"beacon"` / `"chest"` / `"crafting"` / `"furnace"` | that container screen |
+| `"sign"` | the sign editor — a placed sign, opened through the client |
+
+The sign editor is a plain screen, not a container: `slotCount`/`getSlot` do not apply to it. `openScreen("sign", pos)` asks the client for vanilla's own editor for the sign at `pos` instead of synthesizing a right-click, because the block-use path does not reach the editor on every version (1.16.5 never opens it); closing it with `Done` still saves through the server, so the block entity's text proves the round trip.
 
 The `"chat"` id is useful with [`typeText`](#minechecktypetexttext-target--boolean): wait for it to close after pressing Enter to submit the typed text.
 
@@ -1324,6 +1327,66 @@ assert(below ~= nil and below.id == "minecraft:iron_block", "pyramid block under
 
 Client-only; calling it from a server script raises `"client-only function called on dedicated server"`.
 
+### `minecheck.groundHeight(x, z) → integer | nil`
+
+Where a player standing on block column `(x, z)` would stand: the y of the **first air block above the surface**, read from the vanilla `MOTION_BLOCKING` heightmap. Use it instead of a per-version constant — the harness's flat world tops out at -60 where its layers start at -64, and at 4 on 1.16.5, which has no negative Y at all.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `x`, `z` | number | Block column; non-integer values are floored. |
+
+**Returns** the integer y, or `nil` when that column's chunk is not loaded — the client has not been sent it, or the server has not loaded it. That is the same "no answer yet" `getBlock` reports, and it is polled the same way: wait until the read is non-`nil` before using the number.
+
+**A freshly delivered chunk can answer `0` before its heightmap is primed** — the forge client does this for a tick or two after a chunk arrives, while a dedicated server has its chunks primed as it generates them. `0` is not a surface in a world whose layers start at `0` or `-64`, so wait for a non-zero height instead of taking the first number; the handoff suite does exactly that.
+
+```lua
+local surface = minecheck.groundHeight(0, 0)
+minecheck.expect(surface ~= nil, "the fixture's column is loaded")
+minecheck.spawnEntity("minecraft:cow", { x = 0.5, y = surface + 1, z = 0.5 }, { NoAI = true })
+```
+
+Both sides: on the client it reads the client's heightmap (synced from the server, so only for chunks the client has), on a dedicated server the overworld's. Unlike [`getBlock`](#minecheckgetblockpos--table--nil) it is not client-only, which is what lets one fixture script run unchanged on every line.
+
+### `minecheck.isChunkLoaded(chunkX, chunkZ) → boolean`
+
+Whether this side holds the chunk at those **chunk** coordinates (block `x >> 4`, `z >> 4`) — on the client a chunk the server has sent, on a dedicated server one that is loaded by any route. It is the precondition for a read at those coordinates: `getBlock` and `groundHeight` answer `nil` until this is true.
+
+```lua
+minecheck.expect(
+  minecheck.waitFor(function()
+    return minecheck.isChunkLoaded(0, 0)
+  end, 90),
+  "the fixture's chunk arrived"
+)
+```
+
+Both sides, like `groundHeight`.
+
+### `minecheck.loadChunk(chunkX, chunkZ) → boolean`
+
+**Server-only.** Force-loads that chunk — the same ticket `forceload add` sets, so it stays loaded for the rest of the run — reads it through so the load is not left to a later tick, and returns `true` once it is loaded.
+
+This is the platform's replacement for the `forceload` command, which only exists from 1.14, and for teleporting a player at a column just to make the server load it.
+
+```lua
+assert(minecheck.loadChunk(0, 0), "the fixture's chunk is loaded")
+local surface = minecheck.groundHeight(0, 0)
+```
+
+A client cannot ask the server for a chunk — vanilla only sends the chunks inside the player's view distance — so calling this from a client raises rather than pretending. On a client, move the player near the column and wait with [`waitForChunk`](#minecheckwaitforchunkchunkx-chunkz-timeout--boolean).
+
+### `minecheck.waitForChunk(chunkX, chunkZ, [timeout]) → boolean`
+
+Pauses until this side holds that chunk, polling [`isChunkLoaded`](#minecheckischunkloadedchunkx-chunkz--boolean) once per tick, and returns `false` on timeout. It is the client-side companion to `loadChunk`: after moving the player onto a column, this is the wait for the chunk to arrive, instead of hand-rolling `waitFor(function() return minecheck.isChunkLoaded(x, z) end)`.
+
+```lua
+minecheck.runCommand("tp @s 0.5 ~ 0.5") -- move onto the column; the move is what makes the server send it
+minecheck.expect(minecheck.waitForChunk(0, 0, 90), "the marker's chunk arrived from the server")
+local surface = minecheck.groundHeight(0, 0)
+```
+
+**Both sides**, like `isChunkLoaded`; on a dedicated server it simply waits for the chunk to be loaded. `timeout` defaults to `config.defaultTimeout`, as for [`waitFor`](#minecheckwaitforcondition-timeout--boolean).
+
 ### `minecheck.findNearbyEntities([type]) → table`
 
 **Client-only**, the client-side counterpart of [`findEntities`](#minecheckfindentitiestype-tag--table). Lists the entities the client currently knows about — the ones the server has synced into the client's loaded chunks, which is exactly what the local player can see and reach. Use it to *target* something: find it, aim at it with `lookAt`, then act (`press("key.attack")`, `mouse(1)`, …).
@@ -1544,8 +1607,20 @@ Every run writes `config/minecheck/run-result.json` when the script finishes (or
 | `failed` | bool | `true` if `fail` was called or a Lua error occurred. |
 | `failureMessage` | string | First failure message (from `fail()`). **Omitted entirely when there is none** — Gson drops nulls, so a passing run has no `failureMessage` key at all. |
 | `expects` | array | All recorded expectations, in order, each `{ name, ok }`. |
+| `observations` | object | Named values recorded with [`observe`](#minecheckobservename-value--nil), each a string. **Omitted entirely when none were recorded**, so an ordinary run writes exactly the file it wrote before this field existed. |
 
 There is no `passed`/`total` pair in the file: the plugin counts them from `expects` when it reads the result.
+
+### `minecheck.observe(name, value) → nil`
+
+Records a named value into `observations`. An observation is what the run **measured**, not a verdict: numbers and booleans are written in their Lua text form (`4`, `true`), and a later call with the same name replaces the earlier one.
+
+It exists so a suite can compare a whole observation against a committed baseline instead of only asking whether the script's own check passed. The world-handoff suite is the one that uses it: it records the surface height it read, the marker height it placed and whether the marker's chunk had arrived, and the Gradle task compares them against `tests/handoff-baseline.json`. A regression there then fails as "the handoff never reported surfaceY" — pointing at the chunk — rather than as whatever the next assertion happened to say.
+
+```lua
+minecheck.observe("surfaceY", SURFACE_Y)
+minecheck.observe("markerY", MARKER_Y)
+```
 
 The plugin's verdict, in full:
 
@@ -1658,7 +1733,8 @@ refused, and a missing file raises rather than silently doing nothing.
 | `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
 | `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
 | `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` / `waitForChunk` | ✅ | ✅ | ✅ |
+| `loadChunk` (server: force-loads a chunk) | ✅ | ✅ | ✅ |
 | `isModLoaded` | ✅ | ✅ | ✅ |
 | `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
 | `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
