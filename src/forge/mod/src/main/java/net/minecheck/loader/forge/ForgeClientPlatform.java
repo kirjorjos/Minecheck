@@ -38,7 +38,6 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
-import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
@@ -812,13 +811,16 @@ public class ForgeClientPlatform implements ClientPlatform {
         () -> {
           RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
           // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
-          // have built, dropped into the default dimension set in place of the noise overworld.
+          // have built, dropped into the default dimension set in place of the noise overworld. Its
+          // layers come from the shared declaration in tests/flat-world.json, which the harness
+          // also
+          // gives the dedicated server as `generator-settings`, so both sides build the same
+          // surface.
           Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
           Registry<StructureSet> structureSets =
               registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
           FlatLevelSource flat =
-              new FlatLevelSource(
-                  structureSets, FlatLevelGeneratorSettings.getDefault(biomes, structureSets));
+              new FlatLevelSource(structureSets, FlatWorldSettings.settings(biomes, structureSets));
           Registry<DimensionType> dimensionTypes =
               registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
           Registry<LevelStem> dimensions =
@@ -1173,6 +1175,27 @@ public class ForgeClientPlatform implements ClientPlatform {
         net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
 
+  @Override
+  public Integer groundHeight(int x, int z) {
+    Minecraft mc = mc();
+    if (mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a height"
+    // is a property of the loaded chunk, not of one block in it.
+    if (!mc.level.hasChunk(x >> 4, z >> 4)) {
+      return null;
+    }
+    return mc.level.getHeight(
+        net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    Minecraft mc = mc();
+    return mc.level != null && mc.level.hasChunk(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override
@@ -1293,7 +1316,15 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     net.minecraft.client.gui.components.EditBox field = findEditBox(screen);
     if (field == null) {
-      return false;
+      // Screens that own their text editing have no field child — the sign editor is one, so
+      // dispatch the characters at the screen instead.
+      boolean typed = false;
+      for (int i = 0; i < text.length(); i++) {
+        if (screen.charTyped(text.charAt(i), 0)) {
+          typed = true;
+        }
+      }
+      return typed;
     }
     if (screen.getFocused() != field) {
       screen.setInitialFocus(field);
@@ -1325,6 +1356,21 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.world.level.block.entity.BlockEntity be =
+        mc.level.getBlockEntity(new net.minecraft.core.BlockPos(pos.x(), pos.y(), pos.z()));
+    if (!(be instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign)) {
+      return false;
+    }
+    onClientThread(() -> mc.player.openTextEdit(sign));
+    return true;
+  }
+
+  @Override
   public boolean isScreenOpen(String screenId) {
     net.minecraft.client.gui.screens.Screen screen = mc().screen;
     if (screen == null) {
@@ -1343,6 +1389,7 @@ public class ForgeClientPlatform implements ClientPlatform {
                   instanceof net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
       case "chat" -> screen instanceof net.minecraft.client.gui.screens.ChatScreen;
       case "beacon" -> screen instanceof net.minecraft.client.gui.screens.inventory.BeaconScreen;
+      case "sign" -> screen instanceof net.minecraft.client.gui.screens.inventory.SignEditScreen;
       case "chest" -> screen instanceof net.minecraft.client.gui.screens.inventory.ContainerScreen;
       case "crafting" ->
           screen instanceof net.minecraft.client.gui.screens.inventory.CraftingScreen;

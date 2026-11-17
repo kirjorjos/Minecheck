@@ -42,7 +42,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "3.0.1"
+version = "3.0.2"
 
 group = "net.minecheck"
 
@@ -253,7 +253,7 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
   tasks.register<MinecheckLifecycleTest>(taskName) {
     group = "minecheck"
     description =
-      "Boots the $loader client + dedicated server in parallel and runs the Lua beacon GUI integration test (build pyramid, open beacon screen, read slots)"
+      "Boots the $loader client + dedicated server in parallel and runs the Lua beacon GUI integration test (build pyramid, open the sign editor over it, type and save a sign)"
     dependsOn("spotlessCheck", ":$loader-mod:spotlessCheck")
 
     loaderTask = ":$loader-mod:runClient"
@@ -379,6 +379,7 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
     worldName = "minecheck_world"
     serverPort = "25565"
     xvfbRun = true
+    expectedObservations.set(layout.projectDirectory.file("tests/handoff-baseline.json"))
 
     resultFile.set(
       layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")

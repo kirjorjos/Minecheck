@@ -360,6 +360,36 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @OutputFile
   public abstract RegularFileProperty getResultFile();
 
+  /**
+   * Optional JSON of the values this run must report, keyed by {@code minecheck.observe} name.
+   *
+   * <p>Only the handoff suite sets it. A run that never observed a key — the chunk did not arrive,
+   * the script stopped early — fails with that sentence, at the observation, instead of as whatever
+   * the next assertion happened to say. The comparison itself lives in {@link HandoffBaseline}.
+   */
+  @InputFile
+  @Optional
+  @PathSensitive(PathSensitivity.RELATIVE)
+  public abstract RegularFileProperty getExpectedObservations();
+
+  /**
+   * Fails the task when a configured baseline does not match what the results observed.
+   *
+   * <p>Runs after both verdicts are known and required to have passed, so a missing observation is
+   * reported as itself rather than as a run that failed for some other reason.
+   */
+  private void requireObservations(List<RunResultDto> results) {
+    org.gradle.api.file.RegularFile baseline = getExpectedObservations().getOrNull();
+    if (baseline == null) {
+      return;
+    }
+    String mismatch = HandoffBaseline.mismatch(baseline.getAsFile().toPath(), results);
+    if (mismatch != null) {
+      throw new GradleException(
+          "Minecheck: handoff baseline " + baseline.getAsFile() + " failed: " + mismatch);
+    }
+  }
+
   @TaskAction
   public void runLifecycle() {
     String entry =
@@ -762,6 +792,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     requireCleanExit(clientExit, "client");
     requireCleanExit(serverExit, "server");
     requirePassed(clientVerdict, "client");
+    requireObservations(List.of(clientVerdict, serverVerdict));
     // A configured server script's verdict is required, not optional: "secondary" describes its
     // role in the pairing, not whether its result is checked. A server that exits without writing
     // one has proved nothing, and skipping it here is exactly how a run goes green while half of it
@@ -942,6 +973,27 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     sb.append("online-mode=false\n");
     sb.append("server-port=").append(port()).append('\n');
     sb.append("enforce-secure-profile=false\n");
+    // The same superflat world the client-side scripts create. The suites place blocks, item
+    // drops and structures at fixed coordinates and assert on what they find there, while the
+    // dedicated server was left on the default generator: on generated terrain those coordinates
+    // hold whatever the seed produced. Flat ground is the same surface on every seed and every
+    // version, so a fixture written against it stays true.
+    sb.append("level-type=flat\n");
+    // A village or outpost landing on those coordinates would collide with exactly the same
+    // assertions, and no suite asks the generator for one (structures are spawned explicitly).
+    sb.append("generate-structures=false\n");
+    // The layer stack is not written here either: `tests/flat-world.json` declares it once, and the
+    // mods bundle and parse that same file when a script creates a client world. One description,
+    // so the server's surface and the client's cannot disagree. A properties value cannot span
+    // lines, hence the newline strip.
+    Path flatWorld = getProject().getRootProject().file("tests/flat-world.json").toPath();
+    try {
+      sb.append("generator-settings=")
+          .append(Files.readString(flatWorld).replace("\n", ""))
+          .append('\n');
+    } catch (IOException e) {
+      throw new GradleException("could not read the flat world declaration " + flatWorld, e);
+    }
     String seed = getLevelSeed().getOrNull();
     if (seed != null && !seed.isBlank()) {
       sb.append("level-seed=").append(seed).append('\n');

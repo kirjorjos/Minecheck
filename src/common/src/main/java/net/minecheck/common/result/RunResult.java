@@ -16,13 +16,17 @@ import java.util.List;
  * @param failed whether the run failed (script error, minecheck.fail, assert)
  * @param failureMessage human message when {@code failed}; else null
  * @param expects one entry per {@code minecheck.expect(...)} call, in order
+ * @param observations named values recorded with {@code minecheck.observe}, or {@code null} when
+ *     the run recorded none (Gson then omits the key, so a run that reports nothing extra writes
+ *     exactly the file older runners wrote)
  */
 public record RunResult(
     String script,
     boolean finished,
     boolean failed,
     String failureMessage,
-    List<ExpectRecord> expects) {
+    List<ExpectRecord> expects,
+    java.util.Map<String, String> observations) {
 
   public RunResult {
     // Hand-written and older result files may omit `expects`; that is 0/0, not a crash. The
@@ -30,6 +34,18 @@ public record RunResult(
     // own mirror (RunResultDto) already guards the same way — this record must not be stricter than
     // the file it is deserialized from.
     expects = expects == null ? List.of() : expects;
+    observations =
+        observations == null || observations.isEmpty() ? null : java.util.Map.copyOf(observations);
+  }
+
+  /** The shape every caller used before observations existed. */
+  public RunResult(
+      String script,
+      boolean finished,
+      boolean failed,
+      String failureMessage,
+      List<ExpectRecord> expects) {
+    this(script, finished, failed, failureMessage, expects, null);
   }
 
   public long passed() {

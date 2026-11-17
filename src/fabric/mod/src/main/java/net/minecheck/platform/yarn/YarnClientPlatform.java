@@ -38,7 +38,6 @@ import net.minecraft.world.biome.Biome;
 import net.minecraft.world.dimension.DimensionOptions;
 import net.minecraft.world.gen.GeneratorOptions;
 import net.minecraft.world.gen.chunk.FlatChunkGenerator;
-import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
@@ -772,12 +771,16 @@ public class YarnClientPlatform implements ClientPlatform {
           DynamicRegistryManager.Immutable registryManager =
               DynamicRegistryManager.createAndLoad().toImmutable();
           // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
-          // have built, dropped into the default dimension set in place of the noise overworld.
+          // have built, dropped into the default dimension set in place of the noise overworld. Its
+          // layers come from the shared declaration in tests/flat-world.json, which the harness
+          // also
+          // gives the dedicated server as `generator-settings`, so both sides build the same
+          // surface.
           Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
           Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
           FlatChunkGenerator flat =
               new FlatChunkGenerator(
-                  structureSets, FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets));
+                  structureSets, FlatWorldSettings.config(biomes, structureSets));
           Registry<DimensionOptions> dimensions =
               GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
                   registryManager.get(Registry.DIMENSION_TYPE_KEY),
@@ -1183,6 +1186,24 @@ public class YarnClientPlatform implements ClientPlatform {
         net.minecraft.util.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
 
+  @Override
+  public Integer groundHeight(int x, int z) {
+    MinecraftClient mc = mc();
+    if (mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    if (!mc.world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
+      return null;
+    }
+    return mc.world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    MinecraftClient mc = mc();
+    return mc.world != null && mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ);
+  }
+
   // ------------------------------------------------------------ GUI / inventory
 
   @Override
@@ -1300,7 +1321,15 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     net.minecraft.client.gui.widget.TextFieldWidget field = findTextField(screen);
     if (field == null) {
-      return false;
+      // Screens that own their text editing have no field child — the sign editor is one, so
+      // dispatch the characters at the screen instead.
+      boolean typed = false;
+      for (int i = 0; i < text.length(); i++) {
+        if (screen.charTyped(text.charAt(i), 0)) {
+          typed = true;
+        }
+      }
+      return typed;
     }
     if (screen.getFocused() != field) {
       screen.setInitialFocus(field);
@@ -1332,6 +1361,21 @@ public class YarnClientPlatform implements ClientPlatform {
   }
 
   @Override
+  public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
+    MinecraftClient mc = mc();
+    if (mc.player == null || mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.block.entity.BlockEntity be =
+        mc.world.getBlockEntity(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
+    if (!(be instanceof net.minecraft.block.entity.SignBlockEntity sign)) {
+      return false;
+    }
+    onClientThread(() -> mc.player.openEditSignScreen(sign));
+    return true;
+  }
+
+  @Override
   public boolean isScreenOpen(String screenId) {
     net.minecraft.client.gui.screen.Screen screen = mc().currentScreen;
     if (screen == null) {
@@ -1349,6 +1393,7 @@ public class YarnClientPlatform implements ClientPlatform {
               || screen instanceof net.minecraft.client.gui.screen.ingame.CreativeInventoryScreen;
       case "chat" -> screen instanceof net.minecraft.client.gui.screen.ChatScreen;
       case "beacon" -> screen instanceof net.minecraft.client.gui.screen.ingame.BeaconScreen;
+      case "sign" -> screen instanceof net.minecraft.client.gui.screen.ingame.SignEditScreen;
       case "chest" ->
           screen instanceof net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
       case "crafting" -> screen instanceof net.minecraft.client.gui.screen.ingame.CraftingScreen;

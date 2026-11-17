@@ -38,8 +38,17 @@ minecheck.registerPacketDecoder("minecheck:main", function(bytes)
   return {}
 end)
 
+-- As a phase, this decoder replaced the one the packet phase registered for `minecheck:main`, and
+-- a raw frame decoded before the replacement is dropped. The client announces its tap phase and
+-- waits for this go-ahead, so the first frame is never the one that loses that race (#121).
+if _G.MINECHECK_PHASE then
+  local entering = minecheck.waitForPacket("tap-entering", 300)
+  minecheck.expect(entering ~= false, "the client entered its tap phase with a decoder registered")
+  minecheck.expect(minecheck.sendPacket("tap-go"), "told the client the tap is ready")
+end
+
 -- 300 s: as a phase this wait starts when the server reaches the tap, minutes before the client
--- does (it is still working through the phases ahead of this one on its side).
+--  does (it is still working through the phases ahead of it on its side).
 local ready = minecheck.waitForPacket("tap-ready", 300)
 minecheck.expect(ready ~= false, "client asked for tap traffic")
 

@@ -19,16 +19,8 @@ Suggested shape, delete what you do not use:
 ## Fixed
 -->
 
-## Changed
-
-- Release verification keeps captured frames in memory and hashes them in the JVM, so a lifecycle
-  run no longer writes screenshot files to disk and the same bytes reach the comparison directly.
-- The lifecycle suites run as phases of one session instead of one game per suite: beacon, query,
-  packet and spawn share a client and a dedicated server, and input and live share a client. Every
-  assertion is unchanged; the lifecycle jobs boot five games where they booted ten.
-
 ## Fixed
 
-- A phase that waited for a cue the server had already sent no longer hangs until its timeout.
-- The punch test puts the sword in the target's hand, where the command means it to be, not only
-  in the inventory.
+- A screenshot baseline whose scene no longer exists is now removed by the post-merge sync. The
+  validation run reports the picture as a deletion, and the sync commits the removal instead of
+  leaving the orphan in `tests/baselines`.
