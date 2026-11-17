@@ -1027,13 +1027,18 @@ tasks.register<Copy>("collectArtifacts") {
  * version this line builds against, drops the jar in `mods/`, and requires Minecheck to report
  * itself active.
  *
- * `-Pboot.only=fabric,forge` boots a subset, `-Pboot.java=<path>` picks the JDK the servers run on
- * (default: `java` from `PATH`), and `-Pboot.timeout=<seconds>` widens the start deadline.
+ * `-Pboot.only=fabric,forge` boots a subset, `-Pboot.java=<path>` picks the JDK the non-Forge
+ * servers run on (default: `java` from `PATH`), `-Pboot.forgeJava=<path>` the one Forge runs on,
+ * and `-Pboot.timeout=<seconds>` widens the start deadline.
  */
 // Resolved on the project: inside the task block `property` would look for a task property.
 val bootMinecraftVersion = property("minecraft_version").toString()
 
-val bootDefaultJava: String =
+// Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and
+// Forge's ModLauncher 8.0.9 only starts on the JDK the line pins. The Fabric jar keeps class file
+// 61 and a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM
+// cannot load it.
+val pinnedForgeJava: String =
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
     project(":forge-mod")
       .layout
@@ -1043,6 +1048,11 @@ val bootDefaultJava: String =
       .asFile
       .absolutePath
   } else "java"
+
+val bootJavaOverride = providers.gradleProperty("boot.java").orNull
+val bootDefaultJava = bootJavaOverride ?: "java"
+val bootForgeJava =
+  providers.gradleProperty("boot.forgeJava").orNull ?: bootJavaOverride ?: pinnedForgeJava
 
 tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   group = "minecheck"
@@ -1059,10 +1069,10 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   artifactJars.from(fileTree(layout.buildDirectory.dir("artifacts")) { include("*.jar") })
   workRoot.set(layout.buildDirectory.dir("production-boot"))
   onlyLoaders.set(providers.gradleProperty("boot.only").getOrElse(""))
-  // A downgraded line ships Java 8 bytecode and its Forge runs only on the pinned JDK, so booting
-  // with the PATH `java` (17, and the JDK 8 users have is usually too new for ModLauncher 8.0.9)
-  // would test a runtime no user has. `-Pboot.java=<path>` still overrides it.
-  javaExecutable.set(providers.gradleProperty("boot.java").getOrElse(bootDefaultJava))
+  // Forge's jar is Java 8 bytecode and only starts on the pinned JDK (the JDK 8 users have is
+  // usually too new for ModLauncher 8.0.9), while Fabric's is class 61 and only loads on 17.
+  javaExecutable.set(bootDefaultJava)
+  forgeJavaExecutable.set(bootForgeJava)
   bootTimeoutSeconds.set(providers.gradleProperty("boot.timeout").map { it.toInt() }.getOrElse(600))
 }
 
