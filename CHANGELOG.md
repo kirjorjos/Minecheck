@@ -18,9 +18,3 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
-
-## Fixed
-
-- A screenshot baseline whose scene no longer exists is now removed by the post-merge sync. The
-  validation run reports the picture as a deletion, and the sync commits the removal instead of
-  leaving the orphan in `tests/baselines`.
