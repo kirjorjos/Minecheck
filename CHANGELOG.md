@@ -16,12 +16,3 @@ Suggested shape, delete what you do not use:
 ## Changed
 -
 -->
-
-## Added
-
-- First release of Minecheck for Minecraft 1.16.4, shipping the Fabric and Forge builds.
-
-## Changed
-
-- The Forge build targets Java 8, the only JVM Forge 35's ModLauncher starts on; the Fabric build
-  stays on Java 17.
