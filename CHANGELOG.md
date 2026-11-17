@@ -18,7 +18,3 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
-
-## Added
-
-- First release of Minecheck for Minecraft 1.18.1, shipping the Fabric and Forge builds.
