@@ -19,6 +19,7 @@ plugins {
   id("xyz.wagyourtail.unimined") version "1.4.1" apply false
   id("net.minecheck")
   id("com.diffplug.spotless") version "8.10.2"
+  id("xyz.wagyourtail.jvmdowngrader") version "2.0.1" apply false
 }
 
 fun configureSpotless(project: Project) {
@@ -769,6 +770,80 @@ subprojects {
   configureSpotless(project)
 
   tasks.named("test") { dependsOn("spotlessCheck") }
+
+  // Lines whose game runtime predates the Java 17 this repo compiles at (gradle.properties:
+  // `minecheck.downgradeTo`) keep compilation at 17 and downgrade afterwards: the module's classes
+  // are bundled, rewritten to the target class file version — JvmDowngrader turns records into
+  // plain classes, expands pattern `instanceof`, and rewrites JDK calls newer than the target
+  // against shaded stubs — and unpacked into a directory that the dev runs and the shadow jar read
+  // instead of the raw compile output. The Forge 1.16.4 line does this to reach Java 8.
+  val downgradeTarget =
+    providers
+      .gradleProperty("minecheck.downgradeTo")
+      .map { JavaVersion.toVersion(it.trim()) }
+      .orNull
+
+  if (downgradeTarget != null && name in setOf("common", "platform-api", "forge-mod")) {
+    apply(plugin = "xyz.wagyourtail.jvmdowngrader")
+
+    val target = downgradeTarget
+    val mainSourceSet =
+      extensions.getByType(JavaPluginExtension::class.java).sourceSets.getByName("main")
+    val bundleDir = layout.buildDirectory.dir("minecheck/downgrade")
+
+    // The stubs the downgraded code links against, taken from the published jar for the target
+    // version: left to itself the plugin generates one for the JVM running Gradle, which on a Java
+    // 25 daemon is class file 69 and cannot be shaded down.
+    val jvmdgApi by
+      configurations.creating {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+      }
+    dependencies.add(
+      jvmdgApi.name,
+      "xyz.wagyourtail.jvmdowngrader:jvmdowngrader-java-api:2.0.1:downgraded-" + target.majorVersion,
+    )
+
+    val classesBundle by
+      tasks.registering(Jar::class) {
+        // Classes *and* resources: FML reads a dev mod's mods.toml, mixin config and manifest from
+        // the MOD_CLASSES directories, so a classes-only bundle leaves the mod invisible and the
+        // client simply sits at the title screen with no script.
+        from(mainSourceSet.output.classesDirs)
+        from(layout.buildDirectory.dir("resources/main"))
+        dependsOn(tasks.named("processResources"))
+        destinationDirectory.set(bundleDir)
+        archiveClassifier.set("bundle")
+      }
+
+    val downgradedBundle by
+      tasks.registering(xyz.wagyourtail.jvmdg.gradle.task.DowngradeJar::class) {
+        inputFile.set(classesBundle.flatMap { it.archiveFile })
+        downgradeTo.set(target)
+        apiJar.set(jvmdgApi.files.toList())
+        classpath = mainSourceSet.compileClasspath
+        destinationDirectory.set(bundleDir)
+        archiveClassifier.set("downgraded")
+      }
+
+    val shadedBundle by
+      tasks.registering(xyz.wagyourtail.jvmdg.gradle.task.ShadeJar::class) {
+        inputFile.set(downgradedBundle.flatMap { it.archiveFile })
+        shadePath.set("jvmdg/stubs/")
+        apiJar.set(jvmdgApi.files.toList())
+        destinationDirectory.set(bundleDir)
+        archiveClassifier.set("shaded")
+      }
+
+    tasks.register<Sync>("downgradedRuntime") {
+      group = "minecheck"
+      description =
+        "Unpacks $name compiled at Java 17 as Java ${target.majorVersion} bytecode for the runs"
+      dependsOn(shadedBundle)
+      from(shadedBundle.map { zipTree(it.archiveFile) })
+      into(layout.buildDirectory.dir("minecheck/java" + target.majorVersion))
+    }
+  }
 }
 
 val pluginBuild = gradle.includedBuild("plugin")
@@ -952,16 +1027,40 @@ tasks.register<Copy>("collectArtifacts") {
  * version this line builds against, drops the jar in `mods/`, and requires Minecheck to report
  * itself active.
  *
- * `-Pboot.only=fabric,forge` boots a subset, `-Pboot.java=<path>` picks the JDK the servers run on
- * (default: `java` from `PATH`), and `-Pboot.timeout=<seconds>` widens the start deadline.
+ * `-Pboot.only=fabric,forge` boots a subset, `-Pboot.java=<path>` picks the JDK the non-Forge
+ * servers run on (default: `java` from `PATH`), `-Pboot.forgeJava=<path>` the one Forge runs on,
+ * and `-Pboot.timeout=<seconds>` widens the start deadline.
  */
 // Resolved on the project: inside the task block `property` would look for a task property.
 val bootMinecraftVersion = property("minecraft_version").toString()
+
+// Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and
+// Forge's ModLauncher 8.0.9 only starts on the JDK the line pins. The Fabric jar keeps class file
+// 61 and a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM
+// cannot load it.
+val pinnedForgeJava: String =
+  if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
+    project(":forge-mod")
+      .layout
+      .buildDirectory
+      .dir("jdk/8.0.292/bin/java")
+      .get()
+      .asFile
+      .absolutePath
+  } else "java"
+
+val bootJavaOverride = providers.gradleProperty("boot.java").orNull
+val bootDefaultJava = bootJavaOverride ?: "java"
+val bootForgeJava =
+  providers.gradleProperty("boot.forgeJava").orNull ?: bootJavaOverride ?: pinnedForgeJava
 
 tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   group = "minecheck"
   description = "Boots every packaged loader jar in an installed dedicated server"
   dependsOn("collectArtifacts")
+  if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
+    dependsOn(":forge-mod:installPinnedJdk")
+  }
   minecraftVersion.set(bootMinecraftVersion)
   modVersion.set(project.version.toString())
   metadataFile.set(layout.projectDirectory.file(".github/metadata.json"))
@@ -970,7 +1069,10 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   artifactJars.from(fileTree(layout.buildDirectory.dir("artifacts")) { include("*.jar") })
   workRoot.set(layout.buildDirectory.dir("production-boot"))
   onlyLoaders.set(providers.gradleProperty("boot.only").getOrElse(""))
-  javaExecutable.set(providers.gradleProperty("boot.java").getOrElse("java"))
+  // Forge's jar is Java 8 bytecode and only starts on the pinned JDK (the JDK 8 users have is
+  // usually too new for ModLauncher 8.0.9), while Fabric's is class 61 and only loads on 17.
+  javaExecutable.set(bootDefaultJava)
+  forgeJavaExecutable.set(bootForgeJava)
   bootTimeoutSeconds.set(providers.gradleProperty("boot.timeout").map { it.toInt() }.getOrElse(600))
 }
 

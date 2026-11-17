@@ -1,6 +1,9 @@
 import java.io.File
 import java.io.FileInputStream
+import java.net.URI
+import java.security.MessageDigest
 import net.minecheck.gradle.LaunchDescriptor
+import org.gradle.api.Project
 
 plugins {
   id("xyz.wagyourtail.unimined")
@@ -23,18 +26,18 @@ val mcNext =
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("36.2.42") }
+  minecraftForge { loader("35.1.37") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Unimined pins a 1.16.5 run to Java 8 from the version metadata, but this mod is compiled for 17
-// (its
-// mixin config asks for compatibility level JAVA_17), and a Java 8 JVM can load neither class file
-// 61
-// nor that mixin level — the client died in MixinBootstrap with "Java 1.8, ASM 9.6". The same probe
-// that moved the yarn runs to 17 booted this line's Forge servers on it too.
-val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(17)
+// Forge 35 (1.16.4) runs on Java 8 and only Java 8. Two independent reasons: its Mixin is 0.8.2
+// (compatibility levels stop at JAVA_11, and this line's mixin config asks for JAVA_8), and its
+// ModLauncher 8.0.9 calls sun.security.util.ManifestEntryVerifier(Manifest), a constructor that
+// later JDK 8 builds no longer have. The repo compiles at 17, so this line's bytecode is
+// downgraded to class file 52 (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a
+// pinned JDK 8 build rather than whichever one happens to be installed.
+val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
@@ -265,6 +268,111 @@ if (dhServerSetupDir != null) {
     }
 }
 
+val downgradeTo = providers.gradleProperty("minecheck.downgradeTo").map { it.trim().toInt() }.orNull
+
+val downgradedModuleProjects = listOf(project(":common"), project(":platform-api"), project)
+
+fun downgradedRuntimeDir(owner: Project): File =
+  owner.layout.buildDirectory.dir("minecheck/java" + downgradeTo!!).get().asFile
+
+/**
+ * Maps a runtime-classpath entry onto its downgraded replacement: each project's compiled classes
+ * and processed resources become that module's downgraded runtime directory, and the two project
+ * jars are dropped because that directory replaces them. Everything else (Minecraft, Forge, LuaJ)
+ * is already loadable on Java 8 and is left alone. Returns null for an entry to drop.
+ */
+fun mapToDowngraded(file: File): File? {
+  if (downgradeTo == null) return file
+  for (owner in downgradedModuleProjects) {
+    val build = owner.layout.buildDirectory.get().asFile
+    if (file == File(build, "classes/java/main") || file == File(build, "resources/main")) {
+      return downgradedRuntimeDir(owner)
+    }
+    if (owner != project && file.parentFile == File(build, "libs")) return null
+  }
+  return file
+}
+
+/**
+ * Points unimined's MOD_CLASSES at the downgraded directories. It is rewritten when the descriptor
+ * is written, not at configuration time, because unimined only puts MOD_CLASSES on the run task
+ * later; Forge loads the mod from these paths rather than from the classpath.
+ */
+fun rewriteModClasses(key: String, value: String): String {
+  if (key != "MOD_CLASSES" || downgradeTo == null) return value
+  return value.split(File.pathSeparator).joinToString(File.pathSeparator) { entry ->
+    val parts = entry.split("%%", limit = 2)
+    if (parts.size != 2) entry
+    else "${parts[0]}%%${mapToDowngraded(File(parts[1]))?.absolutePath ?: parts[1]}"
+  }
+}
+
+// The run JDK is pinned rather than taken from whichever Java 8 the machine or CI happens to have:
+// Forge 35 ships ModLauncher 8.0.9, which calls sun.security.util.ManifestEntryVerifier(Manifest);
+// later JDK 8 builds no longer have that constructor (8u512, 11 and 17 all fail the same way). Each
+// archive below is the same Zulu build, so every platform runs the same runtime.
+data class PinnedJdkArchive(val url: String, val sha256: String)
+
+val pinnedJdkVersion = "8.0.292"
+
+val pinnedJdkArchives =
+  mapOf(
+    ("linux" to "x86_64") to
+      PinnedJdkArchive(
+        "https://cdn.azul.com/zulu/bin/zulu8.54.0.21-ca-jdk8.0.292-linux_x64.tar.gz",
+        "1a15b84a4d9dfb44a22c0335b36e4c1d9c860a0fa3aaa92f023543deaca25c10",
+      ),
+    ("macos" to "x86_64") to
+      PinnedJdkArchive(
+        "https://cdn.azul.com/zulu/bin/zulu8.54.0.21-ca-jdk8.0.292-macosx_x64.tar.gz",
+        "369e0d0d76d73cb161978ff07d7020820bb3cd2465f6f91219bb6492e302f4dd",
+      ),
+    ("macos" to "aarch64") to
+      PinnedJdkArchive(
+        "https://cdn.azul.com/zulu/bin/zulu8.54.0.21-ca-jdk8.0.292-macosx_aarch64.tar.gz",
+        "2cf0af3118dd4b6244724308b190587804a76ad7919b6da5c377392a1d4f8817",
+      ),
+    ("windows" to "x86_64") to
+      PinnedJdkArchive(
+        "https://cdn.azul.com/zulu/bin/zulu8.54.0.21-ca-jdk8.0.292-win_x64.zip",
+        "35fc03994a65f62afa9510ff0044f52228208fddc7bbfa0cfd8e332b6e52c384",
+      ),
+  )
+
+fun pinnedJdkOs(): String =
+  when {
+    org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux"
+    org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "macos"
+    org.gradle.internal.os.OperatingSystem.current().isWindows -> "windows"
+    else -> throw GradleException("Minecheck: unknown platform for the pinned JDK")
+  }
+
+fun pinnedJdkArch(): String =
+  when (val arch = System.getProperty("os.arch")) {
+    "aarch64",
+    "arm64" -> "aarch64"
+    "x86_64",
+    "amd64" -> "x86_64"
+    else -> throw GradleException("Minecheck: no pinned JDK $pinnedJdkVersion for $arch")
+  }
+
+val pinnedJdkArchive: PinnedJdkArchive =
+  pinnedJdkArchives[pinnedJdkOs() to pinnedJdkArch()]
+    ?: throw GradleException(
+      "Minecheck: no pinned JDK $pinnedJdkVersion archive for ${pinnedJdkOs()}/${pinnedJdkArch()}; " +
+        "add one to pinnedJdkArchives."
+    )
+
+val pinnedJdkDir = layout.buildDirectory.dir("jdk/$pinnedJdkVersion")
+
+val pinnedJdkJavaFile =
+  pinnedJdkDir
+    .get()
+    .file(
+      if (org.gradle.internal.os.OperatingSystem.current().isWindows) "bin/java.exe" else "bin/java"
+    )
+    .asFile
+
 private val placeholderRegex = Regex("\\$\\{([^}]+)}")
 
 private fun resolvePlaceholders(s: String, props: Map<String, () -> String>): String {
@@ -280,7 +388,9 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
     LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
     "classpath" to task.classpath.asPath,
-    "javaExecutable" to task.javaLauncher.get().executablePath.asFile.absolutePath,
+    "javaExecutable" to
+      (pinnedJdkJavaFile.takeIf { it.isFile }?.absolutePath
+        ?: task.javaLauncher.get().executablePath.asFile.absolutePath),
     "mainClass" to task.mainClass.get(),
     "args" to join(task.args.orEmpty()),
     "jvmArgs" to join(task.jvmArgs.orEmpty()),
@@ -292,7 +402,9 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
       ),
     "environment" to
       LaunchDescriptor.encodeEnvironment(
-        task.environment.mapValues { (_, v) -> resolvePlaceholders(v?.toString() ?: "", props) }
+        task.environment.mapValues { (k, v) ->
+          rewriteModClasses(k, resolvePlaceholders(v?.toString() ?: "", props))
+        }
       ),
     "workingDir" to (task.workingDir as File).absolutePath,
   )
@@ -402,6 +514,10 @@ tasks.register("devHelperDownloadAssets") {
 
 tasks.register("devHelperClientLaunch") {
   dependsOn(
+    installPinnedJdk,
+    ":common:downgradedRuntime",
+    ":platform-api:downgradedRuntime",
+    ":forge-mod:downgradedRuntime",
     tasks.named("classes"),
     configurations.runtimeClasspath,
     tasks.named("devHelperDownloadAssets"),
@@ -416,7 +532,14 @@ tasks.register("devHelperClientLaunch") {
 }
 
 tasks.register("devHelperServerLaunch") {
-  dependsOn(tasks.named("classes"), configurations.runtimeClasspath)
+  dependsOn(
+    installPinnedJdk,
+    ":common:downgradedRuntime",
+    ":platform-api:downgradedRuntime",
+    ":forge-mod:downgradedRuntime",
+    tasks.named("classes"),
+    configurations.runtimeClasspath,
+  )
   val out = layout.buildDirectory.file("minecheck/server-launch.txt")
   outputs.file(out)
   doLast {
@@ -424,4 +547,155 @@ tasks.register("devHelperServerLaunch") {
     writeDescriptor(server, out.get().asFile)
     ensureGameLayerRuntimeDeps(server)
   }
+}
+
+// --- Java 8 runtime wiring (gradle.properties: minecheck.downgradeTo) -------------------------
+// The mod is compiled at 17 and downgraded to class file 52 in root build.gradle.kts. Both the dev
+// runs and the shadow jar have to read that downgraded output instead of the raw compile output: a
+// Java 8 JVM cannot load class file 61 at all, and Mixin 0.8.2 cannot prepare a mixin class above
+// its compatibility level.
+if (downgradeTo != null) {
+  // The shipped jar is the shadow jar, so its input is the downgraded output rather than the 17
+  // classes: `assemble`, the release assets and the remap then all carry Java 8 bytecode without a
+  // second pass over a finished jar.
+  // shadow copies `configurations` and asks each for its resolved artifacts, so the downgraded
+  // inputs are declared as one: the runtime classpath minus the project outputs, plus the
+  // downgraded directories that replace them.
+  val downgradedRuntimeInput =
+    configurations.create("downgradedRuntimeInput") {
+      isCanBeConsumed = false
+      isCanBeResolved = true
+    }
+  dependencies.add(
+    downgradedRuntimeInput.name,
+    files(
+      downgradedModuleProjects.map { downgradedRuntimeDir(it) } +
+        project.configurations.runtimeClasspath.get().files.filter { mapToDowngraded(it) === it }
+    ),
+  )
+
+  tasks.shadowJar {
+    dependsOn(
+      ":common:downgradedRuntime",
+      ":platform-api:downgradedRuntime",
+      ":forge-mod:downgradedRuntime",
+    )
+    configurations = listOf(downgradedRuntimeInput)
+  }
+
+  // The dev runs (and the descriptors the lifecycle tests launch from) get the same treatment:
+  // their classpath and unimined's MOD_CLASSES both point at the downgraded directories.
+  gradle.projectsEvaluated {
+    tasks
+      .matching { it.name == "runClient" || it.name == "runServer" }
+      .configureEach {
+        if (this is JavaExec) {
+          dependsOn(
+            ":common:downgradedRuntime",
+            ":platform-api:downgradedRuntime",
+            ":forge-mod:downgradedRuntime",
+          )
+          classpath = files(classpath.files.mapNotNull { mapToDowngraded(it) })
+          val modClasses = environment["MOD_CLASSES"]
+          if (modClasses != null) {
+            environment["MOD_CLASSES"] =
+              modClasses.toString().split(File.pathSeparator).joinToString(File.pathSeparator) {
+                entry ->
+                val parts = entry.split("%%", limit = 2)
+                if (parts.size != 2) entry
+                else "${parts[0]}%%${mapToDowngraded(File(parts[1]))?.absolutePath ?: parts[1]}"
+              }
+          }
+        }
+      }
+  }
+}
+
+// The run JDK is pinned rather than taken from whichever Java 8 the machine or CI happens to have.
+// Forge 35 ships ModLauncher 8.0.9, which calls sun.security.util.ManifestEntryVerifier(Manifest);
+// later JDK 8 builds no longer have that constructor (8u512, 11 and 17 all fail the same way, which
+// is what the --add-opens block removed from this file was chasing). One checksum-verified
+// download, reused by every later run.
+val installPinnedJdk by
+  tasks.registering {
+    group = "minecheck"
+    description = "Downloads and verifies the JDK $pinnedJdkVersion the Forge runs launch with"
+    outputs.dir(pinnedJdkDir)
+    doLast {
+      val dir = pinnedJdkDir.get().asFile
+      if (pinnedJdkJavaFile.isFile) return@doLast
+      val archive =
+        layout.buildDirectory
+          .file("jdk/${pinnedJdkArchive.url.substringAfterLast('/')}")
+          .get()
+          .asFile
+      archive.parentFile.mkdirs()
+      if (!archive.isFile) {
+        URI(pinnedJdkArchive.url).toURL().openStream().use { input ->
+          archive.outputStream().use { input.copyTo(it) }
+        }
+      }
+      val actual =
+        MessageDigest.getInstance("SHA-256").digest(archive.readBytes()).joinToString("") {
+          "%02x".format(it)
+        }
+      if (actual != pinnedJdkArchive.sha256) {
+        archive.delete()
+        throw GradleException("Minecheck: pinned JDK checksum mismatch: got $actual")
+      }
+      dir.mkdirs()
+      if (archive.name.endsWith(".zip")) {
+        // The Windows archive carries a single top-level directory; the others are tarred with
+        // --strip-components=1 and land straight in dir.
+        val staging = layout.buildDirectory.dir("jdk/.extract-$pinnedJdkVersion").get().asFile
+        staging.deleteRecursively()
+        staging.mkdirs()
+        copy {
+          from(zipTree(archive))
+          into(staging)
+        }
+        val root =
+          staging.listFiles()?.singleOrNull()
+            ?: throw GradleException("Minecheck: unexpected layout in $archive")
+        copy {
+          from(root)
+          into(dir)
+        }
+        staging.deleteRecursively()
+      } else {
+        val tar =
+          ProcessBuilder(
+              "tar",
+              "xzf",
+              archive.absolutePath,
+              "-C",
+              dir.absolutePath,
+              "--strip-components=1",
+            )
+            .inheritIO()
+            .start()
+        tar.waitFor()
+        if (tar.exitValue() != 0) {
+          throw GradleException(
+            "Minecheck: extracting the pinned JDK failed (tar ${tar.exitValue()})"
+          )
+        }
+      }
+      if (!pinnedJdkJavaFile.isFile) {
+        throw GradleException(
+          "Minecheck: pinned JDK has no ${pinnedJdkJavaFile.name} at $pinnedJdkJavaFile"
+        )
+      }
+    }
+  }
+
+gradle.projectsEvaluated {
+  tasks
+    .matching { it.name == "runClient" || it.name == "runServer" }
+    .configureEach {
+      if (this is JavaExec) {
+        dependsOn(installPinnedJdk)
+        doFirst { setExecutable(pinnedJdkJavaFile.absolutePath) }
+      }
+    }
 }

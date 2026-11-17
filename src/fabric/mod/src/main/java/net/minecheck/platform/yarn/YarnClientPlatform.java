@@ -19,10 +19,10 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ScreenTexts;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.options.KeyBinding;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.network.ServerAddress;
 import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
@@ -795,7 +795,9 @@ public class YarnClientPlatform implements ClientPlatform {
               Lifecycle.stable());
           GeneratorOptions generatorOptions =
               new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
-          mc.createWorld(options.name(), levelInfo, registryManager, generatorOptions);
+          // 1.16.4's yarn bindings leave this MinecraftClient method unmapped, so it is
+          // `method_29607` here and `createWorld` from 1.16.5 on. Same signature and behaviour.
+          mc.method_29607(options.name(), levelInfo, registryManager, generatorOptions);
           answerWorldLoadPrompt(mc);
         });
   }
@@ -1190,7 +1192,7 @@ public class YarnClientPlatform implements ClientPlatform {
     java.util.Map<String, Object> nbt =
         blockEntity == null
             ? null
-            : nbtToMap(blockEntity.writeNbt(new net.minecraft.nbt.NbtCompound()));
+            : nbtToMap(blockEntity.toTag(new net.minecraft.nbt.CompoundTag()));
     return new net.minecheck.platform.api.BlockInfo(
         net.minecraft.util.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
@@ -1281,12 +1283,12 @@ public class YarnClientPlatform implements ClientPlatform {
     // Label matches beat class-name matches: the label is the same string on every loader, the
     // class name is not (`ButtonWidget` here, `Button` on mojmap), and a mapping can name an inner
     // class after its purpose too, so the class form is a contains match.
-    java.util.List<net.minecraft.client.gui.widget.ClickableWidget> byLabel =
+    java.util.List<net.minecraft.client.gui.widget.AbstractButtonWidget> byLabel =
         new java.util.ArrayList<>();
-    java.util.List<net.minecraft.client.gui.widget.ClickableWidget> byClass =
+    java.util.List<net.minecraft.client.gui.widget.AbstractButtonWidget> byClass =
         new java.util.ArrayList<>();
     for (net.minecraft.client.gui.Element element : screen.children()) {
-      if (!(element instanceof net.minecraft.client.gui.widget.ClickableWidget widget)) {
+      if (!(element instanceof net.minecraft.client.gui.widget.AbstractButtonWidget widget)) {
         continue;
       }
       String label = widget.getMessage().getString().trim().toLowerCase(Locale.ROOT);
@@ -1296,13 +1298,13 @@ public class YarnClientPlatform implements ClientPlatform {
         byClass.add(widget);
       }
     }
-    java.util.List<net.minecraft.client.gui.widget.ClickableWidget> matches =
+    java.util.List<net.minecraft.client.gui.widget.AbstractButtonWidget> matches =
         byLabel.isEmpty() ? byClass : byLabel;
     int at = index <= 1 ? 0 : index - 1;
     if (at >= matches.size()) {
       return false;
     }
-    net.minecraft.client.gui.widget.ClickableWidget target = matches.get(at);
+    net.minecraft.client.gui.widget.AbstractButtonWidget target = matches.get(at);
     // The centre is inside the widget, so its own isMouseOver/clicked check passes.
     target.mouseClicked(
         target.x + target.getWidth() / 2.0, target.y + target.getHeight() / 2.0, button);
@@ -1448,7 +1450,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (stack.isEmpty()) {
       return new net.minecheck.platform.api.SlotInfo(true, null, 0, null);
     }
-    net.minecraft.nbt.NbtCompound nbt = stack.getTag();
+    net.minecraft.nbt.CompoundTag nbt = stack.getTag();
     return new net.minecheck.platform.api.SlotInfo(
         false,
         net.minecraft.util.registry.Registry.ITEM.getId(stack.getItem()).toString(),
@@ -1456,7 +1458,7 @@ public class YarnClientPlatform implements ClientPlatform {
         nbt == null ? null : nbtToMap(nbt));
   }
 
-  private static java.util.Map<String, Object> nbtToMap(net.minecraft.nbt.NbtCompound compound) {
+  private static java.util.Map<String, Object> nbtToMap(net.minecraft.nbt.CompoundTag compound) {
     java.util.Map<String, Object> out = new java.util.HashMap<>();
     for (String key : compound.getKeys()) {
       out.put(key, nbtValue(compound.get(key)));
@@ -1464,53 +1466,53 @@ public class YarnClientPlatform implements ClientPlatform {
     return out;
   }
 
-  private static Object nbtValue(net.minecraft.nbt.NbtElement el) {
+  private static Object nbtValue(net.minecraft.nbt.Tag el) {
     if (el == null) {
       return null;
     }
-    if (el instanceof net.minecraft.nbt.NbtString s) {
+    if (el instanceof net.minecraft.nbt.StringTag s) {
       return s.asString();
     }
-    if (el instanceof net.minecraft.nbt.AbstractNbtNumber n) {
-      if (el instanceof net.minecraft.nbt.NbtLong l) {
-        return l.longValue();
+    if (el instanceof net.minecraft.nbt.AbstractNumberTag n) {
+      if (el instanceof net.minecraft.nbt.LongTag l) {
+        return l.getLong();
       }
-      if (el instanceof net.minecraft.nbt.NbtInt i) {
-        return i.intValue();
+      if (el instanceof net.minecraft.nbt.IntTag i) {
+        return i.getInt();
       }
-      if (el instanceof net.minecraft.nbt.NbtByte b) {
-        return b.byteValue();
+      if (el instanceof net.minecraft.nbt.ByteTag b) {
+        return b.getByte();
       }
-      if (el instanceof net.minecraft.nbt.NbtShort sh) {
-        return sh.shortValue();
+      if (el instanceof net.minecraft.nbt.ShortTag sh) {
+        return sh.getShort();
       }
-      return n.doubleValue();
+      return n.getDouble();
     }
-    if (el instanceof net.minecraft.nbt.NbtCompound c) {
+    if (el instanceof net.minecraft.nbt.CompoundTag c) {
       return nbtToMap(c);
     }
-    if (el instanceof net.minecraft.nbt.NbtList l) {
+    if (el instanceof net.minecraft.nbt.ListTag l) {
       java.util.List<Object> out = new java.util.ArrayList<>();
-      for (net.minecraft.nbt.NbtElement e : l) {
+      for (net.minecraft.nbt.Tag e : l) {
         out.add(nbtValue(e));
       }
       return out;
     }
-    if (el instanceof net.minecraft.nbt.NbtByteArray b) {
+    if (el instanceof net.minecraft.nbt.ByteArrayTag b) {
       java.util.List<Object> out = new java.util.ArrayList<>();
       for (byte v : b.getByteArray()) {
         out.add(v);
       }
       return out;
     }
-    if (el instanceof net.minecraft.nbt.NbtIntArray a) {
+    if (el instanceof net.minecraft.nbt.IntArrayTag a) {
       java.util.List<Object> out = new java.util.ArrayList<>();
       for (int v : a.getIntArray()) {
         out.add(v);
       }
       return out;
     }
-    if (el instanceof net.minecraft.nbt.NbtLongArray a) {
+    if (el instanceof net.minecraft.nbt.LongArrayTag a) {
       java.util.List<Object> out = new java.util.ArrayList<>();
       for (long v : a.getLongArray()) {
         out.add(v);

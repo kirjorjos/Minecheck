@@ -22,7 +22,7 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(10) }
+  mappings { yarn(9) }
   fabric { loader("0.15.11") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -32,10 +32,10 @@ repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
 }
 
-// 1.16.5's version metadata pins its dev runs to Java 8, and unimined applies that to the run
+// 1.16.4's version metadata pins its dev runs to Java 8, and unimined applies that to the run
 // tasks. This mod is compiled for 17 (its mixin config asks for compatibility level JAVA_17), and a
 // Java 8 JVM cannot load class file 61 at all, so the runs are moved to 17 — a probe build boots
-// both loaders' 1.16.5 dedicated servers on 17.
+// both loaders' 1.16.4 dedicated servers on 17.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(17)
 
 tasks
@@ -65,7 +65,10 @@ tasks.processResources {
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16")
+  // 0.42.0+1.16 is only published for 1.16.5: Modrinth lists nothing above 0.29.3+1.16 for
+  // 1.16.4, so a 1.16.4 user cannot install the newer API. Pinning the newest release the version
+  // actually has keeps `bootPackagedJars` testing a jar a user can satisfy.
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.29.3+1.16")
 }
 
 tasks.shadowJar {

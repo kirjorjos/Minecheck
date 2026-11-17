@@ -138,6 +138,15 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
   @Optional
   public abstract Property<String> getJavaExecutable();
 
+  /**
+   * The {@code java} executable the Forge server runs on. A downgraded line's Forge jar is class 52
+   * and its ModLauncher only starts on the JDK the line pins, while the Fabric jar keeps Java 17
+   * bytecode, so the two loaders cannot share one runtime.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getForgeJavaExecutable();
+
   /** Seconds a server may take to finish starting. */
   @Input
   @Optional
@@ -191,7 +200,10 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
     }
 
     String buildFile = readBuildFile(root, loader);
-    String java = getJavaExecutable().get();
+    String java =
+        loader.equals("forge")
+            ? getForgeJavaExecutable().getOrElse(getJavaExecutable().get())
+            : getJavaExecutable().get();
     List<String> command;
     switch (loader) {
       case "fabric" -> {

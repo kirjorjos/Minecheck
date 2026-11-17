@@ -59,7 +59,11 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
    * same false to the script); connections that appear later are picked up at login.
    */
   static boolean observe(String channel, Consumer<byte[]> observer) {
-    OBSERVERS.computeIfAbsent(channel, key -> new CopyOnWriteArrayList<>()).add(observer);
+    // Replaced, not appended: Forge constructs this line's entrypoint twice, and an older engine
+    // instance's observer would otherwise keep receiving the payloads — decoding them into a
+    // history no script polls — while the live engine's inbox stayed empty. One engine owns a
+    // channel at a time.
+    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
     MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
     if (server == null) {
       return false;

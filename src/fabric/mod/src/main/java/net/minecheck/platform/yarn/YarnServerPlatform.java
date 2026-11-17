@@ -12,7 +12,7 @@ import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
@@ -68,9 +68,9 @@ public class YarnServerPlatform implements ServerPlatform {
     return world;
   }
 
-  private static NbtCompound parseNbt(String nbt) {
+  private static CompoundTag parseNbt(String nbt) {
     if (nbt == null || nbt.isEmpty()) {
-      return new NbtCompound();
+      return new CompoundTag();
     }
     try {
       return StringNbtReader.parse(nbt);
@@ -217,7 +217,7 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     requireRegistryEntry(Registry.ENTITY_TYPE, identifier, "entity type");
     ServerWorld world = overworld();
-    NbtCompound compound = parseNbt(nbt);
+    CompoundTag compound = parseNbt(nbt);
     compound.putString("id", identifier.toString());
     Entity entity =
         EntityType.loadEntityWithPassengers(
@@ -261,7 +261,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!world.setBlockState(pos, state, 3)) {
       return false;
     }
-    NbtCompound compound = parseNbt(nbt);
+    CompoundTag compound = parseNbt(nbt);
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
@@ -286,7 +286,7 @@ public class YarnServerPlatform implements ServerPlatform {
     ServerWorld world = overworld();
     ItemStack stack = new ItemStack(item);
     stack.setCount(count);
-    NbtCompound compound = parseNbt(nbt);
+    CompoundTag compound = parseNbt(nbt);
     if (!compound.isEmpty()) {
       stack.setTag(compound);
     }
