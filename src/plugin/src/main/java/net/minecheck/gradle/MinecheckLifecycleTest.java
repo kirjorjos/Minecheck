@@ -1236,6 +1236,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     cmd.addAll(LaunchDescriptor.splitList(d.get("args")));
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
+    // The launch command, so a run that never reaches the game says why: the display wrapper, the
+    // JVM it picked and the arguments it handed on are the first things to check when a runner's
+    // client dies during initialization.
+    getLogger().lifecycle("Minecheck: launching {}", String.join(" ", cmd));
     String wd = d.get("workingDir");
     if (wd != null && !wd.isBlank()) {
       pb.directory(new File(wd));
