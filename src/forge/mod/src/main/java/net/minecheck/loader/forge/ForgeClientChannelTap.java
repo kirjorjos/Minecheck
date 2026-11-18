@@ -10,22 +10,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.network.Connection;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.network.NetHandlerPlayClient;
+import net.minecraft.network.NetworkManager;
+import net.minecraft.network.PacketBuffer;
+import net.minecraft.network.play.server.SPacketCustomPayload;
 
 /**
- * Client-side <em>low-level frame tap</em>: the Forge-only way to observe another mod's channel
- * (design note §5.7).
+ * Client-side <em>low-level frame tap</em>: the Forge-only way to observe another mod's channel.
  *
- * <p>No loader's play-channel API can hand a second handler the same channel: Fabric's addon and
- * FML's {@code SimpleChannel} are both single-receiver per channel per connection, and neither can
- * be shared or chained around. The only way to see a channel someone else already owns is therefore
- * to look at the play connection's decoded custom-payload frames, below the channel. This installs
- * one netty {@code channelRead} handler into that pipeline, in front of vanilla's own {@link
- * Connection}, and forwards a <em>copy</em> of the payload's bytes to the script's observers.
+ * <p>No loader's play-channel API can hand a second handler the same channel: FML's {@code
+ * SimpleNetworkWrapper} is single-receiver per channel per connection, and it cannot be shared or
+ * chained around. The only way to see a channel someone else already owns is therefore to look at
+ * the play connection's decoded custom-payload frames, below the channel. This installs one netty
+ * {@code channelRead} handler into that pipeline, in front of vanilla's own {@link NetworkManager},
+ * and forwards a <em>copy</em> of the payload's bytes to the script's observers.
  *
  * <p>Deliberately defensive: every failure is swallowed (logged at most), the original message is
  * always forwarded untouched, and nothing is retained, so a bug here cannot break the connection.
@@ -53,10 +51,8 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
    * false to the script).
    */
   static boolean observe(String channel, Consumer<byte[]> observer) {
-    // Replaced, not appended: Forge constructs this line's entrypoint twice, and an older engine
-    // instance's observer would otherwise keep receiving the payloads — decoding them into a
-    // history no script polls — while the live engine's inbox stayed empty. One engine owns a
-    // channel at a time.
+    // Replaced, not appended: one engine owns a channel at a time, and an older engine instance's
+    // observer would otherwise keep receiving payloads into a history no script polls.
     OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
     return install();
   }
@@ -65,9 +61,9 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
     return ForgeChannelTaps.install(connection(), INSTANCE, "client");
   }
 
-  private static Connection connection() {
-    ClientPacketListener listener = Minecraft.getInstance().getConnection();
-    return listener == null ? null : listener.getConnection();
+  private static NetworkManager connection() {
+    NetHandlerPlayClient listener = Minecraft.getMinecraft().getConnection();
+    return listener == null ? null : listener.getNetworkManager();
   }
 
   @Override
@@ -84,24 +80,22 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
   private static void capture(Object msg) {
     // Clientbound only: the tap is about what *another mod* sent us. Echoing our own outbound
     // frames back into the script's history would be noise, not observation.
-    if (!(msg instanceof ClientboundCustomPayloadPacket packet)) {
+    if (!(msg instanceof SPacketCustomPayload)) {
       return;
     }
-    // 1.16.5's payload packets expose their channel and buffer through Forge's ICustomPacket;
-    // the mojmap class itself has only the private fields.
-    net.minecraftforge.fml.network.ICustomPacket<?> custom = packet;
-    ResourceLocation id = custom.getName();
-    FriendlyByteBuf data = custom.getInternalData();
-    List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
+    SPacketCustomPayload packet = (SPacketCustomPayload) msg;
+    String id = packet.getChannelName();
+    PacketBuffer data = packet.getBufferData();
+    List<Consumer<byte[]>> observers = OBSERVERS.get(id);
     if (observers == null || observers.isEmpty() || data == null) {
       return;
     }
     // Non-destructive read: the packet still has to reach its real handler.
     byte[] payload = new byte[data.readableBytes()];
     data.getBytes(data.readerIndex(), payload);
-    Minecraft client = Minecraft.getInstance();
+    Minecraft client = Minecraft.getMinecraft();
     for (Consumer<byte[]> observer : observers) {
-      client.execute(() -> observer.accept(payload));
+      client.addScheduledTask(() -> observer.accept(payload));
     }
   }
 }

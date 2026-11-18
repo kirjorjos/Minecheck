@@ -1,28 +1,26 @@
 package net.minecheck.loader.forge;
 
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.function.Supplier;
 import net.minecheck.platform.api.ServerPlatform;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Registry;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.TagParser;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.block.Block;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityList;
+import net.minecraft.entity.EntityLiving;
+import net.minecraft.entity.item.EntityItem;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.JsonToNBT;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.MobSpawnType;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.levelgen.structure.templatesystem.StructureManager;
-import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings;
-import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.WorldServer;
+import net.minecraft.world.gen.structure.template.PlacementSettings;
+import net.minecraft.world.gen.structure.template.Template;
+import net.minecraft.world.gen.structure.template.TemplateManager;
+import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
 public class ForgeServerPlatform implements ServerPlatform {
 
@@ -42,14 +40,11 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private <T> T onServerThread(Supplier<T> action) {
     MinecraftServer s = requireServer();
-    if (s.isSameThread()) {
+    if (s.isCallingFromMinecraftThread()) {
       return action.get();
     }
-    // Not MinecraftServer#submit: 1.16.5 only inherits it from BlockableEventLoop, and the runtime
-    // method lookup on the server class fails there. execute(Runnable) is the same seam without the
-    // signature that moved.
     java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
-    s.execute(
+    s.addScheduledTask(
         () -> {
           try {
             done.complete(action.get());
@@ -60,32 +55,47 @@ public class ForgeServerPlatform implements ServerPlatform {
     return done.join();
   }
 
-  private ServerLevel overworld() {
-    MinecraftServer s = requireServer();
-    ServerLevel level = s.getLevel(net.minecraft.world.level.dimension.DimensionType.OVERWORLD);
+  private WorldServer overworld() {
+    WorldServer level = requireServer().getWorld(0);
     if (level == null) {
       throw new IllegalStateException("overworld not available yet");
     }
     return level;
   }
 
-  private static CompoundTag parseTag(String nbt) {
+  /**
+   * 1.12.2 resource locations are strict: they must be lower-case and non-empty. Trim and lower the
+   * id first, so {@code minecraft:Gold_Block} is a name error and not a crash in the parser.
+   */
+  private static ResourceLocation parseId(String id, String what) {
+    if (id == null) {
+      throw new IllegalArgumentException("invalid " + what + " id: null");
+    }
+    String trimmed = id.trim().toLowerCase(java.util.Locale.ROOT);
+    try {
+      return new ResourceLocation(trimmed);
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException("invalid " + what + " id: " + id, e);
+    }
+  }
+
+  private static NBTTagCompound parseTag(String nbt) {
     if (nbt == null || nbt.isEmpty()) {
-      return new CompoundTag();
+      return new NBTTagCompound();
     }
     try {
-      return TagParser.parseTag(nbt);
-    } catch (CommandSyntaxException e) {
+      return JsonToNBT.getTagFromJson(nbt);
+    } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
   }
 
-  private static <T> T requireRegistryEntry(
-      Registry<T> registry, ResourceLocation id, String what) {
-    // A null get is the answer: 1.16.5's Registry interface has no containsKey(ResourceLocation),
-    // and
-    // calling it was a NoSuchMethodError at runtime rather than a compile error.
-    T entry = registry.get(id);
+  private static <T extends net.minecraftforge.registries.IForgeRegistryEntry<T>>
+      T requireRegistryEntry(
+          net.minecraftforge.registries.IForgeRegistry<T> registry,
+          ResourceLocation id,
+          String what) {
+    T entry = registry.getValue(id);
     if (entry == null) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
     }
@@ -98,7 +108,7 @@ public class ForgeServerPlatform implements ServerPlatform {
         () -> {
           MinecraftServer s = requireServer();
           String line = command.startsWith("/") ? command.substring(1) : command;
-          return s.getCommands().performCommand(s.createCommandSourceStack(), line);
+          return s.getCommandManager().executeCommand(s, line);
         });
   }
 
@@ -108,24 +118,19 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> s.getPlayerList().getPlayerByName(name) != null);
+    return onServerThread(() -> s.getPlayerList().getPlayerByUsername(name) != null);
   }
 
   @Override
   public void applyDeterministicRules() {
     onServerThread(
         () -> {
-          MinecraftServer s = requireServer();
-          s.getGameRules()
-              .getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING)
-              .set(false, null);
-          s.getGameRules()
-              .getRule(net.minecraft.world.level.GameRules.RULE_DAYLIGHT)
-              .set(false, null);
-          s.getGameRules()
-              .getRule(net.minecraft.world.level.GameRules.RULE_WEATHER_CYCLE)
-              .set(false, null);
-          // 1.14 has no insomnia rule; it arrives in 1.15. Mob spawning is off anyway.
+          WorldServer level = overworld();
+          net.minecraft.world.GameRules rules = level.getGameRules();
+          // 1.12.2 has no insomnia rule; it arrives in 1.15, and mob spawning is off anyway.
+          rules.setOrCreateGameRule("doMobSpawning", "false");
+          rules.setOrCreateGameRule("doDaylightCycle", "false");
+          rules.setOrCreateGameRule("doWeatherCycle", "false");
           return null;
         });
   }
@@ -138,20 +143,19 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private java.util.List<net.minecheck.platform.api.EntityInfo> findEntitiesOnServerThread(
       String type, String tag) {
-    ResourceLocation typeId = type == null ? null : ResourceLocation.tryParse(type);
-    ServerLevel level = overworld();
+    ResourceLocation typeId = type == null ? null : parseId(type, "entity type");
+    WorldServer level = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    for (Entity entity : (Iterable<Entity>) level.getEntities()::iterator) {
-      // 1.16.5's getAllEntities() keeps an entity until the tick after it was removed, and a dying
-      // mob
-      // stays listed for its death animation. Neither is something a client can observe as present,
-      // so neither is a match for a query.
-      if (entity.removed
-          || (entity instanceof net.minecraft.world.entity.LivingEntity living
-              && !living.isAlive())) {
+    for (Object raw : level.loadedEntityList) {
+      Entity entity = (Entity) raw;
+      // 1.12.2 keeps a removed entity in the list until the next tick, and a dying mob stays listed
+      // for its death animation. Neither is something a client can observe as present.
+      if (entity.isDead
+          || (entity instanceof EntityLiving && ((EntityLiving) entity).getHealth() <= 0)) {
         continue;
       }
-      if (typeId != null && !Registry.ENTITY_TYPE.getKey(entity.getType()).equals(typeId)) {
+      ResourceLocation actual = EntityList.getKey(entity);
+      if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
       if (tag != null && !entity.getTags().contains(tag)) {
@@ -159,11 +163,11 @@ public class ForgeServerPlatform implements ServerPlatform {
       }
       out.add(
           new net.minecheck.platform.api.EntityInfo(
-              entity.getId(),
-              Registry.ENTITY_TYPE.getKey(entity.getType()).toString(),
-              entity.x,
-              entity.y,
-              entity.z,
+              entity.getEntityId(),
+              actual == null ? "" : actual.toString(),
+              entity.posX,
+              entity.posY,
+              entity.posZ,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);
@@ -177,9 +181,8 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          ServerLevel overworld =
-              s.getLevel(net.minecraft.world.level.dimension.DimensionType.OVERWORLD);
-          return overworld != null && overworld.getChunkSource().getPendingTasksCount() == 0;
+          WorldServer level = s.getWorld(0);
+          return level != null && level.getChunkProvider().chunkExists(0, 0);
         });
   }
 
@@ -187,14 +190,15 @@ public class ForgeServerPlatform implements ServerPlatform {
   public Integer groundHeight(int x, int z) {
     return onServerThread(
         () -> {
-          ServerLevel level = overworld();
+          WorldServer level = overworld();
           // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a
           // height" is a property of the loaded chunk, not of one block in it.
-          if (!level.hasChunk(x >> 4, z >> 4)) {
+          if (!level.getChunkProvider().chunkExists(x >> 4, z >> 4)) {
             return null;
           }
-          return level.getHeight(
-              net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+          // 1.12.2's heightmap already reports the first air block above the surface, which is
+          // the height the newer lines get from MOTION_BLOCKING plus one.
+          return level.getHeight(x, z);
         });
   }
 
@@ -204,19 +208,19 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> overworld().hasChunk(chunkX, chunkZ));
+    return onServerThread(() -> overworld().getChunkProvider().chunkExists(chunkX, chunkZ));
   }
 
   @Override
   public boolean loadChunk(int chunkX, int chunkZ) {
     return onServerThread(
         () -> {
-          ServerLevel level = overworld();
-          // The same forced ticket `forceload add` sets, so the chunk stays loaded for the rest of
-          // the run; reading it through makes the load synchronous rather than a later tick.
-          level.setChunkForced(chunkX, chunkZ, true);
+          WorldServer level = overworld();
+          // Reading the chunk through makes the load synchronous rather than a later tick. 1.12.2
+          // has no per-chunk forced ticket exposed without Forge's ticket manager, so the load is
+          // not held against unload the way `forceload add` holds it.
           level.getChunk(chunkX, chunkZ);
-          return level.hasChunk(chunkX, chunkZ);
+          return level.getChunkProvider().chunkExists(chunkX, chunkZ);
         });
   }
 
@@ -226,38 +230,24 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   private int spawnEntityOnServerThread(String id, double x, double y, double z, String nbt) {
-    ResourceLocation location = ResourceLocation.tryParse(id);
-    if (location == null) {
-      throw new IllegalArgumentException("invalid entity id: " + id);
-    }
-    requireRegistryEntry(Registry.ENTITY_TYPE, location, "entity type");
-    ServerLevel level = overworld();
-    CompoundTag tag = parseTag(nbt);
-    tag.putString("id", location.toString());
-    Entity entity =
-        EntityType.loadEntityRecursive(
-            tag,
-            level,
-            loaded -> {
-              loaded.moveTo(x, y, z, loaded.yRot, loaded.xRot);
-              return loaded;
-            });
+    ResourceLocation location = parseId(id, "entity type");
+    requireRegistryEntry(ForgeRegistries.ENTITIES, location, "entity type");
+    WorldServer level = overworld();
+    NBTTagCompound tag = parseTag(nbt);
+    tag.setString("id", location.toString());
+    Entity entity = EntityList.createEntityFromNBT(tag, level);
     if (entity == null) {
       throw new IllegalArgumentException("entity type cannot be spawned directly: " + id);
     }
-    if (entity instanceof Mob mob) {
-      mob.finalizeSpawn(
-          level,
-          level.getCurrentDifficultyAt(
-              new BlockPos((int) entity.x, (int) entity.y, (int) entity.z)),
-          MobSpawnType.COMMAND,
-          null,
-          null);
+    entity.setPosition(x, y, z);
+    if (entity instanceof EntityLiving) {
+      ((EntityLiving) entity)
+          .onInitialSpawn(level.getDifficultyForLocation(new BlockPos(entity)), null);
     }
-    if (!level.addFreshEntity(entity)) {
+    if (!level.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
-    return entity.getId();
+    return entity.getEntityId();
   }
 
   @Override
@@ -267,25 +257,25 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private boolean spawnBlockOnServerThread(
       String id, int x, int y, int z, String nbt, boolean replace) {
-    ResourceLocation location = ResourceLocation.tryParse(id);
-    if (location == null) {
-      throw new IllegalArgumentException("invalid block id: " + id);
-    }
-    Block block = requireRegistryEntry(Registry.BLOCK, location, "block");
-    ServerLevel level = overworld();
+    ResourceLocation location = parseId(id, "block");
+    Block block = requireRegistryEntry(ForgeRegistries.BLOCKS, location, "block");
+    WorldServer level = overworld();
     BlockPos pos = new BlockPos(x, y, z);
-    if (!replace && !level.getBlockState(pos).isAir()) {
+    if (!replace && !level.isAirBlock(pos)) {
       return false;
     }
-    BlockState state = block.defaultBlockState();
-    if (!level.setBlock(pos, state, 3)) {
+    IBlockState state = block.getDefaultState();
+    if (!level.setBlockState(pos, state, 3)) {
       return false;
     }
-    CompoundTag tag = parseTag(nbt);
-    if (!tag.isEmpty()) {
-      BlockEntity blockEntity = level.getBlockEntity(pos);
-      if (blockEntity != null) {
-        blockEntity.load(tag);
+    NBTTagCompound tag = parseTag(nbt);
+    if (!tag.getKeySet().isEmpty()) {
+      TileEntity tile = level.getTileEntity(pos);
+      if (tile != null) {
+        tag.setInteger("x", x);
+        tag.setInteger("y", y);
+        tag.setInteger("z", z);
+        tile.readFromNBT(tag);
       }
     }
     return true;
@@ -298,23 +288,19 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
-    ResourceLocation location = ResourceLocation.tryParse(id);
-    if (location == null) {
-      throw new IllegalArgumentException("invalid item id: " + id);
+    ResourceLocation location = parseId(id, "item");
+    Item item = requireRegistryEntry(ForgeRegistries.ITEMS, location, "item");
+    WorldServer level = overworld();
+    ItemStack stack = new ItemStack(item, count);
+    NBTTagCompound tag = parseTag(nbt);
+    if (!tag.getKeySet().isEmpty()) {
+      stack.setTagCompound(tag);
     }
-    Item item = requireRegistryEntry(Registry.ITEM, location, "item");
-    ServerLevel level = overworld();
-    ItemStack stack = new ItemStack(item);
-    stack.setCount(count);
-    CompoundTag tag = parseTag(nbt);
-    if (!tag.isEmpty()) {
-      stack.setTag(tag);
-    }
-    ItemEntity itemEntity = new ItemEntity(level, x, y, z, stack);
-    if (!level.addFreshEntity(itemEntity)) {
+    EntityItem itemEntity = new EntityItem(level, x, y, z, stack);
+    if (!level.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
-    return itemEntity.getId();
+    return itemEntity.getEntityId();
   }
 
   @Override
@@ -323,19 +309,14 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
-    ResourceLocation location = ResourceLocation.tryParse(id);
-    if (location == null) {
-      throw new IllegalArgumentException("invalid structure id: " + id);
-    }
-    ServerLevel level = overworld();
-    StructureManager manager = level.getStructureManager();
-    // 1.16.5's get() answers the template itself, null when the id is unknown.
-    StructureTemplate template = manager.get(location);
+    ResourceLocation location = parseId(id, "structure");
+    WorldServer level = overworld();
+    TemplateManager manager = level.getStructureTemplateManager();
+    Template template = manager.get(level.getMinecraftServer(), location);
     if (template == null) {
       throw new IllegalArgumentException("unknown structure: " + id);
     }
-    BlockPos pos = new BlockPos(x, y, z);
-    StructurePlaceSettings settings = new StructurePlaceSettings().setIgnoreEntities(true);
-    return template.placeInWorld(level, pos, settings, 2);
+    template.addBlocksToWorld(level, new BlockPos(x, y, z), new PlacementSettings(), 2);
+    return true;
   }
 }

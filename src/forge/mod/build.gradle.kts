@@ -63,12 +63,10 @@ tasks.processResources {
   from(rootProject.file("tests/flat-world.json"))
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
-  filesMatching("META-INF/mods.toml") {
-    expand(
-      "version" to project.version.toString(),
-      "minecraft_version" to mcVersion,
-      "minecraft_next" to mcNext,
-    )
+  // 1.12.2's FML reads mcmod.info, not mods.toml; the version and game version are stamped in
+  // from the same single source (`gradle.properties` and the project version).
+  filesMatching("mcmod.info") {
+    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
   }
 }
 

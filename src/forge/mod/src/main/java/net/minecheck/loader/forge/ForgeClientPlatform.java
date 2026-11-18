@@ -1,38 +1,73 @@
 package net.minecheck.loader.forge;
 
-import com.mojang.blaze3d.platform.InputConstants;
+import java.io.File;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.CreateWorldOptions;
-import net.minecraft.client.KeyMapping;
-import net.minecraft.client.KeyboardHandler;
+import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.MouseHandler;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.events.GuiEventListener;
-import net.minecraft.client.gui.screens.BackupConfirmScreen;
-import net.minecraft.client.gui.screens.ConfirmScreen;
-import net.minecraft.client.gui.screens.ConnectScreen;
-import net.minecraft.client.gui.screens.DisconnectedScreen;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.GuiButton;
+import net.minecraft.client.gui.GuiChat;
+import net.minecraft.client.gui.GuiDisconnected;
+import net.minecraft.client.gui.GuiMainMenu;
+import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.GuiTextField;
+import net.minecraft.client.gui.ScaledResolution;
+import net.minecraft.client.gui.inventory.GuiBeacon;
+import net.minecraft.client.gui.inventory.GuiChest;
+import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.client.gui.inventory.GuiContainerCreative;
+import net.minecraft.client.gui.inventory.GuiCrafting;
+import net.minecraft.client.gui.inventory.GuiEditSign;
+import net.minecraft.client.gui.inventory.GuiFurnace;
+import net.minecraft.client.gui.inventory.GuiInventory;
+import net.minecraft.client.multiplayer.GuiConnecting;
 import net.minecraft.client.multiplayer.ServerAddress;
-import net.minecraft.client.multiplayer.ServerData;
-import net.minecraft.core.Registry;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.TranslatableComponent;
+import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.client.shader.Framebuffer;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityList;
+import net.minecraft.inventory.ClickType;
+import net.minecraft.inventory.Container;
+import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTBase;
+import net.minecraft.nbt.NBTTagByte;
+import net.minecraft.nbt.NBTTagByteArray;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagDouble;
+import net.minecraft.nbt.NBTTagFloat;
+import net.minecraft.nbt.NBTTagInt;
+import net.minecraft.nbt.NBTTagIntArray;
+import net.minecraft.nbt.NBTTagList;
+import net.minecraft.nbt.NBTTagLong;
+import net.minecraft.nbt.NBTTagShort;
+import net.minecraft.nbt.NBTTagString;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.Difficulty;
-import net.minecraft.world.level.GameRules;
-import net.minecraft.world.level.GameType;
-import net.minecraft.world.level.LevelSettings;
-import net.minecraft.world.level.LevelType;
-import net.minecraft.world.level.dimension.DimensionType;
-import net.minecraftforge.fml.loading.FMLPaths;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.tileentity.TileEntitySign;
+import net.minecraft.util.EnumHand;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.world.EnumDifficulty;
+import net.minecraft.world.GameRules;
+import net.minecraft.world.GameType;
+import net.minecraft.world.WorldServer;
+import net.minecraft.world.WorldSettings;
+import net.minecraft.world.WorldType;
+import net.minecraftforge.fml.common.Loader;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.input.Keyboard;
+import org.lwjgl.opengl.Display;
+import org.lwjgl.opengl.DisplayMode;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL30;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -46,7 +81,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     return cameraPlatform;
   }
 
-  /** Key bindings are a client-setup concern on Forge, so the entrypoint calls this there. */
+  /** Key bindings are a client-setup concern, so the entrypoint calls this at init. */
   void installCameraBindings() {
     cameraPlatform.registerBindings();
   }
@@ -54,51 +89,47 @@ public class ForgeClientPlatform implements ClientPlatform {
   /** Set once this line's pause-on-focus-loss has been turned off for the run. */
   private boolean unfocusedPlayAllowed;
 
-  /** Set once the window has been hidden (or the config said not to). */
+  /** Set once the window handling has been settled (or the config said not to). */
   private boolean windowSettled;
 
   /**
-   * Hides the client's own window when {@code hideGameWindow} says so.
-   *
-   * <p>The newer lines hook the window's constructor so it is never mapped at all; Forge 28 has no
-   * Mixin, and no Forge event fires inside {@code MainWindow}'s construction, so the earliest point
-   * a mod can reach is the first client tick. The window therefore exists, but is hidden before a
-   * frame is swapped into it — which is all a run under Xvfb needs.
+   * 1.12.2 runs on LWJGL 2, which has no way to hide a window: {@code Display} can resize it, move
+   * it off screen or minimise it, but hiding it is a GLFW concept. The pause-on-lost-focus rule is
+   * still turned off, so a run under Xvfb behaves exactly as it does on the newer lines; the one
+   * visible difference is that the window keeps existing.
    */
   void hideWindowIfConfigured() {
     if (windowSettled) {
       return;
     }
     windowSettled = true;
-    if (!net.minecheck.common.config.GameWindowPolicy.hide(FMLPaths.CONFIGDIR.get())) {
+    if (!net.minecheck.common.config.GameWindowPolicy.hide(
+        Loader.instance().getConfigDir().toPath())) {
       return;
     }
-    long handle = mc().window.getWindow();
-    if (handle != 0L) {
-      org.lwjgl.glfw.GLFW.glfwHideWindow(handle);
-    }
+    LOG.warning(
+        "Minecheck: hideGameWindow is on, but 1.12.2's LWJGL 2 has no hidden window — the game"
+            + " window stays mapped (pause-on-focus-loss is still off)");
   }
 
   /**
-   * Turns off 1.16.5's pause-on-focus-loss.
+   * Turns off 1.12.2's pause-on-focus-loss.
    *
-   * <p>The option is gone from 1.17 on, but on this line the client pauses its integrated server
-   * whenever the window is not focused — and a Minecheck run hides that window ({@code
-   * hideGameWindow}) and never focuses it. The world then loads and pauses in the same breath, so
-   * {@code isWorldReady} never turns true: every script that creates a world timed out with the
-   * world running behind a paused server.
+   * <p>A Minecheck run never focuses the game window, and the client pauses its integrated server
+   * whenever the window is not focused — the world then loads and pauses in the same breath, so
+   * {@code isWorldReady} never turns true.
    */
   void allowUnfocusedPlay() {
     if (unfocusedPlayAllowed) {
       return;
     }
-    mc().options.pauseOnLostFocus = false;
+    mc().gameSettings.pauseOnLostFocus = false;
     unfocusedPlayAllowed = true;
   }
 
   /**
    * True while the run's view window is on screen — the human's visible surface when the game's own
-   * window is hidden. The camera accepts human input while this or the game's own window has focus.
+   * window is hidden.
    */
   boolean viewWindowVisible() {
     net.minecheck.platform.api.ViewWindow window = viewWindow;
@@ -106,47 +137,57 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   private Minecraft mc() {
-    return Minecraft.getInstance();
+    return Minecraft.getMinecraft();
+  }
+
+  /** The game directory: the parent of the config directory FML hands every mod. */
+  private static File gameDir() {
+    return Loader.instance().getConfigDir().getParentFile();
   }
 
   private void onClientThread(Runnable r) {
     Minecraft mc = mc();
-    if (mc.isSameThread()) {
+    if (mc.isCallingFromMinecraftThread()) {
       r.run();
     } else {
-      mc.execute(r);
+      mc.addScheduledTask(r);
     }
   }
 
-  /** Runs {@code action} on the client thread — inline when already on it, else on a later tick. */
   @Override
   public void runOnClientThread(Runnable action) {
     onClientThread(action);
   }
 
-  private volatile java.util.concurrent.CompletableFuture<Void> resourceReload;
-  private volatile boolean reloadRequested;
+  // ------------------------------------------------------------ resource reload
+
+  /** Ticks still to elapse before a 1.12.2 reload is reported settled. */
+  private volatile int reloadTicksRemaining = -1;
 
   @Override
   public void reloadResources() {
-    // Flagged before the dispatch: the caller is not on the client thread, so the reload cannot
-    // have started yet, and "settled" must not report true in between.
-    reloadRequested = true;
-    onClientThread(() -> resourceReload = mc().reloadResourcePacks());
+    // 1.12.2's refreshResources() answers nothing, so settlement is observed as "a couple of client
+    // ticks have passed since the request" rather than as a future. The reload itself runs on the
+    // client thread and the following ticks are what let its listeners run.
+    onClientThread(
+        () -> {
+          if (mc().world != null) {
+            mc().refreshResources();
+          }
+          reloadTicksRemaining = 2;
+        });
   }
 
   @Override
   public boolean isResourceReloadSettled() {
-    java.util.concurrent.CompletableFuture<Void> reload = resourceReload;
-    return !reloadRequested || (reload != null && reload.isDone());
+    return reloadTicksRemaining <= 0;
   }
 
   // ------------------------------------------------------------ screenshots
 
   /**
    * Encode/write thread for captures: the GL readback stays on the render thread, but the crop, the
-   * PNG encode and the file write do not. One daemon thread is enough — captures are sequential in
-   * a script and the client must never wait on it.
+   * PNG encode and the file write do not.
    */
   private static final java.util.concurrent.ExecutorService SCREENSHOT_WRITER =
       java.util.concurrent.Executors.newSingleThreadExecutor(
@@ -162,7 +203,7 @@ public class ForgeClientPlatform implements ClientPlatform {
   /** Set while {@code restoreVanillaCamera} is in effect: no render-path work, and no captures. */
   private volatile boolean vanillaCameraRestored;
 
-  /** The run's window, or {@code null} (see {@link #pumpViewWindow()}). */
+  /** The run's window, or {@code null}. */
   private volatile net.minecheck.platform.api.ViewWindow viewWindow;
 
   /** Client ticks between frames pushed to the view window (~10 fps at 20 ticks a second). */
@@ -187,14 +228,14 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   /**
-   * Pushes the client's latest frame to the view window, if the run opened one.
-   *
-   * <p>Read on every second tick rather than every tick: a {@code glReadPixels} is a pipeline
-   * stall, and a feed a human is watching does not need twenty frames a second. A run without a
-   * window never gets past the null check, so the option costs nothing when it is off.
+   * Pushes the client's latest frame to the view window, if the run opened one, and ticks the
+   * resource-reload countdown.
    */
   @Override
   public void pumpViewWindow() {
+    if (reloadTicksRemaining > 0) {
+      reloadTicksRemaining--;
+    }
     net.minecheck.platform.api.ViewWindow window = viewWindow;
     if (window == null || !window.visible()) {
       return;
@@ -202,15 +243,13 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (viewWindowTicks++ % VIEW_WINDOW_TICK_INTERVAL != 0) {
       return;
     }
-    com.mojang.blaze3d.pipeline.RenderTarget target = mc().getMainRenderTarget();
-    if (target == null || target.width <= 0 || target.height <= 0) {
-      return;
-    }
     try {
-      window.offerFrame(
-          readViewFrame(target.frameBufferId, target.width, target.height),
-          target.width,
-          target.height);
+      int width = mc().displayWidth;
+      int height = mc().displayHeight;
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+      window.offerFrame(readFramebuffer(), width, height);
     } catch (RuntimeException e) {
       LOG.log(Level.WARNING, "Minecheck: could not read a frame for the view window", e);
       window.close();
@@ -219,28 +258,24 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   /**
-   * Reads {@code fbo} into ARGB pixels, top row first.
+   * Reads the main framebuffer into ARGB pixels, top row first.
    *
-   * <p>Its own readback rather than a capture: a capture has to be byte-exact and goes through the
-   * profile's own path, while a live frame only has to look right — and reading {@code GL_RGBA}
-   * here leaves no question about the channel order a {@code NativeImage} uses internally.
+   * <p>1.12.2 has no {@code RenderTarget}/{@code NativeImage} pair to delegate to, so the readback
+   * is done here: bind the framebuffer, {@code glReadPixels} the RGBA bytes, then repack them (GL's
+   * origin is the bottom-left).
    */
-  private static int[] readViewFrame(int fbo, int width, int height) {
-    java.nio.ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(width * height * 4);
-    int previous = org.lwjgl.opengl.GL30.glGetInteger(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_BINDING);
-    org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, fbo);
+  private static int[] readFramebuffer() {
+    Framebuffer framebuffer = Minecraft.getMinecraft().getFramebuffer();
+    int width = framebuffer.framebufferTextureWidth;
+    int height = framebuffer.framebufferHeight;
+    ByteBuffer buffer = BufferUtils.createByteBuffer(width * height * 4);
+    int previous = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
+    GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer.framebufferObject);
     try {
-      org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_PACK_ALIGNMENT, 1);
-      org.lwjgl.opengl.GL11.glReadPixels(
-          0,
-          0,
-          width,
-          height,
-          org.lwjgl.opengl.GL11.GL_RGBA,
-          org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE,
-          buffer);
+      GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
+      GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
     } finally {
-      org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, previous);
+      GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, previous);
     }
     int[] argb = new int[width * height];
     for (int row = 0; row < height; row++) {
@@ -259,10 +294,8 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   /**
-   * Dispatches a key typed into the view window through vanilla's keyboard handler — the same path
-   * the human's own keys take, because it is the human's key: the window is the run's single
-   * surface, and what it draws is what those keys drive (the player's view moves the player, the
-   * camera's view flies the camera).
+   * Dispatches a key typed into the view window through the client's own key path — the same
+   * binding state a human's keypress sets.
    *
    * <p>Deliberately <em>not</em> marked with {@link net.minecheck.platform.api.InjectedInput}: that
    * marker is for Minecheck's own synthetic input, and a camera that ignores it must still obey the
@@ -270,43 +303,42 @@ public class ForgeClientPlatform implements ClientPlatform {
    */
   @Override
   public void virtualKey(int glfwKey, boolean down) {
-    onClientThread(
-        () ->
-            mc().keyboardHandler
-                .keyPress(
-                    mc().window.getWindow(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
+    String name = glfwKeyName(glfwKey);
+    if (name == null) {
+      return;
+    }
+    int code = Keyboard.getKeyIndex(name);
+    if (code == Keyboard.KEY_NONE) {
+      return;
+    }
+    onClientThread(() -> pressKeyCode(code, down));
   }
 
   /**
    * Points the client's clock back at the integrated server's. See {@link
    * net.minecheck.platform.api.ClientPlatform#pinClientClock()} for why the drift is invisible live
    * but not in a capture.
-   *
-   * <p>Called every client tick from {@code ForgeEntrypoint}, after the level tick (where {@code
-   * ClientLevel.tickTime} advanced the day time) and before that frame is rendered. A mismatch is
-   * corrected in place; when the two already agree nothing is written, so a world the script froze
-   * is not touched.
    */
   @Override
   public void pinClientClock() {
-    net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+    Minecraft minecraft = mc();
     applyPendingWorldSettings(minecraft);
-    net.minecraft.client.multiplayer.MultiPlayerLevel level = minecraft.level;
+    WorldClient level = minecraft.world;
     if (level == null) {
       return;
     }
-    net.minecraft.server.MinecraftServer server = minecraft.getSingleplayerServer();
+    MinecraftServer server = minecraft.getIntegratedServer();
     if (server == null) {
-      // Remote server: no authoritative value in this process (see pinClientClock's contract).
+      // Remote server: no authoritative value in this process.
       return;
     }
-    net.minecraft.server.level.ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
+    WorldServer overworld = server.getWorld(0);
     if (overworld == null) {
       return;
     }
-    long serverTime = overworld.getDayTime();
-    if (level.getDayTime() != serverTime) {
-      level.setDayTime(serverTime);
+    long serverTime = overworld.getWorldTime();
+    if (level.getWorldTime() != serverTime) {
+      level.setWorldTime(serverTime);
     }
   }
 
@@ -317,21 +349,20 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   /**
    * Draws every frame at render delta 1 — see {@link ClientPlatform#pinRenderTickDelta()} for why a
-   * capture needs it. The timer object is swapped rather than a value written into it, because the
-   * delta is recomputed at the start of every frame; the subclass still returns vanilla's tick
-   * count, so ticks are scheduled exactly as before.
+   * capture needs it.
+   *
+   * <p>1.12.2 recomputes the delta in {@code Timer.updateTimer()} at the top of every frame, and
+   * the render tick event fires after it, so writing the value here is enough. The field is found
+   * by type rather than by name, because the production jar carries SRG names.
    */
   @Override
   public void pinRenderTickDelta() {
-    if (vanillaCameraRestored) {
-      return;
-    }
-    if (renderTickDeltaPinned || renderTickDeltaUnavailable) {
+    if (vanillaCameraRestored || renderTickDeltaPinned || renderTickDeltaUnavailable) {
       return;
     }
     Minecraft mc = mc();
-    java.lang.reflect.Field timerField = null;
-    for (java.lang.reflect.Field field : Minecraft.class.getDeclaredFields()) {
+    Field timerField = null;
+    for (Field field : Minecraft.class.getDeclaredFields()) {
       if (field.getType().getSimpleName().equals("Timer")) {
         timerField = field;
         break;
@@ -346,62 +377,28 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     try {
       timerField.setAccessible(true);
-      Object current = timerField.get(mc);
-      if (current instanceof PinnedTimer) {
-        renderTickDeltaPinned = true;
-        return;
-      }
-      float msPerTick = 0.0f;
-      long lastMs = 0L;
-      for (java.lang.reflect.Field field : current.getClass().getDeclaredFields()) {
-        field.setAccessible(true);
-        if (field.getType() == float.class && !field.getName().equals("partialTick")) {
-          msPerTick = field.getFloat(current);
-        } else if (field.getType() == long.class) {
-          lastMs = field.getLong(current);
+      Object timer = timerField.get(mc);
+      for (Field field : timer.getClass().getDeclaredFields()) {
+        if (field.getType() == float.class && !field.getName().equals("ticksPerSecond")) {
+          field.setAccessible(true);
+          field.setFloat(timer, 1.0f);
+          renderTickDeltaPinned = true;
+          LOG.info("Minecheck: pinned the render tick delta to 1");
+          return;
         }
       }
-      timerField.set(mc, new PinnedTimer(msPerTick, lastMs));
-      renderTickDeltaPinned = true;
-      LOG.info("Minecheck: pinned the render tick delta to 1");
+      renderTickDeltaUnavailable = true;
+      LOG.warning(
+          "Minecheck: the render timer has no partial-tick field — captures keep the vanilla delta");
     } catch (ReflectiveOperationException | RuntimeException e) {
       renderTickDeltaUnavailable = true;
       LOG.log(Level.WARNING, "Minecheck: could not pin the render tick delta", e);
     }
   }
 
-  /**
-   * A frame timer that hands the renderer a partial tick of 1 without touching the tick count.
-   *
-   * <p>The same hazard as the Yarn counter: the field vanilla uses to accumulate tick time is the
-   * one the renderer reads, so a value written for the renderer would be carried into the next
-   * frame's arithmetic. Whatever vanilla computed is kept aside and restored before each call.
-   */
-  private static final class PinnedTimer extends net.minecraft.client.Timer {
-
-    /** The partial tick vanilla computed, restored before the next {@code advanceTime}. */
-    private float accumulatedPartialTick = Float.NaN;
-
-    PinnedTimer(float msPerTick, long lastMs) {
-      super(msPerTick, lastMs);
-    }
-
-    @Override
-    public void advanceTime(long timeMs) {
-      if (!Float.isNaN(accumulatedPartialTick)) {
-        this.partialTick = accumulatedPartialTick;
-      }
-      super.advanceTime(timeMs);
-      accumulatedPartialTick = this.partialTick;
-      this.partialTick = 1.0f;
-    }
-  }
-
   @Override
   public void requestScreenshot(net.minecheck.platform.api.ScreenshotRequest request) {
     if (vanillaCameraRestored) {
-      // Nothing in the render path was touched, so there is no picture to compare against a
-      // baseline. Say so instead of capturing whatever the client happens to be drawing.
       request.fail(
           net.minecheck.platform.api.ClientPlatform.SCREENSHOTS_UNAVAILABLE_VANILLA_CAMERA);
       return;
@@ -433,7 +430,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     request.running();
     encodeFrame(
         request,
-        new java.io.File(mc().gameDirectory, "screenshots")
+        new File(gameDir(), "screenshots")
             .toPath()
             .resolve(request.name() + ".png")
             .toAbsolutePath());
@@ -443,52 +440,29 @@ public class ForgeClientPlatform implements ClientPlatform {
    * Frames the client has finished drawing, counted by the loader's per-frame hook.
    *
    * <p>A capture needs a frame count and not a delay: the read must pick up a frame drawn
-   * <em>after</em> the chat was cleared, and one tick is not one frame. When the client falls
-   * behind it catches up with several ticks in a single frame, so "clear on one tick, read on the
-   * next" can still be the same picture — which is how a capture once came back with the command
-   * feedback it had just cleared.
+   * <em>after</em> the chat was cleared, and one tick is not one frame.
    */
   private static final java.util.concurrent.atomic.AtomicLong DRAWN_FRAMES =
       new java.util.concurrent.atomic.AtomicLong();
 
-  /**
-   * Records that the client finished drawing a frame. Called by the entrypoint's render tick hook,
-   * which fires once per frame.
-   */
+  /** Records that the client finished drawing a frame. */
   public static void notifyFrameDrawn() {
     DRAWN_FRAMES.incrementAndGet();
   }
 
-  /**
-   * The frame at which the pending capture cleared the chat, in {@link #DRAWN_FRAMES} terms. One
-   * capture is pending at a time — the script action blocks until its capture is done — so a field
-   * is enough.
-   */
+  /** The frame at which the pending capture cleared the chat, in {@link #DRAWN_FRAMES} terms. */
   private long chatClearedAtFrame;
 
   /**
    * One attempt at a capture, on the client (render) thread: empties the chat, waits for a frame
-   * drawn without it, then reads the main render target into a {@link
-   * com.mojang.blaze3d.platform.NativeImage} and hands the pixels to the writer thread; the script
-   * keeps ticking meanwhile.
-   *
-   * <p>Chat lines are the one HUD element a script makes nondeterministic (a message arrives when
-   * it arrives, and command feedback from the scene setup arrives in the middle of the run), so a
-   * capture without chat empties the HUD. It is emptied here rather than by hiding chat in the
-   * options, because the server refuses every command from a client whose chat visibility is hidden
-   * ({@code chat.disabled.options}) — and a run that cannot run commands cannot set up a scene.
-   *
-   * <p>The clear only shows up in the next frame that is drawn, and the read otherwise returns the
-   * frame drawn <em>before</em> it, chat included. So the clear is followed by a wait for the frame
-   * counter to move, not by a read on the next tick.
+   * drawn without it, then reads the main framebuffer and hands the pixels to the writer thread.
    */
   private void captureScreenshot(
       net.minecheck.platform.api.ScreenshotRequest request, boolean write) {
     Minecraft mc = mc();
-    // Outside a world the HUD is not drawn, so there is no chat to take out of the picture.
-    boolean clearChat = !request.chatVisible() && mc.level != null;
+    boolean clearChat = !request.chatVisible() && mc.world != null;
     if (clearChat && !request.prepared()) {
-      mc.gui.getChat().clearMessages(true);
+      mc.ingameGUI.getChatGUI().clearChatMessages(true);
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");
@@ -498,22 +472,26 @@ public class ForgeClientPlatform implements ClientPlatform {
       request.retry("waiting for the first frame drawn after the chat was cleared");
       return;
     }
-    com.mojang.blaze3d.pipeline.RenderTarget target = mc.getMainRenderTarget();
-    if (target == null) {
+    int frameWidth = mc.displayWidth;
+    int frameHeight = mc.displayHeight;
+    if (frameWidth <= 0 || frameHeight <= 0) {
       request.fail("no client framebuffer — is the client in a world?");
       return;
     }
-    com.mojang.blaze3d.platform.Window window = mc.window;
-    if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
-      // 1.16.5's Window has no setWindowed: ask GLFW directly, and let the resize be reported back
-      // over the next frames, exactly as the yarn side does.
-      org.lwjgl.glfw.GLFW.glfwSetWindowSize(
-          window.getWindow(), request.frameWidth(), request.frameHeight());
+    if (frameWidth != request.frameWidth() || frameHeight != request.frameHeight()) {
+      // LWJGL 2 has no setWindowed: ask Display directly, and let the resize be reported back over
+      // the next frames.
+      try {
+        Display.setDisplayMode(new DisplayMode(request.frameWidth(), request.frameHeight()));
+      } catch (org.lwjgl.LWJGLException e) {
+        request.fail("could not resize the client window: " + e.getMessage());
+        return;
+      }
       request.retry(
           "the client window is "
-              + window.getWidth()
+              + frameWidth
               + "x"
-              + window.getHeight()
+              + frameHeight
               + ", not the "
               + request.frameWidth()
               + "x"
@@ -522,9 +500,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       return;
     }
 
-    int frameWidth = window.getWidth();
-    int frameHeight = window.getHeight();
-    int guiScale = guiScale(window);
+    int guiScale = new ScaledResolution(mc).getScaleFactor();
     int x = 0;
     int y = 0;
     int cropWidth = frameWidth;
@@ -567,34 +543,35 @@ public class ForgeClientPlatform implements ClientPlatform {
       cropHeight = (int) (toY - fromY);
     }
 
-    com.mojang.blaze3d.platform.NativeImage image;
+    int[] frame;
     try {
-      image = net.minecraft.client.Screenshot.takeScreenshot(target.width, target.height, target);
+      frame = readFramebuffer();
     } catch (RuntimeException e) {
       request.fail("framebuffer read failed: " + e.getMessage());
       return;
     }
     if (screenshotRenderer == null) {
-      screenshotRenderer = org.lwjgl.opengl.GL11.glGetString(org.lwjgl.opengl.GL11.GL_RENDERER);
+      screenshotRenderer = GL11.glGetString(GL11.GL_RENDERER);
     }
     request.running();
     if (!write) {
-      readFrame(request, image, x, y, cropWidth, cropHeight, guiScale);
+      readFrame(request, frame, frameWidth, x, y, cropWidth, cropHeight, guiScale);
       return;
     }
     java.nio.file.Path targetPath =
-        new java.io.File(mc.gameDirectory, "screenshots")
+        new File(gameDir(), "screenshots")
             .toPath()
             .resolve(request.name() + ".png")
             .toAbsolutePath();
     writeScreenshot(
-        request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, targetPath);
+        request, frame, frameWidth, frameHeight, x, y, cropWidth, cropHeight, guiScale, targetPath);
   }
 
   /** Crops, downscales and digests the capture in memory — off the render thread. */
   private static void readFrame(
       net.minecheck.platform.api.ScreenshotRequest request,
-      com.mojang.blaze3d.platform.NativeImage source,
+      int[] source,
+      int sourceWidth,
       int x,
       int y,
       int cropWidth,
@@ -611,7 +588,7 @@ public class ForgeClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getPixelRGBA(sx, sy);
+                pixels[at++] = source[sy * sourceWidth + sx];
               }
             }
             request.succeedFrame(
@@ -624,8 +601,6 @@ public class ForgeClientPlatform implements ClientPlatform {
             request.fail(
                 "framebuffer read failed: "
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-          } finally {
-            source.close();
           }
         });
   }
@@ -635,197 +610,113 @@ public class ForgeClientPlatform implements ClientPlatform {
       net.minecheck.platform.api.ScreenshotRequest request, java.nio.file.Path target) {
     SCREENSHOT_WRITER.execute(
         () -> {
-          com.mojang.blaze3d.platform.NativeImage out = null;
           try {
             int outWidth = request.outWidth();
             int outHeight = request.outHeight();
-            int[] pixels = request.pixels();
-            out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
-            for (int dy = 0; dy < outHeight; dy++) {
-              for (int dx = 0; dx < outWidth; dx++) {
-                out.setPixelRGBA(dx, dy, pixels[dy * outWidth + dx]);
-              }
-            }
-            java.nio.file.Path directory = target.getParent();
-            java.nio.file.Files.createDirectories(directory);
-            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
-            out.writeToFile(tmp);
-            java.nio.file.Files.move(
-                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            byte[] bytes = java.nio.file.Files.readAllBytes(target);
-            net.minecheck.common.screenshot.ScreenshotProfile.write(
-                directory,
-                request.frameWidth(),
-                request.frameHeight(),
-                request.guiScale(),
-                request.scale(),
-                request.chatVisible(),
-                screenshotRenderer);
-            request.succeed(
-                target,
+            writePng(
+                request,
+                request.pixels(),
                 outWidth,
                 outHeight,
-                bytes.length,
-                net.minecheck.common.screenshot.Digests.sha256(bytes));
+                outWidth,
+                target,
+                request.guiScale());
           } catch (Exception e) {
             request.fail(
                 "framebuffer read failed: "
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-          } finally {
-            if (out != null) {
-              out.close();
-            }
           }
         });
-  }
-
-  /**
-   * The effective GUI scale: framebuffer pixels per GUI pixel, taken from the window the client
-   * laid its HUD out with (so {@code unit = "gui"} regions line up with what a script sees).
-   */
-  private static int guiScale(com.mojang.blaze3d.platform.Window window) {
-    int scaledWidth = window.getGuiScaledWidth();
-    if (scaledWidth <= 0) {
-      return 1;
-    }
-    int scale = Math.round((float) window.getWidth() / scaledWidth);
-    return Math.max(1, scale);
   }
 
   /** Crops, downscales, PNG-encodes and writes the capture — all off the render thread. */
   private static void writeScreenshot(
       net.minecheck.platform.api.ScreenshotRequest request,
-      com.mojang.blaze3d.platform.NativeImage source,
+      int[] source,
+      int frameWidth,
+      int frameHeight,
       int x,
       int y,
       int cropWidth,
       int cropHeight,
-      int frameWidth,
-      int frameHeight,
       int guiScale,
       java.nio.file.Path target) {
     SCREENSHOT_WRITER.execute(
         () -> {
-          com.mojang.blaze3d.platform.NativeImage out = null;
           try {
             int outWidth = Math.max(1, (int) Math.round(cropWidth * request.scale()));
             int outHeight = Math.max(1, (int) Math.round(cropHeight * request.scale()));
-            out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
+            int[] pixels = new int[outWidth * outHeight];
+            int at = 0;
             for (int dy = 0; dy < outHeight; dy++) {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setPixelRGBA(dx, dy, source.getPixelRGBA(sx, sy));
+                pixels[at++] = source[sy * frameWidth + sx];
               }
             }
-            java.nio.file.Path directory = target.getParent();
-            java.nio.file.Files.createDirectories(directory);
-            java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
-            out.writeToFile(tmp);
-            java.nio.file.Files.move(
-                tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            byte[] bytes = java.nio.file.Files.readAllBytes(target);
-            net.minecheck.common.screenshot.ScreenshotProfile.write(
-                directory,
-                frameWidth,
-                frameHeight,
-                guiScale,
-                request.scale(),
-                request.chatVisible(),
-                screenshotRenderer);
-            request.succeed(target, outWidth, outHeight, bytes.length, sha256(bytes));
+            writePng(request, pixels, outWidth, outHeight, frameWidth, target, guiScale);
           } catch (Exception e) {
             request.fail(
                 "framebuffer read failed: "
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-          } finally {
-            if (out != null) {
-              out.close();
-            }
-            source.close();
           }
         });
   }
 
-  /** Lower-case hex SHA-256, the digest a baseline comparison reports. */
-  private static String sha256(byte[] bytes) {
-    return net.minecheck.common.screenshot.Digests.sha256(bytes);
+  /**
+   * Encodes packed ARGB pixels as a PNG and reports the file through {@code request}. The frame
+   * report is rewritten by the capture so a capture is reproducible from its own metadata.
+   */
+  private static void writePng(
+      net.minecheck.platform.api.ScreenshotRequest request,
+      int[] pixels,
+      int width,
+      int height,
+      int frameWidth,
+      java.nio.file.Path target,
+      int guiScale)
+      throws java.io.IOException {
+    java.awt.image.BufferedImage image =
+        new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+    image.setRGB(0, 0, width, height, pixels, 0, width);
+    java.nio.file.Path directory = target.getParent();
+    java.nio.file.Files.createDirectories(directory);
+    java.nio.file.Path tmp = directory.resolve(target.getFileName() + ".part");
+    javax.imageio.ImageIO.write(image, "png", tmp.toFile());
+    java.nio.file.Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    byte[] bytes = java.nio.file.Files.readAllBytes(target);
+    net.minecheck.common.screenshot.ScreenshotProfile.write(
+        directory,
+        request.frameWidth(),
+        request.frameHeight(),
+        request.guiScale(),
+        request.scale(),
+        request.chatVisible(),
+        screenshotRenderer);
+    request.succeed(
+        target, width, height, bytes.length, net.minecheck.common.screenshot.Digests.sha256(bytes));
   }
 
   @Override
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");
-    onClientThread(
-        () -> mc().setScreen(new net.minecraft.client.gui.screens.ChatScreen(command ? "/" : "")));
+    onClientThread(() -> mc().displayGuiScreen(new GuiChat(command ? "/" : "")));
   }
 
   @Override
   public void joinLocalWorld(String worldName) {
     Minecraft mc = mc();
-    if (!mc.getLevelSource().levelExists(worldName)) {
+    File save = new File(new File(gameDir(), "saves"), worldName + "/level.dat");
+    if (!save.isFile()) {
       throw new IllegalArgumentException("World not found: " + worldName);
     }
     onClientThread(
-        () -> {
-          // The LevelSettings is only a fallback for a save that does not exist yet, which this
-          // method has already checked: 1.15 keeps the level type in it even when the save wins.
-          mc.selectLevel(
-              worldName,
-              worldName,
-              new LevelSettings(0L, GameType.SURVIVAL, false, false, LevelType.NORMAL));
-          answerWorldLoadPrompt(mc);
-        });
-  }
-
-  /**
-   * Answers the "this world has experimental settings" question 1.18.2 puts in the way of a world
-   * load.
-   *
-   * <p>1.18.2 stops a load on a confirmation screen whenever the world's settings are not lifecycle
-   * stable, which is the case both for a world this harness generates — a flat overworld is not the
-   * noise generator {@code LevelStem.stable} looks for — and for the worlds this dev client saves,
-   * because Forge writes every mod's datapack into the saved {@code DataPacks} list ({@code
-   * mod:emi}, {@code mod:jei}, …), so they are not the builtin registries alone. The screen is set
-   * synchronously by the load itself, so a script that called {@code createWorld} or {@code
-   * joinLocalWorld} would otherwise sit on it until its timeout, with no world, no error and no way
-   * to answer it: {@code isOnTitleScreen} is false, {@code isWorldReady} is false, and nothing is
-   * connecting.
-   *
-   * <p>The load request <em>is</em> the confirmation, so press {@code Proceed} — the same answer
-   * the screen's own yes-button gives, which re-runs the load with the warning marked as confirmed.
-   * On the form that offers to back the world up first, press {@code Load world anyway}: a backup
-   * exists to protect a human's save, and a harness world is created and thrown away by the run.
-   * Both are matched on their own labels, so any other confirmation — a datapack failure, say — is
-   * left alone and still fails the run.
-   */
-  private static void answerWorldLoadPrompt(Minecraft mc) {
-    Screen screen = mc.screen;
-    if (screen instanceof BackupConfirmScreen) {
-      pressLabelled(screen, new TranslatableComponent("selectWorld.backupJoinSkipButton"));
-    } else if (screen instanceof ConfirmScreen
-        && new TranslatableComponent("selectWorld.backupQuestion.experimental")
-            .getString()
-            .equals(screen.getTitle().getString())) {
-      pressLabelled(screen, new TranslatableComponent("gui.proceed"));
-    }
-  }
-
-  /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
-  private static void pressLabelled(Screen screen, Component label) {
-    for (GuiEventListener child : screen.children()) {
-      if (child instanceof Button button && label.getString().equals(button.getMessage())) {
-        LOG.info(
-            String.format(
-                "world load: answered the \"%s\" prompt with \"%s\"",
-                screen.getTitle().getString(), label.getString()));
-        button.onPress();
-        return;
-      }
-    }
-    LOG.warning(
-        String.format(
-            "world load: \"%s\" is up but has no \"%s\" button",
-            screen.getTitle().getString(), label.getString()));
+        () ->
+            mc.launchIntegratedServer(
+                worldName,
+                worldName,
+                new WorldSettings(0L, GameType.SURVIVAL, false, false, WorldType.DEFAULT)));
   }
 
   /**
@@ -836,73 +727,72 @@ public class ForgeClientPlatform implements ClientPlatform {
   /**
    * Applies the rules and difficulty a {@code createWorld} call asked for.
    *
-   * <p>1.15's {@code LevelSettings} carries only the seed, the game type, whether map features
-   * generate and the level type, so the game rules and the difficulty have nowhere to go at
-   * creation time — they are set on the integrated server once it exists, from the client tick
-   * hook.
+   * <p>1.12.2's {@code WorldSettings} carries only the seed, the game type, whether map features
+   * generate and the level type, so the game rules and the difficulty are set on the integrated
+   * server once it exists, from the client tick hook.
    */
   private void applyPendingWorldSettings(Minecraft mc) {
     CreateWorldOptions options = pendingWorldOptions;
     if (options == null) {
       return;
     }
-    MinecraftServer server = mc.getSingleplayerServer();
+    MinecraftServer server = mc.getIntegratedServer();
     if (server == null) {
       return;
     }
     pendingWorldOptions = null;
-    GameRules rules = server.getGameRules();
-    if (!options.mobSpawning()) {
-      rules.getRule(GameRules.RULE_DOMOBSPAWNING).set(false, server);
+    WorldServer overworld = server.getWorld(0);
+    if (overworld != null) {
+      GameRules rules = overworld.getGameRules();
+      if (!options.mobSpawning()) {
+        rules.setOrCreateGameRule("doMobSpawning", "false");
+      }
+      if (!options.daylightCycle()) {
+        rules.setOrCreateGameRule("doDaylightCycle", "false");
+      }
+      if (!options.weatherCycle()) {
+        rules.setOrCreateGameRule("doWeatherCycle", "false");
+      }
     }
-    if (!options.daylightCycle()) {
-      rules.getRule(GameRules.RULE_DAYLIGHT).set(false, server);
-    }
-    if (!options.weatherCycle()) {
-      rules.getRule(GameRules.RULE_WEATHER_CYCLE).set(false, server);
-    }
-    // No insomnia rule to set: 1.14 has no such game rule (it arrives in 1.15). A flat world with
-    // mob spawning off and the day cycle frozen never produces one.
-    server.setDifficulty(difficulty(options.difficulty()), true);
+    // No insomnia rule to set: 1.12.2 has no such game rule (it arrives in 1.15).
+    server.setDifficultyForAllWorlds(difficulty(options.difficulty()));
   }
 
   @Override
   public void createWorld(CreateWorldOptions options) {
-    // 1.15 has no dimension set to swap a generator into: the world is created from a
-    // LevelSettings, whose level type selects flat generation and whose level-type options are the
-    // same declaration the harness writes into the dedicated server's `generator-settings`. Both
-    // sides therefore build the surface from tests/flat-world.json.
-    LevelSettings levelSettings =
-        new LevelSettings(
-                options.seed(),
-                gameMode(options.gamemode()),
-                options.structures(),
-                false, // hardcore
-                LevelType.FLAT)
-            .setLevelTypeOptions(FlatWorldSettings.declaration());
+    // 1.12.2 has no dimension set to swap a generator into: the world is created from a
+    // WorldSettings whose level type selects flat generation and whose generator options are the
+    // same declaration the harness writes into the dedicated server's `generator-settings`.
+    WorldSettings settings =
+        new WorldSettings(
+            options.seed(),
+            gameMode(options.gamemode()),
+            options.structures(),
+            false,
+            WorldType.FLAT);
+    settings.setGeneratorOptions(FlatWorldSettings.declaration());
     if (options.allowCheats()) {
-      levelSettings.enableSinglePlayerCommands();
+      settings.enableCommands();
     }
     pendingWorldOptions = options;
     Minecraft mc = mc();
-    onClientThread(() -> mc.selectLevel(options.name(), options.name(), levelSettings));
+    onClientThread(() -> mc.launchIntegratedServer(options.name(), options.name(), settings));
   }
 
   @Override
   public void joinServer(String address) {
-    ServerAddress serverAddress = ServerAddress.parseString(address);
-    ServerData info = new ServerData(address, address, false);
+    ServerAddress serverAddress = ServerAddress.fromString(address);
     onClientThread(
         () -> {
           try {
             Minecraft mc = mc();
-            // 1.16.5 has no one-shot startConnecting: the screen connects from its own init().
-            mc.setScreen(
-                new ConnectScreen(mc.screen, mc, serverAddress.getHost(), serverAddress.getPort()));
+            mc.displayGuiScreen(
+                new GuiConnecting(
+                    mc.currentScreen, mc, serverAddress.getIP(), serverAddress.getPort()));
             LOG.info(
                 String.format(
-                    "joinServer: ConnectScreen.startConnecting(%s:%s)",
-                    serverAddress.getHost(), serverAddress.getPort()));
+                    "joinServer: GuiConnecting(%s:%s)",
+                    serverAddress.getIP(), serverAddress.getPort()));
           } catch (Throwable t) {
             LOG.log(Level.SEVERE, "joinServer: failed to connect", t);
           }
@@ -914,20 +804,19 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           Minecraft mc = mc();
-          if (mc.level != null) {
-            mc.level.disconnect();
+          if (mc.world != null) {
+            mc.world.sendQuittingDisconnectingPacket();
           }
-          // The no-arg clearLevel() lands on a ProgressScreen ("Saving world"), which is not a
-          // title screen, so isOnTitleScreen() would never be true after leaving a world. Use the
-          // screen-taking overload so the documented phase terminator (back to the title screen)
-          // actually happens.
-          mc.clearLevel(new TitleScreen());
+          // loadWorld(null) alone leaves the "Saving world" progress screen up; the main menu is
+          // what makes isOnTitleScreen() true after leaving.
+          mc.loadWorld(null);
+          mc.displayGuiScreen(new GuiMainMenu());
         });
   }
 
   @Override
   public void quit() {
-    onClientThread(mc()::stop);
+    onClientThread(mc()::shutdown);
   }
 
   @Override
@@ -937,17 +826,17 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isWorldReady() {
-    return mc().player != null && mc().screen == null && mc().getOverlay() == null;
+    return mc().player != null && mc().currentScreen == null;
   }
 
   @Override
   public boolean isOnTitleScreen() {
-    return mc().screen instanceof TitleScreen;
+    return mc().currentScreen instanceof GuiMainMenu;
   }
 
   @Override
   public boolean isConnecting() {
-    return mc().screen instanceof ConnectScreen;
+    return mc().currentScreen instanceof GuiConnecting;
   }
 
   @Override
@@ -958,163 +847,116 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isConnectFailed() {
-    return mc().screen instanceof DisconnectedScreen;
-  }
-
-  @Override
-  public boolean isBootComplete() {
-    return mc().getOverlay() == null;
+    return mc().currentScreen instanceof GuiDisconnected;
   }
 
   /**
-   * Spawn-region chunk tasks the integrated server still has outstanding while a local world is
-   * loading — the only progress-like number a 1.18.2 client can see before the level is ready.
-   *
-   * <p>Not a percentage, and deliberately not presented as one: the wait only compares samples, so
-   * all this has to do is change while the server is working and stop changing while it is stuck.
-   * Reported as {@code -1} whenever there is nothing to watch (no local server, or already in the
-   * world), which leaves the caller on its plain deadline.
+   * 1.12.2 blocks the client thread inside its splash screen before the mod's tick hooks run, so
+   * anything that can ask this question is already past the boot.
    */
   @Override
+  public boolean isBootComplete() {
+    return true;
+  }
+
+  /** 1.12.2 exposes no chunk-load progress to the client; -1 leaves the caller on its deadline. */
+  @Override
   public float worldLoadProgress() {
-    Minecraft mc = mc();
-    MinecraftServer server = mc.getSingleplayerServer();
-    if (mc.player != null || server == null) {
-      return -1f;
-    }
-    ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
-    return overworld == null
-        ? -1f
-        : (overworld.getChunk(0, 0, net.minecraft.world.level.chunk.ChunkStatus.FULL, false) != null
-            ? 0
-            : 1);
+    return -1f;
   }
 
   @Override
   public boolean isWorldGenSettled() {
-    MinecraftServer server = mc().getSingleplayerServer();
+    MinecraftServer server = mc().getIntegratedServer();
     if (server == null) {
       LOG.warning("worldGenSettled: not in a local/integrated world; treating as settled");
       return true;
     }
-    ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
+    WorldServer overworld = server.getWorld(0);
     if (overworld == null) {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    // 1.15 exposes no pending-task count, so settled means the origin chunk every fixture stands
-    // on is generated: the flat world fills it in one pass, and any suite that needs more waits on
-    // the equivalent of waitForChunk.
-    boolean settled =
-        overworld.getChunk(0, 0, net.minecraft.world.level.chunk.ChunkStatus.FULL, false) != null;
+    // 1.12.2 exposes no pending-task count, so settled means the origin chunk every fixture stands
+    // on is generated.
+    boolean settled = overworld.getChunkProvider().chunkExists(0, 0);
     LOG.info(String.format("worldGenSettled: origin chunk generated=%s", settled));
     return settled;
   }
 
-  private static final int GLFW_PRESS = 1;
-  private static final int GLFW_RELEASE = 0;
+  // ------------------------------------------------------------ input
 
-  /**
-   * Resolves a script key name to an {@link InputConstants.Key}. Accepts either a key mapping id
-   * ("key.jump") or a GLFW-style key name ("F3"), lower-cased to the "key.keyboard.*" namespace.
-   * Returns {@code null} when unresolvable.
-   */
-  private InputConstants.Key resolveKey(String key) {
-    if (key.startsWith("key.")) {
-      for (KeyMapping mapping : mc().options.keyMappings) {
-        if (mapping.getName().equals(key)) {
-          return mapping.getKey();
-        }
-      }
-      return null;
-    }
-    try {
-      return InputConstants.getKey("key.keyboard." + key.toLowerCase(Locale.ROOT));
-    } catch (RuntimeException e) {
-      LOG.log(Level.WARNING, String.format("keyDown: unresolvable key name '%s'", key), e);
-      return null;
+  /** Press or release a key code through the binding state a real keypress sets. */
+  private void pressKeyCode(int code, boolean down) {
+    KeyBinding.setKeyBindState(code, down);
+    if (down) {
+      KeyBinding.onTick(code);
     }
   }
 
-  /** Dispatches a synthetic key event through the vanilla {@link KeyboardHandler} handler. */
   /**
-   * Dispatches a synthetic key event through the vanilla handler that owns the resolved key type.
-   *
-   * <p>A binding can be bound to a mouse button — {@code key.attack} and {@code key.use} are, by
-   * default — and {@link KeyboardHandler#keyPress} only ever resolves keyboard codes. Dispatching a
-   * mouse-bound binding there indexes an unrelated key, so the binding never toggles and the press
-   * is silently lost; route it through the mouse handler instead. (Scan codes go through the
-   * keyboard handler as a scan code rather than a key symbol.)
+   * Resolves a script key name to an LWJGL key code. Accepts either a key mapping id ("key.jump")
+   * or a key name ("F3"). Returns {@code Keyboard.KEY_NONE} when unresolvable.
    */
-  private void dispatchKey(InputConstants.Key key, int action) {
-    if (key.getType() == InputConstants.Type.MOUSE) {
-      dispatchMouse(key.getValue(), action);
-      return;
+  private int resolveKey(String key) {
+    if (key.startsWith("key.")) {
+      for (KeyBinding mapping : mc().gameSettings.keyBindings) {
+        if (mapping.getKeyDescription().equals(key)) {
+          return mapping.getKeyCode();
+        }
+      }
+      return Keyboard.KEY_NONE;
     }
-    KeyboardHandler keyboard = mc().keyboardHandler;
-    long handle = mc().window.getWindow();
-    boolean scancode = key.getType() == InputConstants.Type.SCANCODE;
-    int code = scancode ? -1 : key.getValue();
-    int scan = scancode ? key.getValue() : 0;
-    onClientThread(
-        () ->
-            net.minecheck.platform.api.InjectedInput.run(
-                () -> keyboard.keyPress(handle, code, scan, action, 0)));
+    int code = Keyboard.getKeyIndex(key.toUpperCase(Locale.ROOT));
+    if (code == Keyboard.KEY_NONE) {
+      LOG.warning(String.format("keyDown: unresolvable key name '%s'", key));
+    }
+    return code;
   }
 
   @Override
   public boolean keyDown(String key) {
-    InputConstants.Key resolved = resolveKey(key);
-    if (resolved == null) {
+    int code = resolveKey(key);
+    if (code == Keyboard.KEY_NONE) {
       return false;
     }
-    dispatchKey(resolved, GLFW_PRESS);
+    onClientThread(
+        () -> net.minecheck.platform.api.InjectedInput.run(() -> pressKeyCode(code, true)));
     return true;
   }
 
   @Override
   public void keyUp(String key) {
-    InputConstants.Key resolved = resolveKey(key);
-    if (resolved != null) {
-      dispatchKey(resolved, GLFW_RELEASE);
+    int code = resolveKey(key);
+    if (code != Keyboard.KEY_NONE) {
+      onClientThread(
+          () -> net.minecheck.platform.api.InjectedInput.run(() -> pressKeyCode(code, false)));
     }
   }
 
   /**
-   * Reflects into the private {@link MouseHandler#onPress} callback (the GLFW mouse-button
-   * handler), so synthetic clicks flow through the same screen/binding dispatch as real input.
+   * 1.12.2 represents mouse buttons as the negative key codes {@code -100 - button}, so a synthetic
+   * click is the same binding-state dispatch a real one produces.
    */
-  private void dispatchMouse(int button, int action) {
-    MouseHandler mouse = mc().mouseHandler;
-    long handle = mc().window.getWindow();
-    onClientThread(
-        () -> {
-          try {
-            Method m =
-                MouseHandler.class.getDeclaredMethod(
-                    "onPress", long.class, int.class, int.class, int.class);
-            m.setAccessible(true);
-            net.minecheck.platform.api.InjectedInput.begin();
-            try {
-              m.invoke(mouse, handle, button, action, 0);
-            } finally {
-              net.minecheck.platform.api.InjectedInput.end();
-            }
-          } catch (ReflectiveOperationException e) {
-            LOG.log(Level.SEVERE, String.format("mouse: failed to dispatch button %s", button), e);
-          }
-        });
+  private void pressMouseButton(int button, boolean down) {
+    int code = -100 - button;
+    KeyBinding.setKeyBindState(code, down);
+    if (down) {
+      KeyBinding.onTick(code);
+    }
   }
 
   @Override
   public boolean mouseDown(int button) {
-    dispatchMouse(button, GLFW_PRESS);
+    onClientThread(
+        () -> net.minecheck.platform.api.InjectedInput.run(() -> pressMouseButton(button, true)));
     return true;
   }
 
   @Override
   public void mouseUp(int button) {
-    dispatchMouse(button, GLFW_RELEASE);
+    onClientThread(
+        () -> net.minecheck.platform.api.InjectedInput.run(() -> pressMouseButton(button, false)));
   }
 
   @Override
@@ -1123,13 +965,10 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null) {
       return null;
     }
-    net.minecraft.world.entity.player.Player p = mc.player;
+    net.minecraft.entity.player.EntityPlayer p = mc.player;
+    String dimension = "minecraft:" + p.world.provider.getDimensionType().getName();
     return new net.minecheck.platform.api.PlayerInfo(
-        p.getGameProfile().getName(),
-        p.x,
-        p.y,
-        p.z,
-        net.minecraft.world.level.dimension.DimensionType.getName(p.dimension).toString());
+        p.getName(), p.posX, p.posY, p.posZ, dimension);
   }
 
   @Override
@@ -1138,8 +977,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           if (mc.player != null) {
-            mc.player.xRot = pitch;
-            mc.player.yRot = yaw;
+            mc.player.rotationPitch = pitch;
+            mc.player.rotationYaw = yaw;
           }
         });
   }
@@ -1149,218 +988,75 @@ public class ForgeClientPlatform implements ClientPlatform {
     Minecraft mc = mc();
     onClientThread(
         () -> {
-          if (mc.player != null) {
-            mc.player.lookAt(
-                net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
-                new net.minecraft.world.phys.Vec3(x, y, z));
+          if (mc.player == null) {
+            return;
           }
+          net.minecraft.entity.player.EntityPlayer p = mc.player;
+          double dx = x - p.posX;
+          double dy = y - (p.posY + p.getEyeHeight());
+          double dz = z - p.posZ;
+          double horizontal = Math.sqrt(dx * dx + dz * dz);
+          p.rotationYaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+          p.rotationPitch = (float) -(Math.atan2(dy, horizontal) * 180.0 / Math.PI);
         });
   }
 
   @Override
   public net.minecheck.platform.api.BlockPosition getTargetBlock(String entityName) {
     Minecraft mc = mc();
-    if (mc.player == null
-        || !mc.player.getGameProfile().getName().equals(entityName)
-        || mc.level == null) {
+    if (mc.player == null || !mc.player.getName().equals(entityName) || mc.world == null) {
       return null;
     }
-    net.minecraft.world.phys.HitResult hit = mc.player.pick(5.0, 1.0F, false);
-    if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
+    RayTraceResult hit = mc.player.rayTrace(5.0, 1.0f);
+    if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return null;
     }
-    net.minecraft.core.BlockPos pos = ((net.minecraft.world.phys.BlockHitResult) hit).getBlockPos();
+    BlockPos pos = hit.getBlockPos();
     return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
   }
 
   @Override
   public net.minecheck.platform.api.BlockPosition getCrosshairBlock() {
     Minecraft mc = mc();
-    if (mc.player == null || mc.level == null) {
+    if (mc.player == null || mc.world == null || mc.objectMouseOver == null) {
       return null;
     }
-    net.minecraft.world.phys.HitResult hit = mc.hitResult;
-    if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
+    RayTraceResult hit = mc.objectMouseOver;
+    if (hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return null;
     }
-    net.minecraft.core.BlockPos pos = ((net.minecraft.world.phys.BlockHitResult) hit).getBlockPos();
+    BlockPos pos = hit.getBlockPos();
     return new net.minecheck.platform.api.BlockPosition(pos.getX(), pos.getY(), pos.getZ());
   }
 
   @Override
   public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
     Minecraft mc = mc();
-    net.minecraft.client.multiplayer.MultiPlayerLevel level = mc.level;
+    WorldClient level = mc.world;
     if (level == null) {
-      // Not in a world: no entities are known, which is a legitimate answer for a script probing
-      // before/after a join rather than an error.
       return java.util.List.of();
     }
-    net.minecraft.resources.ResourceLocation typeId =
-        type == null ? null : net.minecraft.resources.ResourceLocation.tryParse(type);
+    ResourceLocation typeId =
+        type == null ? null : new ResourceLocation(type.toLowerCase(Locale.ROOT));
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    for (net.minecraft.world.entity.Entity entity : level.entitiesForRendering()) {
-      net.minecraft.resources.ResourceLocation actual =
-          Registry.ENTITY_TYPE.getKey(entity.getType());
-      if (typeId != null && !actual.equals(typeId)) {
+    for (Object raw : level.loadedEntityList) {
+      Entity entity = (Entity) raw;
+      ResourceLocation actual = EntityList.getKey(entity);
+      if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
       // Scoreboard tags are server-side data: the tag set is empty for every client-side entity
       // (vanilla never syncs it), so this is a faithful copy of what the client actually knows.
       out.add(
           new net.minecheck.platform.api.EntityInfo(
-              entity.getId(),
-              actual.toString(),
-              entity.x,
-              entity.y,
-              entity.z,
+              entity.getEntityId(),
+              actual == null ? "" : actual.toString(),
+              entity.posX,
+              entity.posY,
+              entity.posZ,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);
-  }
-
-  @Override
-  public net.minecheck.platform.api.BlockInfo getBlock(
-      net.minecheck.platform.api.BlockPosition pos) {
-    Minecraft mc = mc();
-    if (mc.level == null) {
-      throw new IllegalStateException("not in a world");
-    }
-    net.minecraft.core.BlockPos blockPos =
-        new net.minecraft.core.BlockPos(pos.x(), pos.y(), pos.z());
-    if (!mc.level.isLoaded(blockPos)) {
-      return null;
-    }
-    net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(blockPos);
-    net.minecraft.world.level.block.entity.BlockEntity blockEntity =
-        mc.level.getBlockEntity(blockPos);
-    java.util.Map<String, Object> nbt =
-        blockEntity == null
-            ? null
-            : nbtToMap(blockEntity.save(new net.minecraft.nbt.CompoundTag()));
-    return new net.minecheck.platform.api.BlockInfo(
-        net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
-  }
-
-  @Override
-  public Integer groundHeight(int x, int z) {
-    Minecraft mc = mc();
-    if (mc.level == null) {
-      throw new IllegalStateException("not in a world");
-    }
-    // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a height"
-    // is a property of the loaded chunk, not of one block in it.
-    if (!mc.level.hasChunk(x >> 4, z >> 4)) {
-      return null;
-    }
-    return mc.level.getHeight(
-        net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
-  }
-
-  @Override
-  public boolean isChunkLoaded(int chunkX, int chunkZ) {
-    Minecraft mc = mc();
-    return mc.level != null && mc.level.hasChunk(chunkX, chunkZ);
-  }
-
-  // ------------------------------------------------------------ GUI / inventory
-
-  @Override
-  public void useItemOnTarget() {
-    Minecraft mc = mc();
-    if (mc.player == null || mc.gameMode == null || mc.level == null) {
-      throw new IllegalStateException("not in a world");
-    }
-    net.minecraft.world.phys.HitResult hit = mc.player.pick(5.0, 1.0F, false);
-    if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
-      mc.gameMode.useItemOn(
-          mc.player,
-          mc.level,
-          net.minecraft.world.InteractionHand.MAIN_HAND,
-          (net.minecraft.world.phys.BlockHitResult) hit);
-    }
-  }
-
-  @Override
-  public boolean clickSlot(int slot, int button, String actionType) {
-    Minecraft mc = mc();
-    if (!(mc.screen
-        instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?> acs)) {
-      return false;
-    }
-    mc.gameMode.handleInventoryMouseClick(
-        acs.getMenu().containerId, slot, button, clickType(actionType), mc.player);
-    return true;
-  }
-
-  private static net.minecraft.world.inventory.ClickType clickType(String type) {
-    return switch (type.toLowerCase(java.util.Locale.ROOT)) {
-      case "quick_move" -> net.minecraft.world.inventory.ClickType.QUICK_MOVE;
-      case "swap" -> net.minecraft.world.inventory.ClickType.SWAP;
-      case "clone" -> net.minecraft.world.inventory.ClickType.CLONE;
-      case "throw" -> net.minecraft.world.inventory.ClickType.THROW;
-      case "quick_craft" -> net.minecraft.world.inventory.ClickType.QUICK_CRAFT;
-      case "pickup_all" -> net.minecraft.world.inventory.ClickType.PICKUP_ALL;
-      default -> net.minecraft.world.inventory.ClickType.PICKUP;
-    };
-  }
-
-  @Override
-  public boolean clickGui(int button, double x, double y) {
-    Minecraft mc = mc();
-    net.minecraft.client.gui.screens.Screen screen = mc.screen;
-    if (screen == null) {
-      return false;
-    }
-    screen.mouseClicked(x, y, button);
-    return true;
-  }
-
-  @Override
-  public boolean clickGuiElement(String elementId, int button, int index) {
-    Minecraft mc = mc();
-    net.minecraft.client.gui.screens.Screen screen = mc.screen;
-    if (screen == null) {
-      return false;
-    }
-    String wanted = elementId.trim().toLowerCase(java.util.Locale.ROOT);
-    if (wanted.isEmpty()) {
-      return false;
-    }
-    // Label matches beat class-name matches: the label is the same string on every loader, the
-    // class name is not (`Button` here, `ButtonWidget` on yarn), and a mapping can name an inner
-    // class after its purpose too (`BeaconCancelButton` vs `CancelButton`), so the class form is a
-    // contains match.
-    java.util.List<net.minecraft.client.gui.components.AbstractWidget> byLabel =
-        new java.util.ArrayList<>();
-    java.util.List<net.minecraft.client.gui.components.AbstractWidget> byClass =
-        new java.util.ArrayList<>();
-    for (net.minecraft.client.gui.components.events.GuiEventListener element : screen.children()) {
-      if (!(element instanceof net.minecraft.client.gui.components.AbstractWidget widget)) {
-        continue;
-      }
-      String label = widget.getMessage().trim().toLowerCase(java.util.Locale.ROOT);
-      if (label.equals(wanted)) {
-        byLabel.add(widget);
-      } else if (widget
-          .getClass()
-          .getSimpleName()
-          .toLowerCase(java.util.Locale.ROOT)
-          .contains(wanted)) {
-        byClass.add(widget);
-      }
-    }
-    java.util.List<net.minecraft.client.gui.components.AbstractWidget> matches =
-        byLabel.isEmpty() ? byClass : byLabel;
-    int at = index <= 1 ? 0 : index - 1;
-    if (at >= matches.size()) {
-      return false;
-    }
-    net.minecraft.client.gui.components.AbstractWidget target = matches.get(at);
-    // The centre is inside the widget, so its own isMouseOver/clicked check passes.
-    target.mouseClicked(
-        target.x + target.getWidth() / 2.0, target.y + target.getHeight() / 2.0, button);
-    return true;
   }
 
   @Override
@@ -1369,107 +1065,302 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    // 1.18.2 has no command-only send: the client routes a leading "/" itself.
-    mc.player.chat(command.startsWith("/") ? command : "/" + command);
+    mc.player.sendChatMessage(command.startsWith("/") ? command : "/" + command);
+  }
+
+  @Override
+  public net.minecheck.platform.api.BlockInfo getBlock(
+      net.minecheck.platform.api.BlockPosition pos) {
+    Minecraft mc = mc();
+    if (mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    BlockPos blockPos = new BlockPos(pos.x(), pos.y(), pos.z());
+    if (!mc.world.isBlockLoaded(blockPos)) {
+      return null;
+    }
+    net.minecraft.block.state.IBlockState state = mc.world.getBlockState(blockPos);
+    TileEntity blockEntity = mc.world.getTileEntity(blockPos);
+    java.util.Map<String, Object> nbt =
+        blockEntity == null ? null : nbtToMap(blockEntity.writeToNBT(new NBTTagCompound()));
+    return new net.minecheck.platform.api.BlockInfo(
+        Block.REGISTRY.getNameForObject(state.getBlock()).toString(), nbt);
+  }
+
+  @Override
+  public Integer groundHeight(int x, int z) {
+    Minecraft mc = mc();
+    if (mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    if (!isChunkLoaded(x >> 4, z >> 4)) {
+      return null;
+    }
+    // 1.12.2's heightmap already reports the first air block above the surface, which is the height
+    // the newer lines get from MOTION_BLOCKING plus one.
+    return mc.world.getHeight(x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    Minecraft mc = mc();
+    // Asked of the loaded block rather than the chunk provider: 1.12.2's client provider has no
+    // chunk-presence query, while World.isBlockLoaded answers "is this column in a chunk the server
+    // has sent me" — exactly the question this is.
+    return mc.world != null && mc.world.isBlockLoaded(new BlockPos(chunkX << 4, 0, chunkZ << 4));
+  }
+
+  // ------------------------------------------------------------ GUI / inventory
+
+  @Override
+  public void useItemOnTarget() {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.playerController == null || mc.world == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    RayTraceResult hit = mc.objectMouseOver;
+    if (hit != null && hit.typeOfHit == RayTraceResult.Type.BLOCK) {
+      mc.playerController.processRightClickBlock(
+          mc.player, mc.world, hit.getBlockPos(), hit.sideHit, hit.hitVec, EnumHand.MAIN_HAND);
+    }
+  }
+
+  @Override
+  public boolean clickSlot(int slot, int button, String actionType) {
+    Minecraft mc = mc();
+    if (!(mc.currentScreen instanceof GuiContainer)) {
+      return false;
+    }
+    Container menu = ((GuiContainer) mc.currentScreen).inventorySlots;
+    mc.playerController.windowClick(menu.windowId, slot, button, clickType(actionType), mc.player);
+    return true;
+  }
+
+  private static ClickType clickType(String type) {
+    switch (type == null ? "" : type.toLowerCase(Locale.ROOT)) {
+      case "quick_move":
+        return ClickType.QUICK_MOVE;
+      case "swap":
+        return ClickType.SWAP;
+      case "clone":
+        return ClickType.CLONE;
+      case "throw":
+        return ClickType.THROW;
+      case "quick_craft":
+        return ClickType.QUICK_CRAFT;
+      case "pickup_all":
+        return ClickType.PICKUP_ALL;
+      default:
+        return ClickType.PICKUP;
+    }
+  }
+
+  @Override
+  public boolean clickGui(int button, double x, double y) {
+    GuiScreen screen = mc().currentScreen;
+    if (screen == null) {
+      return false;
+    }
+    return invokeGui(
+        screen,
+        "mouseClicked",
+        new Class<?>[] {int.class, int.class, int.class},
+        (int) x,
+        (int) y,
+        button);
+  }
+
+  @Override
+  public boolean clickGuiElement(String elementId, int button, int index) {
+    GuiScreen screen = mc().currentScreen;
+    if (screen == null) {
+      return false;
+    }
+    String wanted = elementId.trim().toLowerCase(Locale.ROOT);
+    if (wanted.isEmpty()) {
+      return false;
+    }
+    // Label matches beat class-name matches: the label is the same string on every loader, the
+    // class name is not, so the class form is a contains match.
+    java.util.List<GuiButton> byLabel = new java.util.ArrayList<>();
+    java.util.List<GuiButton> byClass = new java.util.ArrayList<>();
+    for (GuiButton widget : guiButtons(screen)) {
+      String label = widget.displayString.trim().toLowerCase(Locale.ROOT);
+      if (label.equals(wanted)) {
+        byLabel.add(widget);
+      } else if (widget.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains(wanted)) {
+        byClass.add(widget);
+      }
+    }
+    java.util.List<GuiButton> matches = byLabel.isEmpty() ? byClass : byLabel;
+    int at = index <= 1 ? 0 : index - 1;
+    if (at >= matches.size()) {
+      return false;
+    }
+    GuiButton target = matches.get(at);
+    target.mousePressed(mc(), target.x + target.width / 2, target.y + target.height / 2);
+    return true;
+  }
+
+  /**
+   * Every {@link GuiButton} the screen holds. 1.12.2's {@code GuiScreen} keeps them in a private
+   * list with a mapping-dependent name, so the field is found by its element type.
+   */
+  private static java.util.List<GuiButton> guiButtons(GuiScreen screen) {
+    java.util.List<GuiButton> out = new java.util.ArrayList<>();
+    for (Class<?> type = screen.getClass(); type != null; type = type.getSuperclass()) {
+      for (Field field : type.getDeclaredFields()) {
+        if (!java.util.List.class.isAssignableFrom(field.getType())) {
+          continue;
+        }
+        try {
+          field.setAccessible(true);
+          Object value = field.get(screen);
+          if (!(value instanceof java.util.List)) {
+            continue;
+          }
+          for (Object element : (java.util.List<?>) value) {
+            if (element instanceof GuiButton) {
+              out.add((GuiButton) element);
+            }
+          }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+          // A field this module cannot read is simply not a candidate.
+        }
+      }
+    }
+    return out;
   }
 
   @Override
   public boolean typeText(String text, String target) {
     Minecraft mc = mc();
-    String kind = target == null ? "" : target.toLowerCase(java.util.Locale.ROOT);
-    // The chat screen must already be open (openChat) — this only types into it.
-    net.minecraft.client.gui.screens.Screen screen = mc.screen;
+    String kind = target == null ? "" : target.toLowerCase(Locale.ROOT);
+    GuiScreen screen = mc.currentScreen;
     if (screen == null) {
       return false;
     }
-    net.minecraft.client.gui.components.EditBox field = findEditBox(screen);
+    GuiTextField field = findEditBox(screen);
     if (field == null) {
-      // Screens that own their text editing have no edit-box child — the sign editor is one, and it
+      // Screens that own their text editing have no edit-box field — the sign editor is one, and it
       // handles the characters itself, so dispatch them at the screen instead.
       boolean typed = false;
       for (int i = 0; i < text.length(); i++) {
-        if (screen.charTyped(text.charAt(i), 0)) {
+        if (invokeGui(
+            screen, "keyTyped", new Class<?>[] {char.class, int.class}, text.charAt(i), 0)) {
           typed = true;
         }
       }
       return typed;
     }
-    if (screen.getFocused() != field) {
-      screen.setInitialFocus(field);
+    if (!field.isFocused()) {
+      field.setFocused(true);
     }
-    if (kind.equals("command") && !field.getValue().startsWith("/")) {
-      field.setValue("/" + field.getValue());
+    if (kind.equals("command") && !field.getText().startsWith("/")) {
+      field.setText("/" + field.getText());
     }
     boolean dispatched = false;
     for (int i = 0; i < text.length(); i++) {
-      if (screen.charTyped(text.charAt(i), 0)) {
+      if (invokeGui(
+          screen, "keyTyped", new Class<?>[] {char.class, int.class}, text.charAt(i), 0)) {
         dispatched = true;
       }
     }
     return dispatched;
   }
 
-  /** The screen's focused edit box, or its first edit box when none is focused. */
-  private static net.minecraft.client.gui.components.EditBox findEditBox(
-      net.minecraft.client.gui.screens.Screen screen) {
-    if (screen.getFocused() instanceof net.minecraft.client.gui.components.EditBox focused) {
-      return focused;
-    }
-    for (net.minecraft.client.gui.components.events.GuiEventListener element : screen.children()) {
-      if (element instanceof net.minecraft.client.gui.components.EditBox box) {
-        return box;
+  /** The screen's focused edit box, or its first visible edit box when none is focused. */
+  private static GuiTextField findEditBox(GuiScreen screen) {
+    GuiTextField first = null;
+    for (Class<?> type = screen.getClass(); type != null; type = type.getSuperclass()) {
+      for (Field field : type.getDeclaredFields()) {
+        if (!GuiTextField.class.isAssignableFrom(field.getType())) {
+          continue;
+        }
+        try {
+          field.setAccessible(true);
+          Object value = field.get(screen);
+          if (!(value instanceof GuiTextField) || !((GuiTextField) value).getVisible()) {
+            continue;
+          }
+          GuiTextField box = (GuiTextField) value;
+          if (box.isFocused()) {
+            return box;
+          }
+          if (first == null) {
+            first = box;
+          }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+          // A field this module cannot read is simply not a candidate.
+        }
       }
     }
-    return null;
+    return first;
+  }
+
+  /**
+   * Invokes a protected {@link GuiScreen} hook on {@code screen}, answering whether it returned
+   * true.
+   */
+  private static boolean invokeGui(
+      GuiScreen screen, String name, Class<?>[] parameterTypes, Object... args) {
+    try {
+      Method method = GuiScreen.class.getDeclaredMethod(name, parameterTypes);
+      method.setAccessible(true);
+      Object result = method.invoke(screen, args);
+      return result instanceof Boolean && (Boolean) result;
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return false;
+    }
   }
 
   @Override
   public boolean openSignEditor(net.minecheck.platform.api.BlockPosition pos) {
     Minecraft mc = mc();
-    if (mc.player == null || mc.level == null) {
+    if (mc.player == null || mc.world == null) {
       throw new IllegalStateException("not in a world");
     }
-    net.minecraft.world.level.block.entity.BlockEntity be =
-        mc.level.getBlockEntity(new net.minecraft.core.BlockPos(pos.x(), pos.y(), pos.z()));
-    if (!(be instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign)) {
+    TileEntity be = mc.world.getTileEntity(new BlockPos(pos.x(), pos.y(), pos.z()));
+    if (!(be instanceof TileEntitySign)) {
       return false;
     }
-    onClientThread(() -> mc.player.openTextEdit(sign));
+    onClientThread(() -> mc.player.openEditSign((TileEntitySign) be));
     return true;
   }
 
   @Override
   public boolean isScreenOpen(String screenId) {
-    net.minecraft.client.gui.screens.Screen screen = mc().screen;
+    GuiScreen screen = mc().currentScreen;
     if (screen == null) {
       return false;
     }
     if (screenId == null || screenId.isEmpty()) {
-      return screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+      return screen instanceof GuiContainer;
     }
-    return switch (screenId) {
-      // Creative mode opens CreativeModeInventoryScreen, which does NOT extend InventoryScreen
-      // (both extend AbstractContainerScreen), so match either or openScreen("inventory") would
-      // time out for a creative player.
-      case "inventory" ->
-          screen instanceof net.minecraft.client.gui.screens.inventory.InventoryScreen
-              || screen
-                  instanceof net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
-      case "chat" -> screen instanceof net.minecraft.client.gui.screens.ChatScreen;
-      case "beacon" -> screen instanceof net.minecraft.client.gui.screens.inventory.BeaconScreen;
-      case "sign" -> screen instanceof net.minecraft.client.gui.screens.inventory.SignEditScreen;
-      case "chest" -> screen instanceof net.minecraft.client.gui.screens.inventory.ContainerScreen;
-      case "crafting" ->
-          screen instanceof net.minecraft.client.gui.screens.inventory.CraftingScreen;
-      case "furnace" -> screen instanceof net.minecraft.client.gui.screens.inventory.FurnaceScreen;
-      default -> false;
-    };
+    switch (screenId) {
+      case "inventory":
+        // Creative mode opens GuiContainerCreative, which does not extend GuiInventory.
+        return screen instanceof GuiInventory || screen instanceof GuiContainerCreative;
+      case "chat":
+        return screen instanceof GuiChat;
+      case "beacon":
+        return screen instanceof GuiBeacon;
+      case "sign":
+        return screen instanceof GuiEditSign;
+      case "chest":
+        return screen instanceof GuiChest;
+      case "crafting":
+        return screen instanceof GuiCrafting;
+      case "furnace":
+        return screen instanceof GuiFurnace;
+      default:
+        return false;
+    }
   }
 
-  private net.minecraft.world.inventory.AbstractContainerMenu openMenu(String screenId) {
-    net.minecraft.client.gui.screens.Screen screen = mc().screen;
-    if (!(screen
-        instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?> acs)) {
+  private Container openMenu(String screenId) {
+    GuiScreen screen = mc().currentScreen;
+    if (!(screen instanceof GuiContainer)) {
       throw new IllegalStateException("no container screen is open");
     }
     if (screenId != null && !screenId.isEmpty() && !isScreenOpen(screenId)) {
@@ -1480,13 +1371,13 @@ public class ForgeClientPlatform implements ClientPlatform {
               + screenId
               + "'");
     }
-    return acs.getMenu();
+    return ((GuiContainer) screen).inventorySlots;
   }
 
   @Override
   public int slotCount(String screenId) {
     try {
-      return openMenu(screenId).slots.size();
+      return openMenu(screenId).inventorySlots.size();
     } catch (IllegalStateException e) {
       return 0;
     }
@@ -1494,103 +1385,181 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public net.minecheck.platform.api.SlotInfo getSlot(int index, String screenId) {
-    net.minecraft.world.inventory.AbstractContainerMenu menu = openMenu(screenId);
-    if (index < 0 || index >= menu.slots.size()) {
+    Container menu = openMenu(screenId);
+    if (index < 0 || index >= menu.inventorySlots.size()) {
       throw new IllegalStateException(
-          "slot index " + index + " out of range (0.." + (menu.slots.size() - 1) + ")");
+          "slot index " + index + " out of range (0.." + (menu.inventorySlots.size() - 1) + ")");
     }
-    net.minecraft.world.item.ItemStack stack = menu.slots.get(index).getItem();
+    ItemStack stack = menu.inventorySlots.get(index).getStack();
     if (stack.isEmpty()) {
       return new net.minecheck.platform.api.SlotInfo(true, null, 0, null);
     }
-    net.minecraft.nbt.CompoundTag nbt = stack.getTag();
+    NBTTagCompound nbt = stack.getTagCompound();
     return new net.minecheck.platform.api.SlotInfo(
         false,
-        net.minecraft.core.Registry.ITEM.getKey(stack.getItem()).toString(),
+        net.minecraft.item.Item.REGISTRY.getNameForObject(stack.getItem()).toString(),
         stack.getCount(),
         nbt == null ? null : nbtToMap(nbt));
   }
 
-  private static java.util.Map<String, Object> nbtToMap(net.minecraft.nbt.CompoundTag compound) {
+  private static java.util.Map<String, Object> nbtToMap(NBTTagCompound compound) {
     java.util.Map<String, Object> out = new java.util.HashMap<>();
-    for (String key : compound.getAllKeys()) {
-      out.put(key, nbtValue(compound.get(key)));
+    for (String key : compound.getKeySet()) {
+      out.put(key, nbtValue(compound.getTag(key)));
     }
     return out;
   }
 
-  private static Object nbtValue(net.minecraft.nbt.Tag tag) {
+  private static Object nbtValue(NBTBase tag) {
     if (tag == null) {
       return null;
     }
-    if (tag instanceof net.minecraft.nbt.StringTag s) {
-      return s.getAsString();
+    switch (tag.getId()) {
+      case 1:
+        return ((NBTTagByte) tag).getByte();
+      case 2:
+        return ((NBTTagShort) tag).getShort();
+      case 3:
+        return ((NBTTagInt) tag).getInt();
+      case 4:
+        return ((NBTTagLong) tag).getLong();
+      case 5:
+        return ((NBTTagFloat) tag).getFloat();
+      case 6:
+        return ((NBTTagDouble) tag).getDouble();
+      case 7:
+        {
+          java.util.List<Object> out = new java.util.ArrayList<>();
+          for (byte value : ((NBTTagByteArray) tag).getByteArray()) {
+            out.add(value);
+          }
+          return out;
+        }
+      case 8:
+        return ((NBTTagString) tag).getString();
+      case 9:
+        {
+          NBTTagList list = (NBTTagList) tag;
+          java.util.List<Object> out = new java.util.ArrayList<>();
+          for (int i = 0; i < list.tagCount(); i++) {
+            out.add(nbtValue(list.get(i)));
+          }
+          return out;
+        }
+      case 10:
+        return nbtToMap((NBTTagCompound) tag);
+      case 11:
+        {
+          java.util.List<Object> out = new java.util.ArrayList<>();
+          for (int value : ((NBTTagIntArray) tag).getIntArray()) {
+            out.add(value);
+          }
+          return out;
+        }
+      case 12:
+        {
+          // The long-array tag's accessor is not in every 1.12.2 build's MCP mapping set, so it is
+          // read reflectively; a build without it simply leaves the key out of the map.
+          java.util.List<Object> out = new java.util.ArrayList<>();
+          try {
+            Method longs = tag.getClass().getMethod("getLongArray");
+            for (long value : (long[]) longs.invoke(tag)) {
+              out.add(value);
+            }
+          } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return null;
+          }
+          return out;
+        }
+      default:
+        return null;
     }
-    if (tag instanceof net.minecraft.nbt.NumericTag n) {
-      if (tag instanceof net.minecraft.nbt.LongTag l) {
-        return l.getAsLong();
-      }
-      if (tag instanceof net.minecraft.nbt.IntTag i) {
-        return i.getAsInt();
-      }
-      if (tag instanceof net.minecraft.nbt.ByteTag b) {
-        return b.getAsByte();
-      }
-      if (tag instanceof net.minecraft.nbt.ShortTag sh) {
-        return sh.getAsShort();
-      }
-      return n.getAsDouble();
-    }
-    if (tag instanceof net.minecraft.nbt.CompoundTag c) {
-      return nbtToMap(c);
-    }
-    if (tag instanceof net.minecraft.nbt.ListTag l) {
-      java.util.List<Object> out = new java.util.ArrayList<>();
-      for (net.minecraft.nbt.Tag t : l) {
-        out.add(nbtValue(t));
-      }
-      return out;
-    }
-    if (tag instanceof net.minecraft.nbt.ByteArrayTag b) {
-      java.util.List<Object> out = new java.util.ArrayList<>();
-      for (byte v : b.getAsByteArray()) {
-        out.add(v);
-      }
-      return out;
-    }
-    if (tag instanceof net.minecraft.nbt.IntArrayTag a) {
-      java.util.List<Object> out = new java.util.ArrayList<>();
-      for (int v : a.getAsIntArray()) {
-        out.add(v);
-      }
-      return out;
-    }
-    if (tag instanceof net.minecraft.nbt.LongArrayTag a) {
-      java.util.List<Object> out = new java.util.ArrayList<>();
-      for (long v : a.getAsLongArray()) {
-        out.add(v);
-      }
-      return out;
-    }
-    return null;
   }
 
   private static GameType gameMode(String name) {
-
-    return switch (name.toLowerCase()) {
-      case "survival" -> GameType.SURVIVAL;
-      case "adventure" -> GameType.ADVENTURE;
-      case "spectator" -> GameType.SPECTATOR;
-      default -> GameType.CREATIVE;
-    };
+    switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
+      case "survival":
+        return GameType.SURVIVAL;
+      case "adventure":
+        return GameType.ADVENTURE;
+      case "spectator":
+        return GameType.SPECTATOR;
+      default:
+        return GameType.CREATIVE;
+    }
   }
 
-  private static Difficulty difficulty(String name) {
-    return switch (name.toLowerCase()) {
-      case "peaceful" -> Difficulty.PEACEFUL;
-      case "easy" -> Difficulty.EASY;
-      case "hard" -> Difficulty.HARD;
-      default -> Difficulty.NORMAL;
-    };
+  private static EnumDifficulty difficulty(String name) {
+    switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
+      case "peaceful":
+        return EnumDifficulty.PEACEFUL;
+      case "easy":
+        return EnumDifficulty.EASY;
+      case "hard":
+        return EnumDifficulty.HARD;
+      default:
+        return EnumDifficulty.NORMAL;
+    }
+  }
+
+  /**
+   * Translates a GLFW key code (what {@link net.minecheck.platform.api.ViewWindow} hands over) into
+   * the LWJGL 2 key name {@link Keyboard} indexes by. Printable letters and digits map through
+   * their own character; the named keys are listed explicitly.
+   */
+  private static String glfwKeyName(int key) {
+    if (key >= 'A' && key <= 'Z') {
+      return String.valueOf((char) key);
+    }
+    if (key >= '0' && key <= '9') {
+      return String.valueOf((char) key);
+    }
+    if (key >= 290 && key <= 301) {
+      return "F" + (key - 289);
+    }
+    switch (key) {
+      case 32:
+        return "SPACE";
+      case 256:
+        return "ESCAPE";
+      case 257:
+        return "RETURN";
+      case 258:
+        return "TAB";
+      case 259:
+        return "BACK";
+      case 261:
+        return "DELETE";
+      case 262:
+        return "RIGHT";
+      case 263:
+        return "LEFT";
+      case 264:
+        return "DOWN";
+      case 265:
+        return "UP";
+      case 266:
+        return "PRIOR";
+      case 267:
+        return "NEXT";
+      case 268:
+        return "HOME";
+      case 269:
+        return "END";
+      case 340:
+        return "LSHIFT";
+      case 344:
+        return "RSHIFT";
+      case 341:
+        return "LCONTROL";
+      case 345:
+        return "RCONTROL";
+      case 342:
+        return "LMENU";
+      case 346:
+        return "RMENU";
+      default:
+        return null;
+    }
   }
 }

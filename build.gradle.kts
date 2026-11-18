@@ -93,7 +93,6 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerLoaderLifecycle("testForge", "forge")
 
 fun registerFailPathLifecycle(taskName: String, loader: String) {
@@ -142,7 +141,6 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerFailPathLifecycle("testForgeFail", "forge")
 
 fun registerSpawnLifecycle(taskName: String, loader: String) {
@@ -187,7 +185,6 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
 
 registerSpawnLifecycle("testForgeSpawn", "forge")
 
@@ -234,7 +231,6 @@ fun registerQueryLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerQueryLifecycle("testForgeQuery", "forge")
 
 fun registerBeaconLifecycle(taskName: String, loader: String) {
@@ -279,7 +275,6 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
 
 registerBeaconLifecycle("testForgeBeacon", "forge")
 
@@ -390,7 +385,6 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
 
 fun registerPacketLifecycle(
@@ -442,7 +436,6 @@ fun registerPacketLifecycle(
   }
 }
 
-
 registerPacketLifecycle("testForgePacket", "forge")
 
 registerPacketLifecycle(
@@ -453,9 +446,7 @@ registerPacketLifecycle(
   "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
 )
 
-
 registerInputLifecycle("testForgeInput", "forge")
-
 
 registerLiveLifecycle("testForgeLive", "forge")
 
@@ -562,7 +553,6 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerScreenshotsLifecycle("testForgeShots", "forge")
 
 /**
@@ -655,9 +645,7 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
   }
 }
 
-
 registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
-
 
 registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
 
@@ -942,8 +930,7 @@ fun loaderJarDir(module: String): File =
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description =
-    "Builds this line's distributable jar (:forge-mod:productionJar)"
+  description = "Builds this line's distributable jar (:forge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1075,8 +1062,7 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
 // them, use `func_12345_a` / `field_12345_a`. Both spellings are SRG, so both count.
 val forgeProductionNames = Regex("(?:[mf]_[0-9]+_|(?:func|field)_[0-9]+_[a-zA-Z])")
 
-val productionNamespaces =
-  mapOf("forge" to forgeProductionNames)
+val productionNamespaces = mapOf("forge" to forgeProductionNames)
 
 val checkProductionJars =
   tasks.register("checkProductionJars") {

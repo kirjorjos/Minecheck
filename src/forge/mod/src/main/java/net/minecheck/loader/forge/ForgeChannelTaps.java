@@ -6,15 +6,15 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import java.util.Map;
 import java.util.logging.Logger;
-import net.minecraft.network.Connection;
+import net.minecraft.network.NetworkManager;
 
 /**
  * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical
  * client, {@link ForgeServerChannelTap} on a dedicated server).
  *
  * <p>Both taps are the same trick: a netty {@code channelRead} handler inserted <em>in front of
- * vanilla's own {@link Connection}</em> sees every already-decoded packet while still passing it on
- * untouched. Anchoring on the handler instance rather than a pipeline name keeps this working
+ * vanilla's own {@link NetworkManager}</em> sees every already-decoded packet while still passing
+ * it on untouched. Anchoring on the handler instance rather than a pipeline name keeps this working
  * across mappings and loader versions, where the handler's name is not stable.
  */
 final class ForgeChannelTaps {
@@ -27,16 +27,16 @@ final class ForgeChannelTaps {
   private ForgeChannelTaps() {}
 
   /**
-   * Inserts {@code tap} in front of vanilla's {@link Connection} handler on {@code connection}'s
+   * Inserts {@code tap} in front of vanilla's {@link NetworkManager} handler on {@code manager}'s
    * channel — or at the end of the pipeline when that handler is not found (still better than not
    * observing at all). Idempotent per connection. Never throws: a tap is an observer, so failing to
    * install it must not disturb the connection.
    */
-  static boolean install(Connection connection, ChannelInboundHandlerAdapter tap, String label) {
-    if (connection == null) {
+  static boolean install(NetworkManager manager, ChannelInboundHandlerAdapter tap, String label) {
+    if (manager == null) {
       return false;
     }
-    Channel channel = connection.channel();
+    Channel channel = manager.channel();
     if (channel == null) {
       return false;
     }
@@ -50,8 +50,8 @@ final class ForgeChannelTaps {
       // Matched by name as well as by type: the handler in the pipeline is a remapped vanilla
       // class, and a type check alone silently degrades to the blind fallback below when it is not
       // the exact class this module compiles against.
-      if (handler instanceof Connection
-          || handler.getClass().getName().equals("net.minecraft.network.Connection")) {
+      if (handler instanceof NetworkManager
+          || handler.getClass().getName().equals("net.minecraft.network.NetworkManager")) {
         anchor = entry.getKey();
         break;
       }
@@ -60,7 +60,7 @@ final class ForgeChannelTaps {
       if (anchor != null) {
         pipeline.addBefore(anchor, HANDLER_NAME, tap);
       } else if (pipeline.get("packet_handler") != null) {
-        // Vanilla's own name for the Connection stage, used when the type check found nothing.
+        // Vanilla's own name for the NetworkManager stage, used when the type check found nothing.
         anchor = "packet_handler";
         pipeline.addBefore(anchor, HANDLER_NAME, tap);
       } else {
@@ -69,7 +69,7 @@ final class ForgeChannelTaps {
         pipeline.addLast(HANDLER_NAME, tap);
         LOG.warning(
             String.format(
-                "Minecheck: no Connection handler to anchor the %s channel tap in front of —"
+                "Minecheck: no NetworkManager handler to anchor the %s channel tap in front of —"
                     + " the tap is blind (pipeline %s)",
                 label, pipeline.names()));
         return true;

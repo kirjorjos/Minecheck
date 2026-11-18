@@ -18,9 +18,8 @@ import java.nio.charset.StandardCharsets;
  * surface, so the fixed coordinates and surface heights the fixtures assume cannot drift from the
  * world they run in.
  *
- * <p>1.15 has no dimension set to build a generator into: the world is created from a {@code
- * LevelSettings} whose level type selects flat generation and whose level-type options are this
- * JSON, so this class hands the declaration over as it stands.
+ * <p>1.12.2's {@code WorldSettings} takes the flat generator's settings as the option string, so
+ * this line hands the declaration over as text rather than as a parsed element.
  */
 final class FlatWorldSettings {
 
@@ -28,8 +27,8 @@ final class FlatWorldSettings {
 
   private FlatWorldSettings() {}
 
-  /** The declaration, validated, ready for {@code LevelSettings#setLevelTypeOptions}. */
-  static JsonElement declaration() {
+  /** The declaration, validated, ready for {@code WorldSettings#setGeneratorOptions}. */
+  static String declaration() {
     try (InputStream in = FlatWorldSettings.class.getResourceAsStream(RESOURCE)) {
       if (in == null) {
         throw new IllegalStateException(RESOURCE + " is missing from the mod's resources");
@@ -43,7 +42,7 @@ final class FlatWorldSettings {
       if (layers == null || !layers.isJsonArray() || layers.getAsJsonArray().size() == 0) {
         throw new IllegalStateException(RESOURCE + " declares no layers");
       }
-      return declared;
+      return declared.toString();
     } catch (IOException e) {
       throw new UncheckedIOException("could not read " + RESOURCE, e);
     }

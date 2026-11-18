@@ -1,0 +1,16 @@
+[
+  {
+    "modid": "minecheck",
+    "name": "Minecheck",
+    "description": "Scripted automation of the Minecraft client and server for mod development",
+    "version": "${version}",
+    "mcversion": "${minecraft_version}",
+    "authorList": [
+      "Minecheck"
+    ],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]
