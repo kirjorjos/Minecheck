@@ -24,7 +24,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class InputMixin {
 
   @Inject(method = "tick", at = @At("HEAD"), cancellable = true, require = 0)
-  private void minecheck$idlePlayer(boolean slowDown, CallbackInfo ci) {
+  private void minecheck$idlePlayer(boolean slowDown, boolean sprinting, CallbackInfo ci) {
     if (!YarnCameraPlatform.steering()) {
       return;
     }
