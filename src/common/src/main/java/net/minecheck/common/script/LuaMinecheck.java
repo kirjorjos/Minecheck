@@ -2551,7 +2551,10 @@ public final class LuaMinecheck {
       String cmd = args.arg1().checkjstring();
       LuaTable t = new LuaTable();
       try {
-        if (server != null) {
+        // Which side this run is, not which platform object is non-null: a client installs a
+        // server platform too (its integrated server), so `server != null` sent a client script's
+        // commands to the console, where `@s` resolved to nothing.
+        if (services.dedicatedServer()) {
           t.set("result", LuaValue.valueOf(server.runCommand(cmd)));
         } else {
           onClientThread(() -> client.runCommand(cmd));

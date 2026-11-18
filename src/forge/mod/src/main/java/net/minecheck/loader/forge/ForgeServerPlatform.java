@@ -108,6 +108,10 @@ public class ForgeServerPlatform implements ServerPlatform {
         () -> {
           MinecraftServer s = requireServer();
           String line = command.startsWith("/") ? command.substring(1) : command;
+          Integer conditional = LegacyCommandShim.executeIfBlock(s.getWorld(0), line);
+          if (conditional != null) {
+            return conditional;
+          }
           return s.getCommandManager().executeCommand(s, line);
         });
   }
@@ -182,7 +186,14 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           WorldServer level = s.getWorld(0);
-          return level != null && level.getChunkProvider().chunkExists(0, 0);
+          if (level == null) {
+            return false;
+          }
+          // The chunk the level spawned in, not chunk 0,0: a 1.12.2 world spawns its player away
+          // from the origin and keeps only the spawn area loaded, so 0,0 is generated but unloaded
+          // until a script teleports there and waits for it.
+          net.minecraft.util.math.BlockPos spawn = level.getSpawnPoint();
+          return level.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
         });
   }
 

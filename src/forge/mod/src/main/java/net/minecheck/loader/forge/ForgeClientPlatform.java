@@ -877,10 +877,18 @@ public class ForgeClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    // 1.12.2 exposes no pending-task count, so settled means the origin chunk every fixture stands
-    // on is generated.
-    boolean settled = overworld.getChunkProvider().chunkExists(0, 0);
-    LOG.info(String.format("worldGenSettled: origin chunk generated=%s", settled));
+    // 1.12.2 exposes no pending-task count, so settled means the area the level generated with is
+    // there: the chunk its spawn point sits in. Asking about chunk 0,0 instead never settles here —
+    // a fresh 1.12.2 world puts its spawn away from the origin, so the server keeps only the spawn
+    // chunks loaded and 0,0 stays generated-but-unloaded (`chunkExists` answers for loaded chunks).
+    // Fixtures reach the origin by teleporting and then wait for that chunk themselves.
+    net.minecraft.util.math.BlockPos spawn = overworld.getSpawnPoint();
+    boolean settled =
+        overworld.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
+    LOG.info(
+        String.format(
+            "worldGenSettled: spawn chunk (%d,%d) generated=%s",
+            spawn.getX() >> 4, spawn.getZ() >> 4, settled));
     return settled;
   }
 
@@ -1065,7 +1073,36 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.sendChatMessage(command.startsWith("/") ? command : "/" + command);
+    String cmd = command.startsWith("/") ? command.substring(1) : command;
+    // Executed on the integrated server as the local player's own server-side entity rather than
+    // sent as a chat packet: the packet path resolved `@s` against a sender without an entity
+    // ("Entity '@s' cannot be found"), so a script's teleport silently did nothing. On a remote
+    // server there is nothing else to run it against, so the packet is the only option there.
+    net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+    net.minecraft.entity.player.EntityPlayerMP self =
+        server == null ? null : server.getPlayerList().getPlayerByUUID(mc.player.getUniqueID());
+    if (self == null) {
+      mc.player.sendChatMessage("/" + cmd);
+      return;
+    }
+    java.util.concurrent.CompletableFuture<Void> done =
+        new java.util.concurrent.CompletableFuture<>();
+    server.addScheduledTask(
+        () -> {
+          try {
+            Integer conditional = LegacyCommandShim.executeIfBlock(server.getWorld(0), cmd);
+            if (conditional == null) {
+              server.getCommandManager().executeCommand(self, cmd);
+            }
+          } finally {
+            done.complete(null);
+          }
+        });
+    try {
+      done.get(30, java.util.concurrent.TimeUnit.SECONDS);
+    } catch (Exception e) {
+      throw new IllegalStateException("command did not run on the integrated server: " + cmd, e);
+    }
   }
 
   @Override
@@ -1107,7 +1144,11 @@ public class ForgeClientPlatform implements ClientPlatform {
     // Asked of the loaded block rather than the chunk provider: 1.12.2's client provider has no
     // chunk-presence query, while World.isBlockLoaded answers "is this column in a chunk the server
     // has sent me" — exactly the question this is.
-    return mc.world != null && mc.world.isBlockLoaded(new BlockPos(chunkX << 4, 0, chunkZ << 4));
+    // The two-argument form with allowEmpty=false: the one-argument call answers true for any
+    // position inside the world whether or not that chunk was ever sent, so a script waiting for a
+    // chunk it had never received saw it "arrive" and then read an empty column (height 0).
+    return mc.world != null
+        && mc.world.isBlockLoaded(new BlockPos(chunkX << 4, 0, chunkZ << 4), false);
   }
 
   // ------------------------------------------------------------ GUI / inventory

@@ -67,7 +67,10 @@ public class ForgeEntrypoint {
     dedicated = FMLCommonHandler.instance().getSide().isServer();
     client = dedicated ? null : new ForgeClientPlatform();
     clientHooks = dedicated ? null : new ForgeClientHooks();
-    serverPlatform = dedicated ? null : new ForgeServerPlatform();
+    // Both sides have one. A dedicated server needs it to answer every server-side script action,
+    // and a client needs it to query its integrated server; leaving it null when dedicated made the
+    // server tick return early, so a server script never started and the process hung until killed.
+    serverPlatform = new ForgeServerPlatform();
     network = new ForgeNetworkPlatform(dedicated);
 
     // No recipe viewer is bridged on 1.12.2: EMI and REI do not exist for it, and JEI's 4.x line
@@ -245,6 +248,12 @@ public class ForgeEntrypoint {
     serverPlatform.setServer(s);
     if (rulesApplied.compareAndSet(false, true)) {
       serverPlatform.applyDeterministicRules();
+    }
+    // A client runs an integrated server too, and its ServerTickEvent fires as well; ticking the
+    // engine from both would resume one coroutine from two threads at once ("cannot resume
+    // non-suspended coroutine"). The client tick is the single driver there, as on the other lines.
+    if (!dedicated) {
+      return;
     }
     if (serverTickRunning.compareAndSet(false, true)) {
       CompletableFuture.runAsync(

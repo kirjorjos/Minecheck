@@ -254,6 +254,10 @@ fun downgradedRuntimeDir(owner: Project): File =
  * new ZipFile}; handed a directory it throws {@code FileNotFoundException: ... (Is a directory)} on
  * every launch. The directories stay on MOD_CLASSES — Forge loads the mod from them — but the
  * classpath carries a jar of the same classes, which FML can read.
+ *
+ * <p>The jar holds the classes because the launch classloader must be able to see them (mixins and
+ * coremod hooks resolve mod types from it), which is also why a stale jar is worse than useless: it
+ * shadows the directories. The task that writes it therefore always reruns.
  */
 fun downgradedJarFor(entry: File): File? {
   if (downgradeTo == null) return null
@@ -585,6 +589,11 @@ if (downgradeTo != null) {
         ":forge-mod:downgradedRuntime",
       )
       outputs.dir(downgradedJarDir)
+      // Always repackage. The task declares no inputs (its content comes from other projects'
+      // outputs), so Gradle judged it up to date while the directories underneath had been rebuilt
+      // — and the stale jars sat on the launch classpath, where parent-first delegation made the
+      // game load yesterday's mod classes instead of the directories on MOD_CLASSES.
+      outputs.upToDateWhen { false }
       doLast {
         val out = downgradedJarDir.get().asFile
         out.mkdirs()
