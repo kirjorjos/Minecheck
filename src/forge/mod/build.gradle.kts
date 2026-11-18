@@ -50,7 +50,36 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
+// 1.12.2 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
+// client died with "no lwjgl64 in java.library.path" before it could open a window. Extract them
+// from the published natives artefact and point the client's library path at the directory.
+val lwjgl2Natives by configurations.creating
+
+dependencies {
+  lwjgl2Natives("org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209:natives-linux")
+}
+
+val extractLwjgl2Natives by
+  tasks.registering(Copy::class) {
+    from(lwjgl2Natives.map { zipTree(it) })
+    into(layout.buildDirectory.dir("lwjgl2-natives"))
+  }
+
+tasks
+  .matching { it.name == "runClient" }
+  .configureEach {
+    if (this is JavaExec) {
+      dependsOn(extractLwjgl2Natives)
+      jvmArgs(
+        "-Djava.library.path=" +
+          layout.buildDirectory.dir("lwjgl2-natives").get().asFile.absolutePath
+      )
+    }
+  }
+
 repositories {
+  // LWJGL 2's natives are published by Mojang, not on Central.
+  maven("https://libraries.minecraft.net/") { content { includeGroup("org.lwjgl.lwjgl") } }
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
   maven("https://maven.shedaniel.me/") { content { includeGroup("me.shedaniel.cloth") } }
