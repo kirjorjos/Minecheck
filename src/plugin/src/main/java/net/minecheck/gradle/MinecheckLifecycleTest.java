@@ -1188,6 +1188,12 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     if (useDisplay) {
       cmd.add(resolveExecutable("xvfb-run"));
       cmd.add("-a");
+      // Pinned, not left to xvfb-run's default screen: LWJGL 2 reads the X screen's modes while
+      // Minecraft sets the window icon, before any window exists, and a screen it cannot enumerate
+      // (no 24-bit depth, no GLX, no render extension) throws ArrayIndexOutOfBoundsException there
+      // and the game dies during initialization.
+      cmd.add("-s");
+      cmd.add("-screen 0 1280x1024x24 -ac +extension GLX +render -noreset");
     }
     if (descriptorFile == null || !Files.isRegularFile(descriptorFile)) {
       getLogger()
