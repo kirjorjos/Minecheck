@@ -125,9 +125,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           s.getGameRules()
               .getRule(net.minecraft.world.level.GameRules.RULE_WEATHER_CYCLE)
               .set(false, null);
-          s.getGameRules()
-              .getRule(net.minecraft.world.level.GameRules.RULE_DOINSOMNIA)
-              .set(false, null);
+          // 1.14 has no insomnia rule; it arrives in 1.15. Mob spawning is off anyway.
           return null;
         });
   }
@@ -163,9 +161,9 @@ public class ForgeServerPlatform implements ServerPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
               Registry.ENTITY_TYPE.getKey(entity.getType()).toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);
@@ -251,7 +249,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       mob.finalizeSpawn(
           level,
           level.getCurrentDifficultyAt(
-              new BlockPos((int) entity.getX(), (int) entity.getY(), (int) entity.getZ())),
+              new BlockPos((int) entity.x, (int) entity.y, (int) entity.z)),
           MobSpawnType.COMMAND,
           null,
           null);

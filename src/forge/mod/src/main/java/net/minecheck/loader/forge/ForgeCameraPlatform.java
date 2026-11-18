@@ -13,7 +13,7 @@ import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.MultiPlayerLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
 import net.minecraftforge.fml.client.registry.ClientRegistry;
@@ -101,7 +101,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     if (mc.screen != null) {
       return false;
     }
-    long handle = mc.getWindow().getWindow();
+    long handle = mc.window.getWindow();
     boolean control =
         GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
             || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
@@ -211,13 +211,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
   private void attach() {
     Minecraft mc = mc();
     LocalPlayer player = mc.player;
-    ClientLevel level = mc.level;
+    MultiPlayerLevel level = mc.level;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
       return;
     }
     CameraPose start =
-        new CameraPose(player.getX(), player.getEyeY(), player.getZ(), player.yRot, player.xRot);
+        new CameraPose(
+            player.x, player.y + player.getEyeHeight(), player.z, player.yRot, player.xRot);
     baseYaw = player.yRot;
     basePitch = player.xRot;
     if (!controller.attach(start)) {
@@ -263,9 +264,9 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    * this entity's tick is empty on purpose, so it is done here instead.
    */
   private static void place(MinecheckCameraEntity entity, CameraPose pose) {
-    entity.xo = entity.getX();
-    entity.yo = entity.getY();
-    entity.zo = entity.getZ();
+    entity.xo = entity.x;
+    entity.yo = entity.y;
+    entity.zo = entity.z;
     entity.setPos(pose.x(), pose.y(), pose.z());
     entity.yRot = pose.yaw();
     entity.xRot = pose.pitch();
@@ -286,7 +287,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     if (owner.viewWindowVisible()) {
       return true;
     }
-    long handle = mc().getWindow().getWindow();
+    long handle = mc().window.getWindow();
     return GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_VISIBLE) == GLFW.GLFW_TRUE
         && GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
   }
@@ -343,7 +344,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
         mc.options.keyLeft.isDown(),
         mc.options.keyRight.isDown(),
         mc.options.keyJump.isDown(),
-        mc.options.keyShift.isDown(),
+        mc.options.keySneak.isDown(),
         mc.options.keySprint.isDown());
   }
 

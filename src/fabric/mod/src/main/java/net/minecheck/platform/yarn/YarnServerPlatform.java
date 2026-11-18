@@ -116,7 +116,7 @@ public class YarnServerPlatform implements ServerPlatform {
           s.getGameRules().get(net.minecraft.world.GameRules.DO_MOB_SPAWNING).set(false, null);
           s.getGameRules().get(net.minecraft.world.GameRules.DO_DAYLIGHT_CYCLE).set(false, null);
           s.getGameRules().get(net.minecraft.world.GameRules.DO_WEATHER_CYCLE).set(false, null);
-          s.getGameRules().get(net.minecraft.world.GameRules.DO_INSOMNIA).set(false, null);
+          // 1.14 has no insomnia rule; it arrives in 1.15. Mob spawning is off anyway.
           return null;
         });
   }
@@ -151,9 +151,9 @@ public class YarnServerPlatform implements ServerPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getEntityId(),
               Registry.ENTITY_TYPE.getId(entity.getType()).toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getScoreboardTags())));
     }
     return java.util.List.copyOf(out);
@@ -211,7 +211,9 @@ public class YarnServerPlatform implements ServerPlatform {
           if (!world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
             return null;
           }
-          return world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+          return world
+              .getChunk(x >> 4, z >> 4)
+              .sampleHeightmap(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15);
         });
   }
 

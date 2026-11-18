@@ -7,6 +7,7 @@
     "ServerPacingMixin"
   ],
   "client": [
+    "FrameDrawnMixin",
     "WindowMixin",
     "SoundEngineMixin",
     "MouseScrollMixin",

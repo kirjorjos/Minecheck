@@ -31,12 +31,12 @@ unimined.minecraft {
   defaultRemapJar = false
 }
 
-// Forge 28 (1.14.4) runs on Java 8 and only Java 8. Two independent reasons: its Mixin is 0.8.2
-// (compatibility levels stop at JAVA_11, and this line's mixin config asks for JAVA_8), and its
-// ModLauncher calls sun.security.util.ManifestEntryVerifier(Manifest), a constructor that later
-// JDK 8 builds no longer have. The repo compiles at 17, so this line's bytecode is downgraded to
-// class file 52 (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8
-// build rather than whichever one happens to be installed.
+// Forge 28 (1.14.4) runs on Java 8 and only Java 8: its ModLauncher calls
+// sun.security.util.ManifestEntryVerifier(Manifest), a constructor that later JDK 8 builds no
+// longer have. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
+// (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
+// than whichever one happens to be installed. The line also has no Mixin at all — Forge only
+// starts shipping it with 1.15 — so its client hooks are native Forge events.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 tasks
@@ -101,9 +101,6 @@ tasks.shadowJar {
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
   // and writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
-  // Forge's mixin loader is started from this manifest attribute, not from mods.toml: it is what
-  // tells FML to apply minecheck.mixins.json before the client constructs its window.
-  manifest.attributes["MixinConfigs"] = "minecheck.mixins.json"
   exclude("com/mojang/brigadier/**")
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
@@ -163,68 +160,6 @@ val productionJar =
 tasks.named("assemble") { dependsOn(productionJar) }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
-
-// A Forge dev client loads this module as a directory on the classpath, and FML decides whether to
-// apply minecheck.mixins.json from the mod's *filesystem* manifest — a classes directory carries
-// none unless one of its resources does. With it missing the client starts normally with every
-// mixin silently inert: the camera's idle body and Ctrl+scroll were dead that way, and a suite that
-// only drives Lua still passed. Fail the build instead of the run.
-val mixinConfigName = "minecheck.mixins.json"
-val verifyMixinRegistration by
-  tasks.registering {
-    group = "verification"
-    description = "Fails when a Forge dev client would start without $mixinConfigName applied."
-    dependsOn(tasks.named("processResources"))
-    val resourcesDir = layout.buildDirectory.dir("resources/main")
-    val classesDir = layout.buildDirectory.dir("classes/java/main")
-    doLast {
-      val res = resourcesDir.get().asFile
-      val manifest = res.resolve("META-INF/MANIFEST.MF")
-      val fix =
-        "Add `MixinConfigs: $mixinConfigName` to src/forge/mod/resources/META-INF/MANIFEST.MF " +
-          "(the shipped jar declares the same attribute)."
-      if (!manifest.isFile) {
-        throw GradleException(
-          "Forge dev run would load no mixin config: $manifest is missing. $fix"
-        )
-      }
-      val declared =
-        manifest
-          .readLines()
-          .map { it.trim() }
-          .firstOrNull { it.startsWith("MixinConfigs:") }
-          ?.substringAfter(':')
-          ?.split(',')
-          ?.map { it.trim() }
-          .orEmpty()
-      if (mixinConfigName !in declared) {
-        throw GradleException(
-          "Forge dev run would load no mixin config: $manifest declares MixinConfigs=$declared. $fix"
-        )
-      }
-      val config = res.resolve(mixinConfigName)
-      if (!config.isFile) {
-        throw GradleException(
-          "$mixinConfigName is registered but not in the processed resources: $config"
-        )
-      }
-      @Suppress("UNCHECKED_CAST")
-      val json = groovy.json.JsonSlurper().parse(config) as Map<String, Any?>
-      val pkg = json["package"] as String
-      @Suppress("UNCHECKED_CAST") val listed = json["client"] as List<String>? ?: emptyList()
-      for (name in listed) {
-        val compiled = classesDir.get().asFile.resolve(pkg.replace('.', '/') + "/$name.class")
-        if (!compiled.isFile) {
-          throw GradleException(
-            "$mixinConfigName lists $name but nothing compiled it: $compiled is missing, so the " +
-              "config would fail or silently skip it."
-          )
-        }
-      }
-    }
-  }
-
-tasks.named("check") { dependsOn(verifyMixinRegistration) }
 
 tasks.register("printServerClasspath") {
   doLast { println(configurations.runtimeClasspath.get().asPath) }
@@ -552,8 +487,7 @@ tasks.register("devHelperServerLaunch") {
 // --- Java 8 runtime wiring (gradle.properties: minecheck.downgradeTo) -------------------------
 // The mod is compiled at 17 and downgraded to class file 52 in root build.gradle.kts. Both the dev
 // runs and the shadow jar have to read that downgraded output instead of the raw compile output: a
-// Java 8 JVM cannot load class file 61 at all, and Mixin 0.8.2 cannot prepare a mixin class above
-// its compatibility level.
+// Java 8 JVM cannot load class file 61 at all.
 if (downgradeTo != null) {
   // The shipped jar is the shadow jar, so its input is the downgraded output rather than the 17
   // classes: `assemble`, the release assets and the remap then all carry Java 8 bytecode without a

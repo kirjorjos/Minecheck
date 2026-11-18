@@ -224,8 +224,7 @@ public class YarnClientPlatform implements ClientPlatform {
     onClientThread(
         () ->
             mc().keyboard
-                .onKey(
-                    mc().getWindow().getHandle(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
+                .onKey(mc().window.getHandle(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
   }
 
   /**
@@ -458,7 +457,7 @@ public class YarnClientPlatform implements ClientPlatform {
       request.fail("no client framebuffer — is the client in a world?");
       return;
     }
-    net.minecraft.client.util.Window window = mc.getWindow();
+    net.minecraft.client.util.Window window = mc.window;
     if (window.getFramebufferWidth() != request.frameWidth()
         || window.getFramebufferHeight() != request.frameHeight()) {
       // The profile pins the window size; re-assert it when something changed it. The resize is
@@ -525,11 +524,7 @@ public class YarnClientPlatform implements ClientPlatform {
 
     net.minecraft.client.texture.NativeImage image;
     try {
-      image =
-          net.minecraft.client.util.ScreenshotUtils.takeScreenshot(
-              mc.getWindow().getFramebufferWidth(),
-              mc.getWindow().getFramebufferHeight(),
-              framebuffer);
+      image = readFramebuffer(framebuffer);
     } catch (RuntimeException e) {
       request.fail("framebuffer read failed: " + e.getMessage());
       return;
@@ -549,6 +544,51 @@ public class YarnClientPlatform implements ClientPlatform {
             .toAbsolutePath();
     writeScreenshot(
         request, image, x, y, cropWidth, cropHeight, frameWidth, frameHeight, guiScale, target);
+  }
+
+  /**
+   * Reads the framebuffer into a {@link net.minecraft.client.texture.NativeImage}.
+   *
+   * <p>1.14 has no {@code ScreenshotUtils.takeScreenshot}: the helper arrives in 1.15, so the
+   * readback is done here — the same bind, {@code glReadPixels} and bottom-up flip the view-window
+   * feed uses, written into an image the crop and encode path already understands. The caller is on
+   * the render thread.
+   */
+  private static net.minecraft.client.texture.NativeImage readFramebuffer(
+      net.minecraft.client.gl.Framebuffer framebuffer) {
+    int width = framebuffer.textureWidth;
+    int height = framebuffer.textureHeight;
+    java.nio.ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(width * height * 4);
+    int previous = org.lwjgl.opengl.GL30.glGetInteger(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_BINDING);
+    org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, framebuffer.fbo);
+    try {
+      org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_PACK_ALIGNMENT, 1);
+      org.lwjgl.opengl.GL11.glReadPixels(
+          0,
+          0,
+          width,
+          height,
+          org.lwjgl.opengl.GL11.GL_RGBA,
+          org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE,
+          buffer);
+    } finally {
+      org.lwjgl.opengl.GL30.glBindFramebuffer(org.lwjgl.opengl.GL30.GL_FRAMEBUFFER, previous);
+    }
+    net.minecraft.client.texture.NativeImage image =
+        new net.minecraft.client.texture.NativeImage(width, height, false);
+    for (int row = 0; row < height; row++) {
+      int from = (height - 1 - row) * width * 4; // GL's origin is the bottom-left
+      for (int column = 0; column < width; column++) {
+        int pixel = from + column * 4;
+        int argb =
+            (buffer.get(pixel + 3) & 0xFF) << 24
+                | (buffer.get(pixel) & 0xFF) << 16
+                | (buffer.get(pixel + 1) & 0xFF) << 8
+                | (buffer.get(pixel + 2) & 0xFF);
+        image.setPixelRgba(column, row, argb);
+      }
+    }
+    return image;
   }
 
   /** Crops, downscales and digests the capture in memory — off the render thread. */
@@ -776,9 +816,8 @@ public class YarnClientPlatform implements ClientPlatform {
     if (!options.weatherCycle()) {
       rules.get(GameRules.DO_WEATHER_CYCLE).set(false, server);
     }
-    if (!options.insomnia()) {
-      rules.get(GameRules.DO_INSOMNIA).set(false, server);
-    }
+    // No insomnia rule to set: 1.14 has no such game rule (it arrives in 1.15 with the phantom
+    // rework). A flat world with mob spawning off and the day cycle frozen never produces one.
     server.setDifficulty(difficulty(options.difficulty()), true);
   }
 
@@ -1015,7 +1054,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return;
     }
     Keyboard keyboard = mc().keyboard;
-    long handle = mc().getWindow().getHandle();
+    long handle = mc().window.getHandle();
     boolean scancode = key.getCategory() == InputUtil.Type.SCANCODE;
     int code = scancode ? -1 : key.getKeyCode();
     int scan = scancode ? key.getKeyCode() : 0;
@@ -1049,7 +1088,7 @@ public class YarnClientPlatform implements ClientPlatform {
    */
   private void dispatchMouse(int button, int action) {
     Mouse mouse = mc().mouse;
-    long handle = mc().getWindow().getHandle();
+    long handle = mc().window.getHandle();
     onClientThread(
         () -> {
           try {
@@ -1088,9 +1127,9 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     return new net.minecheck.platform.api.PlayerInfo(
         mc.player.getEntityName(),
-        mc.player.getX(),
-        mc.player.getY(),
-        mc.player.getZ(),
+        mc.player.x,
+        mc.player.y,
+        mc.player.z,
         net.minecraft.world.dimension.DimensionType.getId(mc.player.dimension).toString());
   }
 
@@ -1172,9 +1211,9 @@ public class YarnClientPlatform implements ClientPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getEntityId(),
               actual.toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getScoreboardTags())));
     }
     return java.util.List.copyOf(out);
@@ -1211,7 +1250,9 @@ public class YarnClientPlatform implements ClientPlatform {
     if (!mc.world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
       return null;
     }
-    return mc.world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+    return mc.world
+        .getChunk(x >> 4, z >> 4)
+        .sampleHeightmap(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15);
   }
 
   @Override
@@ -1246,8 +1287,21 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     net.minecraft.container.Container handler = handled.getContainer();
-    mc.interactionManager.clickSlot(
-        handler.syncId, slot, button, slotAction(actionType), mc.player);
+    if (slot < 0 || slot >= handler.slots.size()) {
+      throw new IllegalStateException(
+          "slot index " + slot + " out of range (0.." + (handler.slots.size() - 1) + ")");
+    }
+    // 1.14 has neither clickSlot on the interaction manager nor a public screen click handler:
+    // the packet a click produces is built here, exactly as ContainerScreen builds it for a human's
+    // click — same container, same slot index, same action id from the container.
+    mc.player.networkHandler.sendPacket(
+        new net.minecraft.network.packet.c2s.play.ClickWindowC2SPacket(
+            handler.syncId,
+            slot,
+            button,
+            slotAction(actionType),
+            mc.player.inventory.getCursorStack(),
+            handler.getNextActionId(mc.player.inventory)));
     return true;
   }
 

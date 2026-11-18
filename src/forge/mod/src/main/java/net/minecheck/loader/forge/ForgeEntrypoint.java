@@ -153,6 +153,7 @@ public class ForgeEntrypoint {
     if (event.phase != TickEvent.Phase.END || client == null) {
       return;
     }
+    client.hideWindowIfConfigured();
     ScriptEngine e = engine;
     if (e == null || e.isFinished()) {
       return;
@@ -163,6 +164,42 @@ public class ForgeEntrypoint {
     if (client.isBootComplete()) {
       client.allowUnfocusedPlay();
       e.tick();
+    }
+  }
+
+  /**
+   * The idle-player rule on this line: while the camera has the human's movement keys, the movement
+   * input vanilla is about to hand the player is cleared, so the body stands still instead of
+   * walking off on its own. On the lines above this one the same rule is a Mixin on {@code
+   * Input#tick}; Forge 28 ships no Mixin at all (its ModLauncher has no mixin transformation), and
+   * this event fires exactly where that injection sat — the player fills the input object and then
+   * ticks with it.
+   */
+  @SubscribeEvent
+  public void onInputUpdate(net.minecraftforge.client.event.InputUpdateEvent event) {
+    if (!ForgeCameraPlatform.steering()) {
+      return;
+    }
+    net.minecraft.client.player.Input input = event.getMovementInput();
+    input.up = false;
+    input.down = false;
+    input.left = false;
+    input.right = false;
+    input.jumping = false;
+    input.sneakKeyDown = false;
+    input.forwardImpulse = 0.0f;
+    input.leftImpulse = 0.0f;
+  }
+
+  /**
+   * The camera's Ctrl+scroll speed shortcut on this line: the Mixin the newer lines carry is
+   * replaced by Forge's own scroll event, which fires before the notch becomes a hotbar change, so
+   * cancelling it keeps the hotbar still — the same contract the Mixin has.
+   */
+  @SubscribeEvent
+  public void onMouseScroll(net.minecraftforge.client.event.InputEvent.MouseScrollEvent event) {
+    if (client != null && ForgeCameraPlatform.handleScroll(event.getScrollDelta())) {
+      event.setCanceled(true);
     }
   }
 

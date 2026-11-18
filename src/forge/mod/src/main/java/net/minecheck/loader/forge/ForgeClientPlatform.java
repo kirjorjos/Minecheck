@@ -32,6 +32,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.LevelType;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraftforge.fml.loading.FMLPaths;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -52,6 +53,31 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   /** Set once this line's pause-on-focus-loss has been turned off for the run. */
   private boolean unfocusedPlayAllowed;
+
+  /** Set once the window has been hidden (or the config said not to). */
+  private boolean windowSettled;
+
+  /**
+   * Hides the client's own window when {@code hideGameWindow} says so.
+   *
+   * <p>The newer lines hook the window's constructor so it is never mapped at all; Forge 28 has no
+   * Mixin, and no Forge event fires inside {@code MainWindow}'s construction, so the earliest point
+   * a mod can reach is the first client tick. The window therefore exists, but is hidden before a
+   * frame is swapped into it — which is all a run under Xvfb needs.
+   */
+  void hideWindowIfConfigured() {
+    if (windowSettled) {
+      return;
+    }
+    windowSettled = true;
+    if (!net.minecheck.common.config.GameWindowPolicy.hide(FMLPaths.CONFIGDIR.get())) {
+      return;
+    }
+    long handle = mc().window.getWindow();
+    if (handle != 0L) {
+      org.lwjgl.glfw.GLFW.glfwHideWindow(handle);
+    }
+  }
 
   /**
    * Turns off 1.16.5's pause-on-focus-loss.
@@ -248,7 +274,7 @@ public class ForgeClientPlatform implements ClientPlatform {
         () ->
             mc().keyboardHandler
                 .keyPress(
-                    mc().getWindow().getWindow(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
+                    mc().window.getWindow(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
   }
 
   /**
@@ -265,7 +291,7 @@ public class ForgeClientPlatform implements ClientPlatform {
   public void pinClientClock() {
     net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
     applyPendingWorldSettings(minecraft);
-    net.minecraft.client.multiplayer.ClientLevel level = minecraft.level;
+    net.minecraft.client.multiplayer.MultiPlayerLevel level = minecraft.level;
     if (level == null) {
       return;
     }
@@ -477,7 +503,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       request.fail("no client framebuffer — is the client in a world?");
       return;
     }
-    com.mojang.blaze3d.platform.Window window = mc.getWindow();
+    com.mojang.blaze3d.platform.Window window = mc.window;
     if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
       // 1.16.5's Window has no setWindowed: ask GLFW directly, and let the resize be reported back
       // over the next frames, exactly as the yarn side does.
@@ -835,9 +861,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (!options.weatherCycle()) {
       rules.getRule(GameRules.RULE_WEATHER_CYCLE).set(false, server);
     }
-    if (!options.insomnia()) {
-      rules.getRule(GameRules.RULE_DOINSOMNIA).set(false, server);
-    }
+    // No insomnia rule to set: 1.14 has no such game rule (it arrives in 1.15). A flat world with
+    // mob spawning off and the day cycle frozen never produces one.
     server.setDifficulty(difficulty(options.difficulty()), true);
   }
 
@@ -1027,7 +1052,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     KeyboardHandler keyboard = mc().keyboardHandler;
-    long handle = mc().getWindow().getWindow();
+    long handle = mc().window.getWindow();
     boolean scancode = key.getType() == InputConstants.Type.SCANCODE;
     int code = scancode ? -1 : key.getValue();
     int scan = scancode ? key.getValue() : 0;
@@ -1061,7 +1086,7 @@ public class ForgeClientPlatform implements ClientPlatform {
    */
   private void dispatchMouse(int button, int action) {
     MouseHandler mouse = mc().mouseHandler;
-    long handle = mc().getWindow().getWindow();
+    long handle = mc().window.getWindow();
     onClientThread(
         () -> {
           try {
@@ -1101,9 +1126,9 @@ public class ForgeClientPlatform implements ClientPlatform {
     net.minecraft.world.entity.player.Player p = mc.player;
     return new net.minecheck.platform.api.PlayerInfo(
         p.getGameProfile().getName(),
-        p.getX(),
-        p.getY(),
-        p.getZ(),
+        p.x,
+        p.y,
+        p.z,
         net.minecraft.world.level.dimension.DimensionType.getName(p.dimension).toString());
   }
 
@@ -1165,7 +1190,7 @@ public class ForgeClientPlatform implements ClientPlatform {
   @Override
   public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
     Minecraft mc = mc();
-    net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+    net.minecraft.client.multiplayer.MultiPlayerLevel level = mc.level;
     if (level == null) {
       // Not in a world: no entities are known, which is a legitimate answer for a script probing
       // before/after a join rather than an error.
@@ -1186,9 +1211,9 @@ public class ForgeClientPlatform implements ClientPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
               actual.toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);

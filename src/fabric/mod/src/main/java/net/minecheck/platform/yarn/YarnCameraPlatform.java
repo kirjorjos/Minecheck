@@ -109,7 +109,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
     if (mc.currentScreen != null) {
       return false;
     }
-    long handle = mc.getWindow().getHandle();
+    long handle = mc.window.getHandle();
     boolean control =
         GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
             || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
@@ -232,9 +232,9 @@ public final class YarnCameraPlatform implements CameraPlatform {
     }
     CameraPose start =
         new CameraPose(
-            player.getX(),
-            player.getEyeY(),
-            player.getZ(),
+            player.x,
+            player.y + player.getStandingEyeHeight(),
+            player.z,
             player.getYaw(1.0f),
             player.getPitch(1.0f));
     baseYaw = player.getYaw(1.0f);
@@ -246,7 +246,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
     entity.setEntityId(CAMERA_ENTITY_ID);
     // Placed before the first publish so the old position is the camera's, not the origin: without
     // this the first rendered frame would interpolate the camera in from 0,0,0.
-    entity.setPos(start.x(), start.y(), start.z());
+    entity.updatePosition(start.x(), start.y(), start.z());
     place(entity, start);
     world.addEntity(CAMERA_ENTITY_ID, entity);
     mc.cameraEntity = entity;
@@ -277,10 +277,10 @@ public final class YarnCameraPlatform implements CameraPlatform {
    * this entity's tick is empty on purpose, so it is done here instead.
    */
   private static void place(MinecheckCameraEntity entity, CameraPose pose) {
-    entity.prevX = entity.getX();
-    entity.prevY = entity.getY();
-    entity.prevZ = entity.getZ();
-    entity.setPos(pose.x(), pose.y(), pose.z());
+    entity.prevX = entity.x;
+    entity.prevY = entity.y;
+    entity.prevZ = entity.z;
+    entity.updatePosition(pose.x(), pose.y(), pose.z());
     entity.yaw = pose.yaw();
     entity.pitch = pose.pitch();
   }
@@ -300,7 +300,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
     if (owner.viewWindowVisible()) {
       return true;
     }
-    long handle = mc().getWindow().getHandle();
+    long handle = mc().window.getHandle();
     return GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_VISIBLE) == GLFW.GLFW_TRUE
         && GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
   }

@@ -1,7 +1,6 @@
 package net.minecheck.loader.forge;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -13,7 +12,6 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.fml.network.NetworkDirection;
 import net.minecraftforge.fml.network.NetworkEvent;
 import net.minecraftforge.fml.network.NetworkRegistry;
 import net.minecraftforge.fml.network.PacketDistributor;
@@ -66,20 +64,20 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
               // vanilla client unable to join this server.
               acceptMissingOr(VERSION),
               acceptMissingOr(VERSION));
+      // Forge 28's registerMessage takes the message and its codecs only: the direction is implied
+      // by which side registers the message (a later Forge takes an Optional<NetworkDirection>).
       channel.registerMessage(
           0,
           MinecheckC2SMessage.class,
           MinecheckC2SMessage::encode,
           MinecheckC2SMessage::decode,
-          this::onC2S,
-          Optional.of(NetworkDirection.PLAY_TO_SERVER));
+          this::onC2S);
       channel.registerMessage(
           1,
           MinecheckS2CMessage.class,
           MinecheckS2CMessage::encode,
           MinecheckS2CMessage::decode,
-          this::onS2C,
-          Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+          this::onS2C);
       this.channel = channel;
       ok = true;
     } catch (RuntimeException e) {
