@@ -947,6 +947,11 @@ public class ForgeClientPlatform implements ClientPlatform {
       return Keyboard.KEY_NONE;
     }
     int code = Keyboard.getKeyIndex(key.toUpperCase(Locale.ROOT));
+    if (code == Keyboard.KEY_NONE && key.equalsIgnoreCase("enter")) {
+      // LWJGL calls the key RETURN, so a script's "enter" resolved to nothing and the chat screen
+      // never received the submit that closes it.
+      code = Keyboard.KEY_RETURN;
+    }
     if (code == Keyboard.KEY_NONE) {
       LOG.warning(String.format("keyDown: unresolvable key name '%s'", key));
     }
@@ -1135,7 +1140,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    String cmd = command.startsWith("/") ? command.substring(1) : command;
+    String cmd =
+        LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command);
     // Executed on the integrated server as the local player's own server-side entity rather than
     // sent as a chat packet: the packet path resolved `@s` against a sender without an entity
     // ("Entity '@s' cannot be found"), so a script's teleport silently did nothing. On a remote
@@ -1152,8 +1158,13 @@ public class ForgeClientPlatform implements ClientPlatform {
     server.addScheduledTask(
         () -> {
           try {
-            Integer conditional = LegacyCommandShim.executeIfBlock(server.getWorld(0), cmd);
-            if (conditional == null) {
+            Integer rule = LegacyCommandShim.gameruleValue(server.getWorld(0), cmd);
+            Integer entity = rule == null ? LegacyCommandShim.executeIfEntity(self, cmd) : null;
+            Integer conditional =
+                rule == null && entity == null
+                    ? LegacyCommandShim.executeIfBlock(server.getWorld(0), cmd)
+                    : null;
+            if (rule == null && entity == null && conditional == null) {
               server.getCommandManager().executeCommand(self, cmd);
             }
           } finally {
@@ -1183,7 +1194,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     java.util.Map<String, Object> nbt =
         blockEntity == null ? null : nbtToMap(blockEntity.writeToNBT(new NBTTagCompound()));
     return new net.minecheck.platform.api.BlockInfo(
-        Block.REGISTRY.getNameForObject(state.getBlock()).toString(), nbt);
+        LegacyCommandShim.modernId(Block.REGISTRY.getNameForObject(state.getBlock()).toString()),
+        nbt);
   }
 
   @Override
@@ -1301,7 +1313,25 @@ public class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     GuiButton target = matches.get(at);
-    target.mousePressed(mc(), target.x + target.width / 2, target.y + target.height / 2);
+    int clickX = target.x + target.width / 2;
+    int clickY = target.y + target.height / 2;
+    // A press alone leaves the button down: 1.12.2 runs its action on release, so the screen is
+    // given the whole click the way a real one arrives (the sign editor's Done saves and closes
+    // from that action, and stayed open while only the press was delivered).
+    invokeGui(
+        screen,
+        "mouseClicked",
+        new Class<?>[] {int.class, int.class, int.class},
+        clickX,
+        clickY,
+        0);
+    invokeGui(
+        screen,
+        "mouseReleased",
+        new Class<?>[] {int.class, int.class, int.class},
+        clickX,
+        clickY,
+        0);
     return true;
   }
 
@@ -1349,7 +1379,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       // handles the characters itself, so dispatch them at the screen instead.
       boolean typed = false;
       for (int i = 0; i < text.length(); i++) {
-        if (invokeGui(
+        if (deliverGui(
             screen, "keyTyped", new Class<?>[] {char.class, int.class}, text.charAt(i), 0)) {
           typed = true;
         }
@@ -1364,7 +1394,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     boolean dispatched = false;
     for (int i = 0; i < text.length(); i++) {
-      if (invokeGui(
+      if (deliverGui(
           screen, "keyTyped", new Class<?>[] {char.class, int.class}, text.charAt(i), 0)) {
         dispatched = true;
       }
@@ -1405,6 +1435,23 @@ public class ForgeClientPlatform implements ClientPlatform {
    * Invokes a protected {@link GuiScreen} hook on {@code screen}, answering whether it returned
    * true.
    */
+  /**
+   * True when the screen took the call. {@code keyTyped} returns nothing on this line, so a
+   * completed call is the only signal there is — without it, typing into a screen that has no
+   * edit-box field (the sign editor) delivered every character and still reported failure.
+   */
+  private static boolean deliverGui(
+      GuiScreen screen, String name, Class<?>[] parameterTypes, Object... args) {
+    try {
+      Method method = GuiScreen.class.getDeclaredMethod(name, parameterTypes);
+      method.setAccessible(true);
+      Object result = method.invoke(screen, args);
+      return !(result instanceof Boolean) || (Boolean) result;
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return false;
+    }
+  }
+
   private static boolean invokeGui(
       GuiScreen screen, String name, Class<?>[] parameterTypes, Object... args) {
     try {
@@ -1500,7 +1547,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     NBTTagCompound nbt = stack.getTagCompound();
     return new net.minecheck.platform.api.SlotInfo(
         false,
-        net.minecraft.item.Item.REGISTRY.getNameForObject(stack.getItem()).toString(),
+        LegacyCommandShim.modernId(
+            net.minecraft.item.Item.REGISTRY.getNameForObject(stack.getItem()).toString()),
         stack.getCount(),
         nbt == null ? null : nbtToMap(nbt));
   }

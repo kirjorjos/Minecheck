@@ -12,8 +12,6 @@ import java.util.logging.Logger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.PacketBuffer;
-import net.minecraft.network.play.server.SPacketCustomPayload;
 
 /**
  * Client-side <em>low-level frame tap</em>: the Forge-only way to observe another mod's channel.
@@ -80,19 +78,15 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
   private static void capture(Object msg) {
     // Clientbound only: the tap is about what *another mod* sent us. Echoing our own outbound
     // frames back into the script's history would be noise, not observation.
-    if (!(msg instanceof SPacketCustomPayload)) {
+    String id = ForgeChannelTaps.channelOf(msg);
+    if (id == null) {
       return;
     }
-    SPacketCustomPayload packet = (SPacketCustomPayload) msg;
-    String id = packet.getChannelName();
-    PacketBuffer data = packet.getBufferData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id);
-    if (observers == null || observers.isEmpty() || data == null) {
+    byte[] payload = ForgeChannelTaps.payloadOf(msg);
+    if (observers == null || observers.isEmpty() || payload == null) {
       return;
     }
-    // Non-destructive read: the packet still has to reach its real handler.
-    byte[] payload = new byte[data.readableBytes()];
-    data.getBytes(data.readerIndex(), payload);
     Minecraft client = Minecraft.getMinecraft();
     for (Consumer<byte[]> observer : observers) {
       client.addScheduledTask(() -> observer.accept(payload));

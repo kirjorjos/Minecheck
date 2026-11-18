@@ -11,8 +11,6 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.PacketBuffer;
-import net.minecraft.network.play.client.CPacketCustomPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 
@@ -98,19 +96,15 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
   }
 
   private static void capture(Object msg) {
-    if (!(msg instanceof CPacketCustomPayload)) {
+    String id = ForgeChannelTaps.channelOf(msg);
+    if (id == null) {
       return;
     }
-    CPacketCustomPayload packet = (CPacketCustomPayload) msg;
-    String id = packet.getChannelName();
-    PacketBuffer data = packet.getBufferData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id);
-    if (observers == null || observers.isEmpty() || data == null) {
+    byte[] payload = ForgeChannelTaps.payloadOf(msg);
+    if (observers == null || observers.isEmpty() || payload == null) {
       return;
     }
-    // Non-destructive read: the packet still has to reach its real handler.
-    byte[] payload = new byte[data.readableBytes()];
-    data.getBytes(data.readerIndex(), payload);
     MinecraftServer server = server();
     if (server == null) {
       return;

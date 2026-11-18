@@ -1,5 +1,6 @@
 package net.minecheck.loader.forge;
 
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -7,6 +8,9 @@ import io.netty.channel.ChannelPipeline;
 import java.util.Map;
 import java.util.logging.Logger;
 import net.minecraft.network.NetworkManager;
+import net.minecraft.network.play.client.CPacketCustomPayload;
+import net.minecraft.network.play.server.SPacketCustomPayload;
+import net.minecraftforge.fml.common.network.internal.FMLProxyPacket;
 
 /**
  * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical
@@ -25,6 +29,46 @@ final class ForgeChannelTaps {
   static final String HANDLER_NAME = "minecheck_tap";
 
   private ForgeChannelTaps() {}
+
+  /**
+   * The channel a custom-payload message travels on, or {@code null} when the message is something
+   * else. 1.12.2 hands a tap an {@link FMLProxyPacket}: FML's own handler sits in front of
+   * vanilla's {@link NetworkManager} and rewrites a custom payload into one of those before it
+   * reaches the stage the tap is anchored to, so a tap that only knows the vanilla packet classes
+   * sees nothing.
+   */
+  static String channelOf(Object msg) {
+    if (msg instanceof FMLProxyPacket) {
+      return ((FMLProxyPacket) msg).channel();
+    }
+    if (msg instanceof SPacketCustomPayload) {
+      return ((SPacketCustomPayload) msg).getChannelName();
+    }
+    if (msg instanceof CPacketCustomPayload) {
+      return ((CPacketCustomPayload) msg).getChannelName();
+    }
+    return null;
+  }
+
+  /** A non-destructive copy of a custom payload's bytes, or {@code null} when it is not one. */
+  static byte[] payloadOf(Object msg) {
+    ByteBuf data;
+    if (msg instanceof FMLProxyPacket) {
+      data = ((FMLProxyPacket) msg).payload();
+    } else if (msg instanceof SPacketCustomPayload) {
+      data = ((SPacketCustomPayload) msg).getBufferData();
+    } else if (msg instanceof CPacketCustomPayload) {
+      data = ((CPacketCustomPayload) msg).getBufferData();
+    } else {
+      return null;
+    }
+    if (data == null) {
+      return null;
+    }
+    byte[] payload = new byte[data.readableBytes()];
+    data.getBytes(data.readerIndex(), payload);
+    return payload;
+  }
 
   /**
    * Inserts {@code tap} in front of vanilla's {@link NetworkManager} handler on {@code manager}'s
