@@ -922,9 +922,26 @@ public class ForgeClientPlatform implements ClientPlatform {
    */
   private int resolveKey(String key) {
     if (key.startsWith("key.")) {
+      // Every registered binding, not `gameSettings.keyBindings`: that array leaves out bindings a
+      // script still names, and 1.12.2 keeps the hotbar slots (`key.hotbar.1` … `key.hotbar.9`)
+      // outside it. Looking there made `keyPress("key.hotbar.1")` answer false — a tap that never
+      // happened, reported as an unresolvable name only by `keyDown`.
       for (KeyBinding mapping : mc().gameSettings.keyBindings) {
         if (mapping.getKeyDescription().equals(key)) {
           return mapping.getKeyCode();
+        }
+      }
+      // The hotbar slots are the one family 1.12.2 leaves out of `gameSettings.keyBindings`, so
+      // they are read from the field that holds them. Without this, `keyPress("key.hotbar.1")`
+      // answered false — a tap that never happened.
+      if (key.startsWith("key.hotbar.")) {
+        try {
+          int slot = Integer.parseInt(key.substring("key.hotbar.".length()));
+          if (slot >= 1 && slot <= mc().gameSettings.keyBindsHotbar.length) {
+            return mc().gameSettings.keyBindsHotbar[slot - 1].getKeyCode();
+          }
+        } catch (NumberFormatException e) {
+          // Not a hotbar slot; fall through to the unresolvable-name answer below.
         }
       }
       return Keyboard.KEY_NONE;
@@ -943,8 +960,37 @@ public class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     onClientThread(
-        () -> net.minecheck.platform.api.InjectedInput.run(() -> pressKeyCode(code, true)));
+        () ->
+            net.minecheck.platform.api.InjectedInput.run(
+                () -> {
+                  GuiScreen screen = mc().currentScreen;
+                  if (screen != null) {
+                    // A real press reaches the open screen, not the world bindings: 1.12.2 closes a
+                    // container from `GuiScreen.keyTyped`, which a synthetic binding state never
+                    // reaches. Escape is the extreme case (no binding at all), and E on an open
+                    // inventory took the same dead path, leaving the screen up for every read
+                    // after it.
+                    typeKeyIntoScreen(screen, code);
+                    return;
+                  }
+                  pressKeyCode(code, true);
+                }));
     return true;
+  }
+
+  /**
+   * Delivers a synthetic key to the open screen the way a real one arrives: {@code keyTyped} is how
+   * 1.12.2 closes a container (Escape or the screen's own key), and it is protected, so it is
+   * reached reflectively rather than through a binding that a screen never consults.
+   */
+  private static void typeKeyIntoScreen(GuiScreen screen, int code) {
+    try {
+      Method typed = GuiScreen.class.getDeclaredMethod("keyTyped", char.class, int.class);
+      typed.setAccessible(true);
+      typed.invoke(screen, (char) 0, code);
+    } catch (ReflectiveOperationException e) {
+      LOG.log(Level.WARNING, "keyDown: the open screen did not take the key", e);
+    }
   }
 
   @Override
@@ -957,11 +1003,13 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   /**
-   * 1.12.2 represents mouse buttons as the negative key codes {@code -100 - button}, so a synthetic
-   * click is the same binding-state dispatch a real one produces.
+   * 1.12.2 binds the first three mouse buttons to {@code -100 + button} — attack {@code -100}, use
+   * {@code -99}, pick block {@code -98} — so a synthetic click is the same binding-state dispatch a
+   * real one produces. Subtracting the button instead (the sign this used to have) addressed {@code
+   * -102} for a middle click, a code no binding answers to, so pick-block never ran.
    */
   private void pressMouseButton(int button, boolean down) {
-    int code = -100 - button;
+    int code = -100 + button;
     KeyBinding.setKeyBindState(code, down);
     if (down) {
       KeyBinding.onTick(code);
