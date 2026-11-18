@@ -1,17 +1,10 @@
 {
   "entries": [],
-  "holder": {
-    "granted_at": "2026-11-18T01:14:54Z",
-    "id": "e-3",
-    "kind": "pr",
-    "lease_until": "2026-11-18T02:44:54Z",
-    "pr": "206",
-    "sha": "9b68f7e8ccd6301230d5cda8f800c903d2f03907"
-  },
+  "holder": null,
   "last_runs": {
     "206": {
-      "at": "2026-11-18T01:14:35Z",
-      "sha": "02f94f73b7c5d7f5c3c363b02a986a81e2d10c07"
+      "at": "2026-11-18T01:30:05Z",
+      "sha": "9b68f7e8ccd6301230d5cda8f800c903d2f03907"
     }
   },
   "mc": "1.15.2",
