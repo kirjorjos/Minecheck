@@ -776,7 +776,7 @@ subprojects {
   // are bundled, rewritten to the target class file version — JvmDowngrader turns records into
   // plain classes, expands pattern `instanceof`, and rewrites JDK calls newer than the target
   // against shaded stubs — and unpacked into a directory that the dev runs and the shadow jar read
-  // instead of the raw compile output. The Forge 1.16.4 line does this to reach Java 8.
+  // instead of the raw compile output. The Forge 1.15.2 line does this to reach Java 8.
   val downgradeTarget =
     providers
       .gradleProperty("minecheck.downgradeTo")
@@ -1035,9 +1035,9 @@ tasks.register<Copy>("collectArtifacts") {
 val bootMinecraftVersion = property("minecraft_version").toString()
 
 // Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and
-// Forge's ModLauncher 8.0.9 only starts on the JDK the line pins. The Fabric jar keeps class file
-// 61 and a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM
-// cannot load it.
+// Forge's ModLauncher only starts on the JDK the line pins. The Fabric jar keeps class file 61 and
+// a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM cannot
+// load it.
 val pinnedForgeJava: String =
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
     project(":forge-mod")
