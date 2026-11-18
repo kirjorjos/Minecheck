@@ -776,7 +776,7 @@ subprojects {
   // are bundled, rewritten to the target class file version — JvmDowngrader turns records into
   // plain classes, expands pattern `instanceof`, and rewrites JDK calls newer than the target
   // against shaded stubs — and unpacked into a directory that the dev runs and the shadow jar read
-  // instead of the raw compile output. The Forge 1.15.2 line does this to reach Java 8.
+  // instead of the raw compile output. The Forge 1.14.4 line does this to reach Java 8.
   val downgradeTarget =
     providers
       .gradleProperty("minecheck.downgradeTo")

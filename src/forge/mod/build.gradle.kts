@@ -26,12 +26,12 @@ val mcNext =
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("31.2.57") }
+  minecraftForge { loader("28.2.30") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge 31 (1.15.2) runs on Java 8 and only Java 8. Two independent reasons: its Mixin is 0.8.2
+// Forge 28 (1.14.4) runs on Java 8 and only Java 8. Two independent reasons: its Mixin is 0.8.2
 // (compatibility levels stop at JAVA_11, and this line's mixin config asks for JAVA_8), and its
 // ModLauncher calls sun.security.util.ManifestEntryVerifier(Manifest), a constructor that later
 // JDK 8 builds no longer have. The repo compiles at 17, so this line's bytecode is downgraded to
