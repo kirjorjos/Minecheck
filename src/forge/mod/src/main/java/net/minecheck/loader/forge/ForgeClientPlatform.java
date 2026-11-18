@@ -29,6 +29,7 @@ import net.minecraft.client.gui.inventory.GuiInventory;
 import net.minecraft.client.multiplayer.GuiConnecting;
 import net.minecraft.client.multiplayer.ServerAddress;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
@@ -48,6 +49,7 @@ import net.minecraft.nbt.NBTTagList;
 import net.minecraft.nbt.NBTTagLong;
 import net.minecraft.nbt.NBTTagShort;
 import net.minecraft.nbt.NBTTagString;
+import net.minecraft.network.NetworkManager;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.tileentity.TileEntitySign;
@@ -842,7 +844,19 @@ public class ForgeClientPlatform implements ClientPlatform {
   @Override
   public boolean isLoggingIn() {
     Minecraft mc = mc();
-    return mc.player == null && mc.getConnection() != null;
+    if (mc.player != null) {
+      return false;
+    }
+    NetHandlerPlayClient connection = mc.getConnection();
+    if (connection == null) {
+      return false;
+    }
+    // 1.12.2 leaves the play handler behind after the world is left, so its mere presence is not a
+    // login: the channel is what says the handshake is still live. Calling a stale handler a login
+    // made every later join look like an attempt already in flight, and the client sat out its
+    // whole join deadline without ever opening a connection.
+    NetworkManager manager = connection.getNetworkManager();
+    return manager != null && manager.isChannelOpen();
   }
 
   @Override
