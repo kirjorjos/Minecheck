@@ -672,6 +672,8 @@ registerLoaderAggregate(
   "testForgeShots",
 )
 
+registerLoaderAggregate("legacyfabric")
+
 val metadataFile = layout.projectDirectory.file(".github/metadata.json")
 
 /**
@@ -754,7 +756,7 @@ subprojects {
       .map { JavaVersion.toVersion(it.trim()) }
       .orNull
 
-  if (downgradeTarget != null && name in setOf("common", "platform-api", "forge-mod")) {
+  if (downgradeTarget != null && name in setOf("common", "platform-api", "forge-mod", "legacyfabric-mod")) {
     apply(plugin = "xyz.wagyourtail.jvmdowngrader")
 
     val target = downgradeTarget

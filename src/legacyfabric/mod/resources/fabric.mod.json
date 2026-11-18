@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "minecheck",
+  "version": "${version}",
+  "name": "Minecheck",
+  "description": "Scripted automation of the Minecraft client and server for mod development",
+  "license": "${licence}",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "net.minecheck.loader.legacyfabric.LegacyFabricEntrypoint"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "${minecraft_version}"
+  }
+}
