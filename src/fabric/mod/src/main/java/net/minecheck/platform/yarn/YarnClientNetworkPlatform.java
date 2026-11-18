@@ -10,8 +10,8 @@ import net.minecheck.platform.api.net.NetworkPlatform;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.network.PacketByteBuf;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.PacketByteBuf;
 
 /**
  * Client-side transport over {@code fabric-networking-api-v1}: sends to the connected server

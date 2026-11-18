@@ -167,11 +167,18 @@ check(
   minecheck.runCommand("execute if block " .. vx .. " " .. vy .. " " .. vz .. " minecraft:air").result == 1,
   "target cell is air"
 )
-local vex = minecheck.spawnEntity(
-  "minecraft:vex",
-  { x = vx + 0.5, y = vy, z = vz + 0.5 },
-  { NoAI = true, NoGravity = true }
-)
+-- Command roots move between lines, so every command below is chosen from the running version
+-- instead of assumed: `attribute` arrives in 1.16, and 1.17 replaces `replaceitem` with
+-- `item replace ... with ...`.
+local minor = tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0
+local vexNbt = { NoAI = true, NoGravity = true }
+if minor < 16 then
+  -- No `attribute` root yet, and 1.16 is what renames the attribute keys to snake_case, so the
+  -- resistance has to arrive with the spawn under its old name — the `data get` below is what
+  -- proves it landed.
+  vexNbt.Attributes = { { Name = "generic.knockbackResistance", Base = 1.0 } }
+end
+local vex = minecheck.spawnEntity("minecraft:vex", { x = vx + 0.5, y = vy, z = vz + 0.5 }, vexNbt)
 check(vex.success, "spawnEntity vex succeeded")
 check(minecheck.runCommand("tag @e[type=minecraft:vex] add punchtarget").result >= 1, "marked the punch target")
 -- Survival plus a real weapon: a creative player's attacks deal no damage, and a bare fist needs ten
@@ -184,26 +191,33 @@ check(
 )
 -- The sword has to end up in the *hand*, not merely in the inventory: a merged session's earlier
 -- phases (beacon) leave items in the hotbar, so a bare `give` lands the sword in a later slot and the
--- client swings an emerald at the target instead — 40 hits that do nothing. `item replace` names the
--- selected slot explicitly, and is the same command in a standalone run where the hotbar is empty.
--- The command moved: 1.17 replaced `replaceitem` with `item replace ... with ...`, and 1.16.5 has no
--- `item` root at all ("Unknown or incomplete command").
+-- client swings an emerald at the target instead — 40 hits that do nothing. Both forms name the
+-- selected slot explicitly, and are the same command in a standalone run where the hotbar is empty.
+-- Two things move: 1.17 replaced `replaceitem` with `item replace ... with ...` (every line below
+-- 1.17 has no `item` root at all — "Unknown or incomplete command"), and netherite arrives in 1.16
+-- ("Unknown item 'minecraft:netherite_sword'"), so earlier lines swing a diamond sword instead.
+local swordItem = minor >= 16 and "minecraft:netherite_sword" or "minecraft:diamond_sword"
 local swordCommand
-if minecheck.minecraftVersion():match("^1%.16") then
-  swordCommand = "replaceitem entity " .. player .. " hotbar.0 minecraft:netherite_sword"
+if minor < 17 then
+  swordCommand = "replaceitem entity " .. player .. " hotbar.0 " .. swordItem
 else
-  swordCommand = "item replace entity " .. player .. " hotbar.0 with minecraft:netherite_sword"
+  swordCommand = "item replace entity " .. player .. " hotbar.0 with " .. swordItem
 end
 check(minecheck.runCommand(swordCommand).result >= 1, "client player given a sword in the hand")
 -- Knockback immunity: without it every hit pushes the target out from under the crosshair. The
 -- attribute command takes a single-entity selector, so `limit=1` is required (`@e[...]` alone is
 -- rejected as "allows more than one" even when only one entity matches).
-check(
-  minecheck.runCommand(
+local knockbackImmune
+if minor < 16 then
+  knockbackImmune = minecheck.runCommand(
+    "data get entity @e[type=minecraft:vex,tag=punchtarget,limit=1] Attributes[0].Base"
+  ).result >= 1
+else
+  knockbackImmune = minecheck.runCommand(
     "attribute @e[type=minecraft:vex,tag=punchtarget,limit=1] minecraft:generic.knockback_resistance base set 1.0"
-  ).result >= 1,
-  "punch target is knockback-immune"
-)
+  ).result >= 1
+end
+check(knockbackImmune, "punch target is knockback-immune")
 
 -- Cue the client over Minecheck's own channel — the documented cross-process signal. Sent only now:
 -- the client attacks as soon as it sees the target, and an earlier attack would move it under the
