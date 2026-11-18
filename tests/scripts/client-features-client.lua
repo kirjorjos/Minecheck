@@ -15,6 +15,9 @@ end
 
 phase("input-test.lua")
 phase("live-test.lua")
+-- Last: it attaches and detaches the camera against the world the first phase created, and leaves
+-- the player exactly where it found it.
+phase("camera-test.lua")
 
 minecheck.leaveWorld(30)
 minecheck.quit()

@@ -106,9 +106,9 @@ public class FabricEntrypoint implements ModInitializer {
     final AtomicReference<ScriptEngine> engineRef = new AtomicReference<>();
     if (client != null) {
       // Per-frame hook for the screenshot suite: captures need to know that a frame was drawn
-      // (see YarnClientPlatform#captureScreenshot).
-      net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
-          (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
+      // (see YarnClientPlatform#captureScreenshot). 1.14's Fabric API has no HUD render callback
+      // (fabric-rendering-v1 only gains one after this version), so the hook is the mixin on
+      // InGameHud#render in minecheck.mixins.json — the same point the callback would fire at.
       client.camera().registerBindings();
       // The camera ticks at the *start* of the tick, before the player does: it holds the body's
       // rotation at the value the server last saw, and doing that after the player ticked would be

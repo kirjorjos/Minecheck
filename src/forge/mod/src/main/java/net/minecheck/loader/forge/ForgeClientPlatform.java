@@ -21,24 +21,18 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerAddress;
 import net.minecraft.client.multiplayer.ServerData;
-import net.minecraft.core.MappedRegistry;
 import net.minecraft.core.Registry;
-import net.minecraft.core.RegistryAccess;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.TranslatableComponent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
-import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.LevelType;
 import net.minecraft.world.level.dimension.DimensionType;
-import net.minecraft.world.level.dimension.LevelStem;
-import net.minecraft.world.level.levelgen.FlatLevelSource;
-import net.minecraft.world.level.levelgen.WorldGenSettings;
+import net.minecraftforge.fml.loading.FMLPaths;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -59,6 +53,31 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   /** Set once this line's pause-on-focus-loss has been turned off for the run. */
   private boolean unfocusedPlayAllowed;
+
+  /** Set once the window has been hidden (or the config said not to). */
+  private boolean windowSettled;
+
+  /**
+   * Hides the client's own window when {@code hideGameWindow} says so.
+   *
+   * <p>The newer lines hook the window's constructor so it is never mapped at all; Forge 28 has no
+   * Mixin, and no Forge event fires inside {@code MainWindow}'s construction, so the earliest point
+   * a mod can reach is the first client tick. The window therefore exists, but is hidden before a
+   * frame is swapped into it — which is all a run under Xvfb needs.
+   */
+  void hideWindowIfConfigured() {
+    if (windowSettled) {
+      return;
+    }
+    windowSettled = true;
+    if (!net.minecheck.common.config.GameWindowPolicy.hide(FMLPaths.CONFIGDIR.get())) {
+      return;
+    }
+    long handle = mc().window.getWindow();
+    if (handle != 0L) {
+      org.lwjgl.glfw.GLFW.glfwHideWindow(handle);
+    }
+  }
 
   /**
    * Turns off 1.16.5's pause-on-focus-loss.
@@ -255,7 +274,7 @@ public class ForgeClientPlatform implements ClientPlatform {
         () ->
             mc().keyboardHandler
                 .keyPress(
-                    mc().getWindow().getWindow(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
+                    mc().window.getWindow(), glfwKey, 0, down ? GLFW_PRESS : GLFW_RELEASE, 0));
   }
 
   /**
@@ -271,7 +290,8 @@ public class ForgeClientPlatform implements ClientPlatform {
   @Override
   public void pinClientClock() {
     net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
-    net.minecraft.client.multiplayer.ClientLevel level = minecraft.level;
+    applyPendingWorldSettings(minecraft);
+    net.minecraft.client.multiplayer.MultiPlayerLevel level = minecraft.level;
     if (level == null) {
       return;
     }
@@ -280,7 +300,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       // Remote server: no authoritative value in this process (see pinClientClock's contract).
       return;
     }
-    net.minecraft.server.level.ServerLevel overworld = server.overworld();
+    net.minecraft.server.level.ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
     if (overworld == null) {
       return;
     }
@@ -367,14 +387,13 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
 
     @Override
-    public int advanceTime(long timeMs) {
+    public void advanceTime(long timeMs) {
       if (!Float.isNaN(accumulatedPartialTick)) {
         this.partialTick = accumulatedPartialTick;
       }
-      int ticks = super.advanceTime(timeMs);
+      super.advanceTime(timeMs);
       accumulatedPartialTick = this.partialTick;
       this.partialTick = 1.0f;
-      return ticks;
     }
   }
 
@@ -484,7 +503,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       request.fail("no client framebuffer — is the client in a world?");
       return;
     }
-    com.mojang.blaze3d.platform.Window window = mc.getWindow();
+    com.mojang.blaze3d.platform.Window window = mc.window;
     if (window.getWidth() != request.frameWidth() || window.getHeight() != request.frameHeight()) {
       // 1.16.5's Window has no setWindowed: ask GLFW directly, and let the resize be reported back
       // over the next frames, exactly as the yarn side does.
@@ -748,7 +767,12 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.loadLevel(worldName);
+          // The LevelSettings is only a fallback for a save that does not exist yet, which this
+          // method has already checked: 1.15 keeps the level type in it even when the save wins.
+          mc.selectLevel(
+              worldName,
+              worldName,
+              new LevelSettings(0L, GameType.SURVIVAL, false, false, LevelType.NORMAL));
           answerWorldLoadPrompt(mc);
         });
   }
@@ -782,15 +806,14 @@ public class ForgeClientPlatform implements ClientPlatform {
         && new TranslatableComponent("selectWorld.backupQuestion.experimental")
             .getString()
             .equals(screen.getTitle().getString())) {
-      pressLabelled(screen, CommonComponents.GUI_PROCEED);
+      pressLabelled(screen, new TranslatableComponent("gui.proceed"));
     }
   }
 
   /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
   private static void pressLabelled(Screen screen, Component label) {
     for (GuiEventListener child : screen.children()) {
-      if (child instanceof Button button
-          && label.getString().equals(button.getMessage().getString())) {
+      if (child instanceof Button button && label.getString().equals(button.getMessage())) {
         LOG.info(
             String.format(
                 "world load: answered the \"%s\" prompt with \"%s\"",
@@ -805,59 +828,64 @@ public class ForgeClientPlatform implements ClientPlatform {
             screen.getTitle().getString(), label.getString()));
   }
 
-  @Override
-  public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+  /**
+   * The options a {@code createWorld} call asked for, applied once the integrated server exists.
+   */
+  private volatile CreateWorldOptions pendingWorldOptions;
+
+  /**
+   * Applies the rules and difficulty a {@code createWorld} call asked for.
+   *
+   * <p>1.15's {@code LevelSettings} carries only the seed, the game type, whether map features
+   * generate and the level type, so the game rules and the difficulty have nowhere to go at
+   * creation time — they are set on the integrated server once it exists, from the client tick
+   * hook.
+   */
+  private void applyPendingWorldSettings(Minecraft mc) {
+    CreateWorldOptions options = pendingWorldOptions;
+    if (options == null) {
+      return;
+    }
+    MinecraftServer server = mc.getSingleplayerServer();
+    if (server == null) {
+      return;
+    }
+    pendingWorldOptions = null;
+    GameRules rules = server.getGameRules();
     if (!options.mobSpawning()) {
-      rules.getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
+      rules.getRule(GameRules.RULE_DOMOBSPAWNING).set(false, server);
     }
     if (!options.daylightCycle()) {
-      rules.getRule(GameRules.RULE_DAYLIGHT).set(false, null);
+      rules.getRule(GameRules.RULE_DAYLIGHT).set(false, server);
     }
     if (!options.weatherCycle()) {
-      rules.getRule(GameRules.RULE_WEATHER_CYCLE).set(false, null);
+      rules.getRule(GameRules.RULE_WEATHER_CYCLE).set(false, server);
     }
-    if (!options.insomnia()) {
-      rules.getRule(GameRules.RULE_DOINSOMNIA).set(false, null);
-    }
+    // No insomnia rule to set: 1.14 has no such game rule (it arrives in 1.15). A flat world with
+    // mob spawning off and the day cycle frozen never produces one.
+    server.setDifficulty(difficulty(options.difficulty()), true);
+  }
+
+  @Override
+  public void createWorld(CreateWorldOptions options) {
+    // 1.15 has no dimension set to swap a generator into: the world is created from a
+    // LevelSettings, whose level type selects flat generation and whose level-type options are the
+    // same declaration the harness writes into the dedicated server's `generator-settings`. Both
+    // sides therefore build the surface from tests/flat-world.json.
     LevelSettings levelSettings =
         new LevelSettings(
-            options.name(),
-            gameMode(options.gamemode()),
-            false, // hardcore
-            difficulty(options.difficulty()),
-            options.allowCheats(),
-            rules,
-            DataPackConfig.DEFAULT);
+                options.seed(),
+                gameMode(options.gamemode()),
+                options.structures(),
+                false, // hardcore
+                LevelType.FLAT)
+            .setLevelTypeOptions(FlatWorldSettings.declaration());
+    if (options.allowCheats()) {
+      levelSettings.enableSinglePlayerCommands();
+    }
+    pendingWorldOptions = options;
     Minecraft mc = mc();
-    onClientThread(
-        () -> {
-          RegistryAccess.RegistryHolder registryAccess = RegistryAccess.builtin();
-          // 1.18.2 has no world-preset registry: the flat preset is the generator the preset would
-          // have built, dropped into the default dimension set in place of the noise overworld. Its
-          // layers come from the shared declaration in tests/flat-world.json, which the harness
-          // also
-          // gives the dedicated server as `generator-settings`, so both sides build the same
-          // surface.
-          Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
-          FlatLevelSource flat = new FlatLevelSource(FlatWorldSettings.settings(biomes));
-          Registry<DimensionType> dimensionTypes =
-              registryAccess.registryOrThrow(Registry.DIMENSION_TYPE_REGISTRY);
-          MappedRegistry<LevelStem> dimensions =
-              WorldGenSettings.withOverworld(
-                  dimensionTypes,
-                  WorldGenSettings.makeDefault(
-                          dimensionTypes,
-                          biomes,
-                          registryAccess.registryOrThrow(
-                              Registry.NOISE_GENERATOR_SETTINGS_REGISTRY))
-                      .dimensions(),
-                  flat);
-          WorldGenSettings generatorOptions =
-              new WorldGenSettings(options.seed(), options.structures(), false, dimensions);
-          mc.createLevel(options.name(), levelSettings, registryAccess, generatorOptions);
-          answerWorldLoadPrompt(mc);
-        });
+    onClientThread(() -> mc.selectLevel(options.name(), options.name(), levelSettings));
   }
 
   @Override
@@ -954,8 +982,12 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player != null || server == null) {
       return -1f;
     }
-    ServerLevel overworld = server.overworld();
-    return overworld == null ? -1f : overworld.getChunkSource().getPendingTasksCount();
+    ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
+    return overworld == null
+        ? -1f
+        : (overworld.getChunk(0, 0, net.minecraft.world.level.chunk.ChunkStatus.FULL, false) != null
+            ? 0
+            : 1);
   }
 
   @Override
@@ -965,14 +997,18 @@ public class ForgeClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: not in a local/integrated world; treating as settled");
       return true;
     }
-    ServerLevel overworld = server.overworld();
+    ServerLevel overworld = server.getLevel(DimensionType.OVERWORLD);
     if (overworld == null) {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    int pending = overworld.getChunkSource().getPendingTasksCount();
-    LOG.info(String.format("worldGenSettled: %s pending chunk task(s)", pending));
-    return pending == 0;
+    // 1.15 exposes no pending-task count, so settled means the origin chunk every fixture stands
+    // on is generated: the flat world fills it in one pass, and any suite that needs more waits on
+    // the equivalent of waitForChunk.
+    boolean settled =
+        overworld.getChunk(0, 0, net.minecraft.world.level.chunk.ChunkStatus.FULL, false) != null;
+    LOG.info(String.format("worldGenSettled: origin chunk generated=%s", settled));
+    return settled;
   }
 
   private static final int GLFW_PRESS = 1;
@@ -1016,7 +1052,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     KeyboardHandler keyboard = mc().keyboardHandler;
-    long handle = mc().getWindow().getWindow();
+    long handle = mc().window.getWindow();
     boolean scancode = key.getType() == InputConstants.Type.SCANCODE;
     int code = scancode ? -1 : key.getValue();
     int scan = scancode ? key.getValue() : 0;
@@ -1050,7 +1086,7 @@ public class ForgeClientPlatform implements ClientPlatform {
    */
   private void dispatchMouse(int button, int action) {
     MouseHandler mouse = mc().mouseHandler;
-    long handle = mc().getWindow().getWindow();
+    long handle = mc().window.getWindow();
     onClientThread(
         () -> {
           try {
@@ -1090,10 +1126,10 @@ public class ForgeClientPlatform implements ClientPlatform {
     net.minecraft.world.entity.player.Player p = mc.player;
     return new net.minecheck.platform.api.PlayerInfo(
         p.getGameProfile().getName(),
-        p.getX(),
-        p.getY(),
-        p.getZ(),
-        p.level.dimension().location().toString());
+        p.x,
+        p.y,
+        p.z,
+        net.minecraft.world.level.dimension.DimensionType.getName(p.dimension).toString());
   }
 
   @Override
@@ -1154,7 +1190,7 @@ public class ForgeClientPlatform implements ClientPlatform {
   @Override
   public java.util.List<net.minecheck.platform.api.EntityInfo> findNearbyEntities(String type) {
     Minecraft mc = mc();
-    net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+    net.minecraft.client.multiplayer.MultiPlayerLevel level = mc.level;
     if (level == null) {
       // Not in a world: no entities are known, which is a legitimate answer for a script probing
       // before/after a join rather than an error.
@@ -1175,9 +1211,9 @@ public class ForgeClientPlatform implements ClientPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
               actual.toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);
@@ -1303,7 +1339,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       if (!(element instanceof net.minecraft.client.gui.components.AbstractWidget widget)) {
         continue;
       }
-      String label = widget.getMessage().getString().trim().toLowerCase(java.util.Locale.ROOT);
+      String label = widget.getMessage().trim().toLowerCase(java.util.Locale.ROOT);
       if (label.equals(wanted)) {
         byLabel.add(widget);
       } else if (widget

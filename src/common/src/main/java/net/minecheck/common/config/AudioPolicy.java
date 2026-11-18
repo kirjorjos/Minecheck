@@ -58,9 +58,9 @@ public final class AudioPolicy {
         // Logged where the decision is made, not where the device would have been opened: this
         // line existing in a run's output is the proof that the sound hook ran at all.
         LOG.info(
-            "Minecheck: muteAudio is on — no audio device will be opened (vanilla reports this once"
-                + " as \"Error starting SoundSystem. Turning off sounds & music\"; that line is this"
-                + " setting, not a fault)");
+            "Minecheck: muteAudio is on — audio is off for this run (where the device open is"
+                + " refused, vanilla reports it once as \"Error starting SoundSystem. Turning off"
+                + " sounds & music\"; that line is this setting doing its job, not a fault)");
       }
       decided = mute;
       return mute;

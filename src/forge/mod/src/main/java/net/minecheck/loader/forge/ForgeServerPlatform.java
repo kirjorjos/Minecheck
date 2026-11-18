@@ -62,7 +62,7 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private ServerLevel overworld() {
     MinecraftServer s = requireServer();
-    ServerLevel level = s.overworld();
+    ServerLevel level = s.getLevel(net.minecraft.world.level.dimension.DimensionType.OVERWORLD);
     if (level == null) {
       throw new IllegalStateException("overworld not available yet");
     }
@@ -125,9 +125,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           s.getGameRules()
               .getRule(net.minecraft.world.level.GameRules.RULE_WEATHER_CYCLE)
               .set(false, null);
-          s.getGameRules()
-              .getRule(net.minecraft.world.level.GameRules.RULE_DOINSOMNIA)
-              .set(false, null);
+          // 1.14 has no insomnia rule; it arrives in 1.15. Mob spawning is off anyway.
           return null;
         });
   }
@@ -143,7 +141,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     ResourceLocation typeId = type == null ? null : ResourceLocation.tryParse(type);
     ServerLevel level = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    for (Entity entity : level.getAllEntities()) {
+    for (Entity entity : (Iterable<Entity>) level.getEntities()::iterator) {
       // 1.16.5's getAllEntities() keeps an entity until the tick after it was removed, and a dying
       // mob
       // stays listed for its death animation. Neither is something a client can observe as present,
@@ -163,9 +161,9 @@ public class ForgeServerPlatform implements ServerPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
               Registry.ENTITY_TYPE.getKey(entity.getType()).toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getTags())));
     }
     return java.util.List.copyOf(out);
@@ -179,7 +177,8 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          ServerLevel overworld = s.overworld();
+          ServerLevel overworld =
+              s.getLevel(net.minecraft.world.level.dimension.DimensionType.OVERWORLD);
           return overworld != null && overworld.getChunkSource().getPendingTasksCount() == 0;
         });
   }
@@ -249,12 +248,13 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (entity instanceof Mob mob) {
       mob.finalizeSpawn(
           level,
-          level.getCurrentDifficultyAt(entity.blockPosition()),
+          level.getCurrentDifficultyAt(
+              new BlockPos((int) entity.x, (int) entity.y, (int) entity.z)),
           MobSpawnType.COMMAND,
           null,
           null);
     }
-    if (!level.tryAddFreshEntityWithPassengers(entity)) {
+    if (!level.addFreshEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
     return entity.getId();
@@ -285,7 +285,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (!tag.isEmpty()) {
       BlockEntity blockEntity = level.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.load(state, tag);
+        blockEntity.load(tag);
       }
     }
     return true;
@@ -336,6 +336,6 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlaceSettings settings = new StructurePlaceSettings().setIgnoreEntities(true);
-    return template.placeInWorld(level, pos, pos, settings, level.getRandom(), 2);
+    return template.placeInWorld(level, pos, settings, 2);
   }
 }

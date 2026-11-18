@@ -221,6 +221,24 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getScreenshotChatVisible();
 
   /**
+   * The camera mode the run boots with (default {@code "off"}). The client-features suites set
+   * {@code "assist"} so the camera is installed; a lifecycle run has no human at the controls, so
+   * only Lua drives it.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getCameraMode();
+
+  /**
+   * Whether the run asks for the view window (default {@code false}) — the one window a hidden
+   * client shows its frames in. A headless JVM logs why and runs without it, so turning it on can
+   * never break a run.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getViewWindow();
+
+  /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
    * deleted from the script cannot linger and be compared against a stale baseline.
    */
@@ -952,6 +970,18 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     return getScreenshotScale().getOrElse(1.0);
   }
 
+  /**
+   * The camera mode staged into config.json; the documented default when the task did not set one.
+   */
+  private String cameraMode() {
+    return getCameraMode().getOrElse("off");
+  }
+
+  /** Whether the run's view window is staged into config.json. */
+  private boolean viewWindow() {
+    return getViewWindow().getOrElse(false);
+  }
+
   private boolean screenshotChatVisible() {
     return getScreenshotChatVisible().getOrElse(false);
   }
@@ -1121,6 +1151,14 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       // while the world is held, so a frame is a function of the script rather than of how fast the
       // runner drew frames. Every other run keeps vanilla's twenty ticks a second.
       config.put("ownTickClock", true);
+    }
+    if (!"off".equals(cameraMode())) {
+      // Staged only when a suite asks for it: the camera is opt-in, and a run that leaves the
+      // field out gets the same default a hand-written config would.
+      config.put("cameraMode", cameraMode());
+    }
+    if (viewWindow()) {
+      config.put("viewWindow", true);
     }
     Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
     getLogger()

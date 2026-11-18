@@ -43,7 +43,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "3.0.1"
+version = "3.0.3"
 
 group = "net.minecheck"
 
@@ -640,6 +640,11 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
     coordinator = "client-features-client.lua"
     script = "client-features-client.lua"
     liveDriverFile.set(layout.projectDirectory.file("tests/scripts/live-driver.txt"))
+    // The camera and the run's view window are part of the client surface these suites cover: the
+    // camera is installed in `assist` (a lifecycle run has no human, so Lua drives it), and the
+    // view window is on, which exercises the documented non-fatal path under xvfb.
+    cameraMode.set("assist")
+    viewWindow.set(true)
     scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
     runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
     worldName = "minecheck_world"
@@ -776,7 +781,7 @@ subprojects {
   // are bundled, rewritten to the target class file version — JvmDowngrader turns records into
   // plain classes, expands pattern `instanceof`, and rewrites JDK calls newer than the target
   // against shaded stubs — and unpacked into a directory that the dev runs and the shadow jar read
-  // instead of the raw compile output. The Forge 1.16.4 line does this to reach Java 8.
+  // instead of the raw compile output. The Forge 1.14.4 line does this to reach Java 8.
   val downgradeTarget =
     providers
       .gradleProperty("minecheck.downgradeTo")
@@ -1035,9 +1040,9 @@ tasks.register<Copy>("collectArtifacts") {
 val bootMinecraftVersion = property("minecraft_version").toString()
 
 // Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and
-// Forge's ModLauncher 8.0.9 only starts on the JDK the line pins. The Fabric jar keeps class file
-// 61 and a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM
-// cannot load it.
+// Forge's ModLauncher only starts on the JDK the line pins. The Fabric jar keeps class file 61 and
+// a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM cannot
+// load it.
 val pinnedForgeJava: String =
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
     project(":forge-mod")

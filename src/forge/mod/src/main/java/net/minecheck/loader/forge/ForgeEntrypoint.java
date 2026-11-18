@@ -25,8 +25,19 @@ import net.minecraftforge.fml.loading.FMLPaths;
 @Mod("minecheck")
 public class ForgeEntrypoint {
 
+  private static final java.util.logging.Logger LOG =
+      java.util.logging.Logger.getLogger("Minecheck");
+
   private final boolean dedicated;
   private final ForgeClientPlatform client;
+
+  /**
+   * The client-only event hooks, held for the run's lifetime. Forge's event bus keeps no strong
+   * reference of its own to a registered listener object, so an inline {@code new
+   * ForgeClientHooks()} could be collected and would then silently stop receiving events.
+   */
+  private final ForgeClientHooks clientHooks;
+
   private final ForgeServerPlatform serverPlatform;
   private final ForgeNetworkPlatform network;
   private volatile ScriptEngine engine;
@@ -46,6 +57,7 @@ public class ForgeEntrypoint {
 
     dedicated = FMLEnvironment.dist.isDedicatedServer();
     client = dedicated ? null : new ForgeClientPlatform();
+    clientHooks = dedicated ? null : new ForgeClientHooks();
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
@@ -118,12 +130,17 @@ public class ForgeEntrypoint {
       net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext.get()
           .getModEventBus()
           .addListener(this::onClientSetup);
+      // Client-only, and registered from here so the dedicated server never loads the class: the
+      // input event's own type names a client-only class, and Forge's dist cleaner rejects that
+      // class being loaded on a server at all.
+      MinecraftForge.EVENT_BUS.register(clientHooks);
     }
   }
 
   /** Key bindings belong to client setup: the options list they register into exists by then. */
   private void onClientSetup(net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent event) {
-    event.enqueueWork(client::installCameraBindings);
+    // 31.2's FMLClientSetupEvent has no enqueueWork: low-code mods run the work inline.
+    client.installCameraBindings();
   }
 
   /**
@@ -145,6 +162,7 @@ public class ForgeEntrypoint {
         // The camera runs before the player does: it holds the body's rotation at the value the
         // server last saw, and doing that after the player ticked would be after the packet that
         // carries the change.
+        ForgeSilentSound.shutDownDevice();
         client.camera().tick();
       }
       return;
@@ -152,6 +170,7 @@ public class ForgeEntrypoint {
     if (event.phase != TickEvent.Phase.END || client == null) {
       return;
     }
+    client.hideWindowIfConfigured();
     ScriptEngine e = engine;
     if (e == null || e.isFinished()) {
       return;

@@ -19,9 +19,17 @@ Suggested shape, delete what you do not use:
 
 ## Added
 
-- First release of Minecheck for Minecraft 1.16.4, shipping the Fabric and Forge builds.
+- Minecraft 1.14.4 on both Fabric and Forge, with the same script API as the other lines: the
+  lifecycle, camera, view-window and screenshot suites run against it, and the handoff suite
+  proves a dedicated server can run a client-generated save.
 
 ## Changed
 
-- The Forge build targets Java 8, the only JVM Forge 35's ModLauncher starts on; the Fabric build
-  stays on Java 17.
+- `muteAudio` keeps a scripted run silent on Forge too. Forge 28 has no hook that reaches the
+  sound engine before it starts, so every play is refused and the device vanilla opens at startup
+  is closed on the first client tick instead of the open being refused up front.
+- `uncappedTicks` binds on 1.14.4's server loop. It hooks the loop's own next-tick deadline rather
+  than a `Thread.sleep` this version does not have, so it stops warning that no pacing hook exists.
+- `groundHeight` reports the first air above the surface, as the API documents, instead of the top
+  blocking block the 1.14.4 port read.
+

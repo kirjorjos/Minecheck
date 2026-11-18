@@ -8,7 +8,7 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.SpawnType;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -61,7 +61,7 @@ public class YarnServerPlatform implements ServerPlatform {
 
   private ServerWorld overworld() {
     MinecraftServer s = requireServer();
-    ServerWorld world = s.getWorld(net.minecraft.world.World.OVERWORLD);
+    ServerWorld world = s.getWorld(net.minecraft.world.dimension.DimensionType.OVERWORLD);
     if (world == null) {
       throw new IllegalStateException("overworld not available yet");
     }
@@ -116,7 +116,7 @@ public class YarnServerPlatform implements ServerPlatform {
           s.getGameRules().get(net.minecraft.world.GameRules.DO_MOB_SPAWNING).set(false, null);
           s.getGameRules().get(net.minecraft.world.GameRules.DO_DAYLIGHT_CYCLE).set(false, null);
           s.getGameRules().get(net.minecraft.world.GameRules.DO_WEATHER_CYCLE).set(false, null);
-          s.getGameRules().get(net.minecraft.world.GameRules.DO_INSOMNIA).set(false, null);
+          // 1.14 has no insomnia rule; it arrives in 1.15. Mob spawning is off anyway.
           return null;
         });
   }
@@ -132,7 +132,8 @@ public class YarnServerPlatform implements ServerPlatform {
     Identifier typeId = type == null ? null : Identifier.tryParse(type);
     ServerWorld world = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    for (Entity entity : world.iterateEntities()) {
+    // 1.15 has no iterateEntities: the same list comes from a typeless entity query.
+    for (Entity entity : world.getEntities((net.minecraft.entity.EntityType<?>) null, e -> true)) {
       // 1.16.5 keeps an entity until the tick after it was removed, and a dying mob stays listed
       // for
       // its death animation. Neither is observable as present on a client, so neither is a match.
@@ -150,13 +151,18 @@ public class YarnServerPlatform implements ServerPlatform {
           new net.minecheck.platform.api.EntityInfo(
               entity.getEntityId(),
               Registry.ENTITY_TYPE.getId(entity.getType()).toString(),
-              entity.getX(),
-              entity.getY(),
-              entity.getZ(),
+              entity.x,
+              entity.y,
+              entity.z,
               new java.util.HashSet<>(entity.getScoreboardTags())));
     }
     return java.util.List.copyOf(out);
   }
+
+  /** Loaded-chunk count seen on the previous poll, and how many polls in a row it has held. */
+  private int lastLoadedChunks = -1;
+
+  private int quietPolls;
 
   @Override
   public boolean isWorldGenSettled() {
@@ -166,10 +172,36 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          ServerWorld overworld = s.getWorld(net.minecraft.world.World.OVERWORLD);
-          return overworld != null && overworld.getChunkManager().getPendingTasks() == 0;
+          ServerWorld overworld = s.getWorld(net.minecraft.world.dimension.DimensionType.OVERWORLD);
+          if (overworld == null) {
+            return false;
+          }
+          // 1.15 exposes no pending-task count. Two observables stand in for it: the spawn chunk,
+          // which vanilla keeps loaded through its START ticket, is generated — and the manager has
+          // stopped taking chunks on. A region still being generated grows every few ticks; a
+          // finished one sits still. Asking for chunk (0, 0) instead can never answer, because the
+          // spawn region sits wherever the seed put it and a server with no player online loads
+          // nothing else.
+          net.minecraft.server.world.ServerChunkManager chunks = overworld.getChunkManager();
+          net.minecraft.util.math.BlockPos spawn = overworld.getSpawnPos();
+          boolean spawnReady =
+              chunks.getChunk(
+                      spawn.getX() >> 4,
+                      spawn.getZ() >> 4,
+                      net.minecraft.world.chunk.ChunkStatus.FULL,
+                      false)
+                  != null;
+          int loaded = chunks.getLoadedChunkCount();
+          quietPolls = loaded == lastLoadedChunks ? quietPolls + 1 : 0;
+          lastLoadedChunks = loaded;
+          return spawnReady && quietPolls >= QUIET_POLLS;
         });
   }
+
+  /**
+   * How many consecutive polls without a new chunk count as "generation has stopped taking work".
+   */
+  private static final int QUIET_POLLS = 20;
 
   @Override
   public Integer groundHeight(int x, int z) {
@@ -179,7 +211,13 @@ public class YarnServerPlatform implements ServerPlatform {
           if (!world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
             return null;
           }
-          return world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x, z);
+          // One above the chunk's `sampleHeightmap`, which on this version reports the highest
+          // blocking block rather than the first air above it. See the client's `groundHeight`.
+          return world
+                  .getChunk(x >> 4, z >> 4)
+                  .sampleHeightmap(
+                      net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15)
+              + 1;
         });
   }
 
@@ -232,7 +270,7 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     if (entity instanceof MobEntity mob) {
       mob.initialize(
-          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null, null);
+          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnType.COMMAND, null, null);
     }
     if (!world.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
@@ -265,7 +303,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.fromTag(state, compound);
+        blockEntity.fromTag(compound);
       }
     }
     return true;
@@ -315,6 +353,8 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlacementData placementData = new StructurePlacementData().setIgnoreEntities(true);
-    return template.place(world, pos, pos, placementData, world.getRandom(), 2);
+    // 1.15's Structure#place is void: it reports nothing, so a placed template is a success.
+    template.place(world, pos, placementData);
+    return true;
   }
 }
