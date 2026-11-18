@@ -1250,9 +1250,15 @@ public class YarnClientPlatform implements ClientPlatform {
     if (!mc.world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
       return null;
     }
+    // One above the chunk's `sampleHeightmap`, because on this version that reports the highest
+    // blocking block (the flat world's grass, y=3) where the API promises the first air above it
+    // (y=4). The newer lines get that +1 from `World.getTopY`, which 1.14.4 has no name for; Forge
+    // on this line reads 4 through its own `level.getHeight`, and the handoff baseline caught the
+    // missing one here.
     return mc.world
-        .getChunk(x >> 4, z >> 4)
-        .sampleHeightmap(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15);
+            .getChunk(x >> 4, z >> 4)
+            .sampleHeightmap(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15)
+        + 1;
   }
 
   @Override

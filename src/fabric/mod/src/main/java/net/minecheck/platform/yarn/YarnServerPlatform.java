@@ -211,9 +211,13 @@ public class YarnServerPlatform implements ServerPlatform {
           if (!world.getChunkManager().isChunkLoaded(x >> 4, z >> 4)) {
             return null;
           }
+          // One above the chunk's `sampleHeightmap`, which on this version reports the highest
+          // blocking block rather than the first air above it. See the client's `groundHeight`.
           return world
-              .getChunk(x >> 4, z >> 4)
-              .sampleHeightmap(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15);
+                  .getChunk(x >> 4, z >> 4)
+                  .sampleHeightmap(
+                      net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, x & 15, z & 15)
+              + 1;
         });
   }
 
