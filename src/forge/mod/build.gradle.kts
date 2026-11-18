@@ -25,18 +25,22 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { mojmap() }
-  minecraftForge { loader("28.2.30") }
+  // No Mojang mappings this far back: 1.12.2 is mapped by MCP, and stable_39 is the last stable
+  // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
+  // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
+  // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
+  mappings { mcp("stable", "39-1.12") }
+  // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
+  minecraftForge { loader("14.23.5.2860") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge 28 (1.14.4) runs on Java 8 and only Java 8: its ModLauncher calls
-// sun.security.util.ManifestEntryVerifier(Manifest), a constructor that later JDK 8 builds no
-// longer have. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
+// Forge on 1.12.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
-// than whichever one happens to be installed. The line also has no Mixin at all — Forge only
-// starts shipping it with 1.15 — so its client hooks are native Forge events.
+// than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
+// reaches Forge with 1.15 — so its client hooks are native Forge events.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 tasks

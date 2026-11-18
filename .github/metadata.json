@@ -1,6 +1,5 @@
 {
   "loaders": [
-    "fabric",
     "forge"
   ],
   "release": {
