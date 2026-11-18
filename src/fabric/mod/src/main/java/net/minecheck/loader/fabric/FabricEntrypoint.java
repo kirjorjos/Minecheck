@@ -108,7 +108,7 @@ public class FabricEntrypoint implements ModInitializer {
       // Per-frame hook for the screenshot suite: captures need to know that a frame was drawn
       // (see YarnClientPlatform#captureScreenshot).
       net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
-          (matrices, tickDelta) -> YarnClientPlatform.notifyFrameDrawn());
+          tickDelta -> YarnClientPlatform.notifyFrameDrawn());
       client.camera().registerBindings();
       // The camera ticks at the *start* of the tick, before the player does: it holds the body's
       // rotation at the value the server last saw, and doing that after the player ticked would be

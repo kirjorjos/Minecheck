@@ -123,7 +123,8 @@ public class ForgeEntrypoint {
 
   /** Key bindings belong to client setup: the options list they register into exists by then. */
   private void onClientSetup(net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent event) {
-    event.enqueueWork(client::installCameraBindings);
+    // 31.2's FMLClientSetupEvent has no enqueueWork: low-code mods run the work inline.
+    client.installCameraBindings();
   }
 
   /**

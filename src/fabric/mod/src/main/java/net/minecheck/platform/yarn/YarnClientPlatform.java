@@ -1,6 +1,5 @@
 package net.minecheck.platform.yarn;
 
-import com.mojang.serialization.Lifecycle;
 import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.logging.Level;
@@ -12,33 +11,26 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.Mouse;
 import net.minecraft.client.gui.Element;
 import net.minecraft.client.gui.screen.BackupPromptScreen;
-import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.ConnectScreen;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.ScreenTexts;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.options.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.network.ServerAddress;
-import net.minecraft.resource.DataPackSettings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.text.TranslatableText;
-import net.minecraft.util.registry.DynamicRegistryManager;
 import net.minecraft.util.registry.Registry;
-import net.minecraft.util.registry.SimpleRegistry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
-import net.minecraft.world.World;
-import net.minecraft.world.biome.Biome;
-import net.minecraft.world.dimension.DimensionOptions;
-import net.minecraft.world.gen.GeneratorOptions;
-import net.minecraft.world.gen.chunk.FlatChunkGenerator;
+import net.minecraft.world.chunk.ChunkStatus;
+import net.minecraft.world.dimension.DimensionType;
+import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
@@ -248,6 +240,7 @@ public class YarnClientPlatform implements ClientPlatform {
   @Override
   public void pinClientClock() {
     MinecraftClient mc = mc();
+    applyPendingWorldSettings(mc);
     net.minecraft.client.world.ClientWorld world = mc.world;
     if (world == null) {
       return;
@@ -257,7 +250,7 @@ public class YarnClientPlatform implements ClientPlatform {
       // Remote server: no authoritative value in this process (see pinClientClock's contract).
       return;
     }
-    ServerWorld overworld = server.getWorld(World.OVERWORLD);
+    ServerWorld overworld = server.getWorld(DimensionType.OVERWORLD);
     if (overworld == null) {
       return;
     }
@@ -352,14 +345,13 @@ public class YarnClientPlatform implements ClientPlatform {
     }
 
     @Override
-    public int beginRenderTick(long timeMillis) {
+    public void beginRenderTick(long timeMillis) {
       if (!Float.isNaN(accumulatedTickDelta)) {
         this.tickDelta = accumulatedTickDelta;
       }
-      int ticks = super.beginRenderTick(timeMillis);
+      super.beginRenderTick(timeMillis);
       accumulatedTickDelta = this.tickDelta;
       this.tickDelta = 1.0f;
-      return ticks;
     }
   }
 
@@ -579,7 +571,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getPixelColor(sx, sy);
+                pixels[at++] = source.getPixelRgba(sx, sy);
               }
             }
             request.succeedFrame(
@@ -611,7 +603,7 @@ public class YarnClientPlatform implements ClientPlatform {
             out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setPixelColor(dx, dy, pixels[dy * outWidth + dx]);
+                out.setPixelRgba(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -683,7 +675,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setPixelColor(dx, dy, source.getPixelColor(sx, sy));
+                out.setPixelRgba(dx, dy, source.getPixelRgba(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -742,64 +734,74 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.startIntegratedServer(worldName);
+          // The LevelInfo is only a fallback for a save that does not exist yet, which this method
+          // has already checked: 1.15 keeps the generator type in it even when the save wins.
+          mc.startIntegratedServer(
+              worldName,
+              worldName,
+              new LevelInfo(0L, GameMode.SURVIVAL, false, false, LevelGeneratorType.DEFAULT));
           answerWorldLoadPrompt(mc);
         });
   }
 
-  @Override
-  public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+  /**
+   * The options a {@code createWorld} call asked for, applied once the integrated server exists.
+   */
+  private volatile CreateWorldOptions pendingWorldOptions;
+
+  /**
+   * Applies the rules and difficulty a {@code createWorld} call asked for.
+   *
+   * <p>1.15's {@code LevelInfo} carries only the seed, the game mode, whether structures generate
+   * and the generator type, so the game rules and the difficulty have nowhere to go at creation
+   * time — they are set on the integrated server once it exists, from the client tick hook.
+   */
+  private void applyPendingWorldSettings(MinecraftClient mc) {
+    CreateWorldOptions options = pendingWorldOptions;
+    if (options == null) {
+      return;
+    }
+    MinecraftServer server = mc.getServer();
+    if (server == null) {
+      return;
+    }
+    pendingWorldOptions = null;
+    GameRules rules = server.getGameRules();
     if (!options.mobSpawning()) {
-      rules.get(GameRules.DO_MOB_SPAWNING).set(false, null);
+      rules.get(GameRules.DO_MOB_SPAWNING).set(false, server);
     }
     if (!options.daylightCycle()) {
-      rules.get(GameRules.DO_DAYLIGHT_CYCLE).set(false, null);
+      rules.get(GameRules.DO_DAYLIGHT_CYCLE).set(false, server);
     }
     if (!options.weatherCycle()) {
-      rules.get(GameRules.DO_WEATHER_CYCLE).set(false, null);
+      rules.get(GameRules.DO_WEATHER_CYCLE).set(false, server);
     }
     if (!options.insomnia()) {
-      rules.get(GameRules.DO_INSOMNIA).set(false, null);
+      rules.get(GameRules.DO_INSOMNIA).set(false, server);
     }
+    server.setDifficulty(difficulty(options.difficulty()), true);
+  }
+
+  @Override
+  public void createWorld(CreateWorldOptions options) {
+    // 1.15 has no dimension set to swap a generator into: the world is created from a LevelInfo,
+    // whose generator type chooses flat generation and whose generator options are the same
+    // declaration the harness writes into the dedicated server's `generator-settings`. Both sides
+    // therefore build the surface from tests/flat-world.json.
     LevelInfo levelInfo =
         new LevelInfo(
-            options.name(),
+            options.seed(),
             gameMode(options.gamemode()),
+            options.structures(),
             false, // hardcore
-            difficulty(options.difficulty()),
-            options.allowCheats(),
-            rules,
-            DataPackSettings.SAFE_MODE);
+            LevelGeneratorType.FLAT);
+    levelInfo.setGeneratorOptions(FlatWorldSettings.declaration());
+    if (options.allowCheats()) {
+      levelInfo.enableCommands();
+    }
+    pendingWorldOptions = options;
     MinecraftClient mc = mc();
-    onClientThread(
-        () -> {
-          DynamicRegistryManager.Impl registryManager = DynamicRegistryManager.create();
-          // 1.16.5 keeps the dimension set in a SimpleRegistry, so the flat generator replaces the
-          // default overworld entry and every other dimension is copied as the defaults built it.
-          // The layers come from tests/flat-world.json, which the harness also gives the
-          // dedicated server as `generator-settings`, so both sides build the same surface.
-          Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
-          FlatChunkGenerator flat = new FlatChunkGenerator(FlatWorldSettings.config(biomes));
-          GeneratorOptions defaults =
-              GeneratorOptions.getDefaultOptions(
-                  registryManager.get(Registry.DIMENSION_TYPE_KEY),
-                  biomes,
-                  registryManager.get(Registry.NOISE_SETTINGS_WORLDGEN));
-          SimpleRegistry<DimensionOptions> dimensions = defaults.getDimensions();
-          DimensionOptions overworld = dimensions.get(DimensionOptions.OVERWORLD);
-          dimensions.set(
-              dimensions.getRawId(overworld),
-              DimensionOptions.OVERWORLD,
-              new DimensionOptions(overworld.getDimensionTypeSupplier(), flat),
-              Lifecycle.stable());
-          GeneratorOptions generatorOptions =
-              new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
-          // 1.16.4's yarn bindings leave this MinecraftClient method unmapped, so it is
-          // `method_29607` here and `createWorld` from 1.16.5 on. Same signature and behaviour.
-          mc.method_29607(options.name(), levelInfo, registryManager, generatorOptions);
-          answerWorldLoadPrompt(mc);
-        });
+    onClientThread(() -> mc.startIntegratedServer(options.name(), options.name(), levelInfo));
   }
 
   /**
@@ -824,19 +826,13 @@ public class YarnClientPlatform implements ClientPlatform {
       // "Load world anyway": the backup guards a human's save from experimental worldgen, and a
       // harness world is created and thrown away by the run, so there is nothing to guard.
       pressLabelled(screen, new TranslatableText("selectWorld.backupJoinSkipButton"));
-    } else if (screen instanceof ConfirmScreen
-        && new TranslatableText("selectWorld.backupQuestion.experimental")
-            .getString()
-            .equals(screen.getTitle().getString())) {
-      pressLabelled(screen, ScreenTexts.PROCEED);
     }
   }
 
   /** Presses the button on {@code screen} labelled {@code label}, if there is one. */
   private static void pressLabelled(Screen screen, Text label) {
     for (Element child : screen.children()) {
-      if (child instanceof ButtonWidget button
-          && label.getString().equals(button.getMessage().getString())) {
+      if (child instanceof ButtonWidget button && label.getString().equals(button.getMessage())) {
         LOG.info(
             String.format(
                 "world load: answered the \"%s\" prompt with \"%s\"",
@@ -940,8 +936,10 @@ public class YarnClientPlatform implements ClientPlatform {
     if (mc.player != null || mc.getServer() == null) {
       return -1f;
     }
-    ServerWorld overworld = mc.getServer().getWorld(World.OVERWORLD);
-    return overworld == null ? -1f : overworld.getChunkManager().getPendingTasks();
+    ServerWorld overworld = mc.getServer().getWorld(DimensionType.OVERWORLD);
+    // 1.15's ServerChunkManager has no pending-task counter, so progress is the number of chunks
+    // it holds: it climbs while the server generates and holds still once it is done.
+    return overworld == null ? -1f : overworld.getChunkManager().getLoadedChunkCount();
   }
 
   @Override
@@ -951,14 +949,17 @@ public class YarnClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: not in a local/integrated world; treating as settled");
       return true;
     }
-    ServerWorld overworld = server.getWorld(World.OVERWORLD);
+    ServerWorld overworld = server.getWorld(DimensionType.OVERWORLD);
     if (overworld == null) {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    int pending = overworld.getChunkManager().getPendingTasks();
-    LOG.info(String.format("worldGenSettled: %s pending chunk task(s)", pending));
-    return pending == 0;
+    // 1.15's ServerChunkManager exposes no pending-task count, so settled means the origin chunk
+    // every fixture stands on is generated: the flat world fills it in one pass, and any suite
+    // that needs more waits on waitForChunk.
+    boolean settled = overworld.getChunkManager().getChunk(0, 0, ChunkStatus.FULL, false) != null;
+    LOG.info(String.format("worldGenSettled: origin chunk generated=%s", settled));
+    return settled;
   }
 
   private static final int GLFW_PRESS = 1;
@@ -969,17 +970,21 @@ public class YarnClientPlatform implements ClientPlatform {
    * ("key.jump") or a GLFW-style key name ("F3"), lower-cased to the "key.keyboard.*" namespace.
    * Returns {@code null} when unresolvable.
    */
-  private InputUtil.Key resolveKey(String key) {
+  private InputUtil.KeyCode resolveKey(String key) {
     if (key.startsWith("key.")) {
       for (KeyBinding binding : mc().options.keysAll) {
-        if (binding.getTranslationKey().equals(key)) {
+        if (binding.getId().equals(key)) {
           try {
-            String bound = binding.getBoundKeyTranslationKey();
-            if (bound == null || binding.isUnbound()) {
+            // 1.15 keeps the bound key in a private field and offers no getter; the binding still
+            // answers matchesKey, but that needs the code this method is trying to find.
+            java.lang.reflect.Field field = KeyBinding.class.getDeclaredField("keyCode");
+            field.setAccessible(true);
+            InputUtil.KeyCode bound = (InputUtil.KeyCode) field.get(binding);
+            if (bound == null || binding.isNotBound()) {
               return null;
             }
-            return InputUtil.fromTranslationKey(bound);
-          } catch (RuntimeException e) {
+            return bound;
+          } catch (ReflectiveOperationException | RuntimeException e) {
             LOG.log(Level.WARNING, String.format("keyDown: unresolvable binding '%s'", key), e);
             return null;
           }
@@ -988,7 +993,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return null;
     }
     try {
-      return InputUtil.fromTranslationKey("key.keyboard." + key.toLowerCase(Locale.ROOT));
+      return InputUtil.fromName("key.keyboard." + key.toLowerCase(Locale.ROOT));
     } catch (RuntimeException e) {
       LOG.log(Level.WARNING, String.format("keyDown: unresolvable key name '%s'", key), e);
       return null;
@@ -1004,16 +1009,16 @@ public class YarnClientPlatform implements ClientPlatform {
    * is silently lost; route it through the mouse handler instead. (Scan codes go through the
    * keyboard handler as a scan code rather than a key symbol.)
    */
-  private void dispatchKey(InputUtil.Key key, int action) {
+  private void dispatchKey(InputUtil.KeyCode key, int action) {
     if (key.getCategory() == InputUtil.Type.MOUSE) {
-      dispatchMouse(key.getCode(), action);
+      dispatchMouse(key.getKeyCode(), action);
       return;
     }
     Keyboard keyboard = mc().keyboard;
     long handle = mc().getWindow().getHandle();
     boolean scancode = key.getCategory() == InputUtil.Type.SCANCODE;
-    int code = scancode ? -1 : key.getCode();
-    int scan = scancode ? key.getCode() : 0;
+    int code = scancode ? -1 : key.getKeyCode();
+    int scan = scancode ? key.getKeyCode() : 0;
     onClientThread(
         () ->
             net.minecheck.platform.api.InjectedInput.run(
@@ -1022,7 +1027,7 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public boolean keyDown(String key) {
-    InputUtil.Key resolved = resolveKey(key);
+    InputUtil.KeyCode resolved = resolveKey(key);
     if (resolved == null) {
       return false;
     }
@@ -1032,7 +1037,7 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public void keyUp(String key) {
-    InputUtil.Key resolved = resolveKey(key);
+    InputUtil.KeyCode resolved = resolveKey(key);
     if (resolved != null) {
       dispatchKey(resolved, GLFW_RELEASE);
     }
@@ -1086,7 +1091,7 @@ public class YarnClientPlatform implements ClientPlatform {
         mc.player.getX(),
         mc.player.getY(),
         mc.player.getZ(),
-        mc.player.getEntityWorld().getRegistryKey().getValue().toString());
+        net.minecraft.world.dimension.DimensionType.getId(mc.player.dimension).toString());
   }
 
   @Override
@@ -1108,7 +1113,7 @@ public class YarnClientPlatform implements ClientPlatform {
         () -> {
           if (mc.player != null) {
             mc.player.lookAt(
-                net.minecraft.command.argument.EntityAnchorArgumentType.EntityAnchor.EYES,
+                net.minecraft.command.arguments.EntityAnchorArgumentType.EntityAnchor.EYES,
                 new net.minecraft.util.math.Vec3d(x, y, z));
           }
         });
@@ -1120,7 +1125,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (mc.player == null || !mc.player.getEntityName().equals(entityName) || mc.world == null) {
       return null;
     }
-    net.minecraft.util.hit.HitResult hit = mc.player.raycast(5.0, 1.0F, false);
+    net.minecraft.util.hit.HitResult hit = mc.player.rayTrace(5.0, 1.0F, false);
     if (hit.getType() != net.minecraft.util.hit.HitResult.Type.BLOCK) {
       return null;
     }
@@ -1223,7 +1228,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.interactionManager == null || mc.world == null) {
       throw new IllegalStateException("not in a world");
     }
-    net.minecraft.util.hit.HitResult hit = mc.player.raycast(5.0, 1.0F, false);
+    net.minecraft.util.hit.HitResult hit = mc.player.rayTrace(5.0, 1.0F, false);
     if (hit.getType() == net.minecraft.util.hit.HitResult.Type.BLOCK) {
       mc.interactionManager.interactBlock(
           mc.player,
@@ -1237,24 +1242,24 @@ public class YarnClientPlatform implements ClientPlatform {
   public boolean clickSlot(int slot, int button, String actionType) {
     MinecraftClient mc = mc();
     if (!(mc.currentScreen
-        instanceof net.minecraft.client.gui.screen.ingame.HandledScreen<?> handled)) {
+        instanceof net.minecraft.client.gui.screen.ingame.ContainerScreen<?> handled)) {
       return false;
     }
-    net.minecraft.screen.ScreenHandler handler = handled.getScreenHandler();
+    net.minecraft.container.Container handler = handled.getContainer();
     mc.interactionManager.clickSlot(
         handler.syncId, slot, button, slotAction(actionType), mc.player);
     return true;
   }
 
-  private static net.minecraft.screen.slot.SlotActionType slotAction(String type) {
+  private static net.minecraft.container.SlotActionType slotAction(String type) {
     return switch (type.toLowerCase(java.util.Locale.ROOT)) {
-      case "quick_move" -> net.minecraft.screen.slot.SlotActionType.QUICK_MOVE;
-      case "swap" -> net.minecraft.screen.slot.SlotActionType.SWAP;
-      case "clone" -> net.minecraft.screen.slot.SlotActionType.CLONE;
-      case "throw" -> net.minecraft.screen.slot.SlotActionType.THROW;
-      case "quick_craft" -> net.minecraft.screen.slot.SlotActionType.QUICK_CRAFT;
-      case "pickup_all" -> net.minecraft.screen.slot.SlotActionType.PICKUP_ALL;
-      default -> net.minecraft.screen.slot.SlotActionType.PICKUP;
+      case "quick_move" -> net.minecraft.container.SlotActionType.QUICK_MOVE;
+      case "swap" -> net.minecraft.container.SlotActionType.SWAP;
+      case "clone" -> net.minecraft.container.SlotActionType.CLONE;
+      case "throw" -> net.minecraft.container.SlotActionType.THROW;
+      case "quick_craft" -> net.minecraft.container.SlotActionType.QUICK_CRAFT;
+      case "pickup_all" -> net.minecraft.container.SlotActionType.PICKUP_ALL;
+      default -> net.minecraft.container.SlotActionType.PICKUP;
     };
   }
 
@@ -1291,7 +1296,7 @@ public class YarnClientPlatform implements ClientPlatform {
       if (!(element instanceof net.minecraft.client.gui.widget.AbstractButtonWidget widget)) {
         continue;
       }
-      String label = widget.getMessage().getString().trim().toLowerCase(Locale.ROOT);
+      String label = widget.getMessage().trim().toLowerCase(Locale.ROOT);
       if (label.equals(wanted)) {
         byLabel.add(widget);
       } else if (widget.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains(wanted)) {
@@ -1305,9 +1310,9 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     net.minecraft.client.gui.widget.AbstractButtonWidget target = matches.get(at);
-    // The centre is inside the widget, so its own isMouseOver/clicked check passes.
-    target.mouseClicked(
-        target.x + target.getWidth() / 2.0, target.y + target.getHeight() / 2.0, button);
+    // A point inside the widget, so its own isMouseOver/clicked check passes. 1.15 exposes the
+    // width but no height, and one pixel below the top edge is inside any widget it draws.
+    target.mouseClicked(target.x + target.getWidth() / 2.0, target.y + 1.0, button);
     return true;
   }
 
@@ -1394,7 +1399,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     if (screenId == null || screenId.isEmpty()) {
-      return screen instanceof net.minecraft.client.gui.screen.ingame.HandledScreen;
+      return screen instanceof net.minecraft.client.gui.screen.ingame.ContainerScreen;
     }
     return switch (screenId) {
       // Creative mode opens CreativeInventoryScreen, which does NOT extend InventoryScreen
@@ -1408,15 +1413,16 @@ public class YarnClientPlatform implements ClientPlatform {
       case "sign" -> screen instanceof net.minecraft.client.gui.screen.ingame.SignEditScreen;
       case "chest" ->
           screen instanceof net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-      case "crafting" -> screen instanceof net.minecraft.client.gui.screen.ingame.CraftingScreen;
+      case "crafting" ->
+          screen instanceof net.minecraft.client.gui.screen.ingame.CraftingTableScreen;
       case "furnace" -> screen instanceof net.minecraft.client.gui.screen.ingame.FurnaceScreen;
       default -> false;
     };
   }
 
-  private net.minecraft.screen.ScreenHandler openHandler(String screenId) {
+  private net.minecraft.container.Container openHandler(String screenId) {
     net.minecraft.client.gui.screen.Screen screen = mc().currentScreen;
-    if (!(screen instanceof net.minecraft.client.gui.screen.ingame.HandledScreen<?> handled)) {
+    if (!(screen instanceof net.minecraft.client.gui.screen.ingame.ContainerScreen<?> handled)) {
       throw new IllegalStateException("no container screen is open");
     }
     if (screenId != null && !screenId.isEmpty() && !isScreenOpen(screenId)) {
@@ -1427,7 +1433,7 @@ public class YarnClientPlatform implements ClientPlatform {
               + screenId
               + "'");
     }
-    return handled.getScreenHandler();
+    return handled.getContainer();
   }
 
   @Override
@@ -1441,7 +1447,7 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public net.minecheck.platform.api.SlotInfo getSlot(int index, String screenId) {
-    net.minecraft.screen.ScreenHandler handler = openHandler(screenId);
+    net.minecraft.container.Container handler = openHandler(screenId);
     if (index < 0 || index >= handler.slots.size()) {
       throw new IllegalStateException(
           "slot index " + index + " out of range (0.." + (handler.slots.size() - 1) + ")");

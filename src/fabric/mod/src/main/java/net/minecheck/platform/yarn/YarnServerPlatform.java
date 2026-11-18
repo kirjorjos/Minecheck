@@ -8,7 +8,7 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.SpawnType;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -61,7 +61,7 @@ public class YarnServerPlatform implements ServerPlatform {
 
   private ServerWorld overworld() {
     MinecraftServer s = requireServer();
-    ServerWorld world = s.getWorld(net.minecraft.world.World.OVERWORLD);
+    ServerWorld world = s.getWorld(net.minecraft.world.dimension.DimensionType.OVERWORLD);
     if (world == null) {
       throw new IllegalStateException("overworld not available yet");
     }
@@ -132,7 +132,8 @@ public class YarnServerPlatform implements ServerPlatform {
     Identifier typeId = type == null ? null : Identifier.tryParse(type);
     ServerWorld world = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    for (Entity entity : world.iterateEntities()) {
+    // 1.15 has no iterateEntities: the same list comes from a typeless entity query.
+    for (Entity entity : world.getEntities((net.minecraft.entity.EntityType<?>) null, e -> true)) {
       // 1.16.5 keeps an entity until the tick after it was removed, and a dying mob stays listed
       // for
       // its death animation. Neither is observable as present on a client, so neither is a match.
@@ -166,8 +167,14 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          ServerWorld overworld = s.getWorld(net.minecraft.world.World.OVERWORLD);
-          return overworld != null && overworld.getChunkManager().getPendingTasks() == 0;
+          ServerWorld overworld = s.getWorld(net.minecraft.world.dimension.DimensionType.OVERWORLD);
+          // 1.15 exposes no pending-task count; the origin chunk every fixture stands on being
+          // generated is the observable form of "generation settled" there.
+          return overworld != null
+              && overworld
+                      .getChunkManager()
+                      .getChunk(0, 0, net.minecraft.world.chunk.ChunkStatus.FULL, false)
+                  != null;
         });
   }
 
@@ -232,7 +239,7 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     if (entity instanceof MobEntity mob) {
       mob.initialize(
-          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null, null);
+          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnType.COMMAND, null, null);
     }
     if (!world.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
@@ -265,7 +272,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.fromTag(state, compound);
+        blockEntity.fromTag(compound);
       }
     }
     return true;
@@ -315,6 +322,8 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     BlockPos pos = new BlockPos(x, y, z);
     StructurePlacementData placementData = new StructurePlacementData().setIgnoreEntities(true);
-    return template.place(world, pos, pos, placementData, world.getRandom(), 2);
+    // 1.15's Structure#place is void: it reports nothing, so a placed template is a success.
+    template.place(world, pos, placementData);
+    return true;
   }
 }

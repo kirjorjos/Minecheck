@@ -1,31 +1,26 @@
 package net.minecheck.platform.yarn;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import net.minecraft.block.Block;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.registry.Registry;
-import net.minecraft.world.biome.Biome;
-import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
-import net.minecraft.world.gen.chunk.FlatChunkGeneratorLayer;
-import net.minecraft.world.gen.chunk.StructuresConfig;
 
 /**
- * The flat world every Minecheck suite runs in, built from the declaration the harness also hands
+ * The flat world every Minecheck suite runs in, taken from the declaration the harness also hands
  * the dedicated server.
  *
  * <p>{@code tests/flat-world.json} is the one description of the world's layers and biome: it is
- * bundled into this mod, parsed here for the client worlds a script creates, and written verbatim
- * into the server's {@code generator-settings}. Both sides therefore build the same surface, so the
- * fixed coordinates and surface heights the fixtures assume cannot drift from the world they run
- * in.
+ * bundled into this mod, handed to level creation for the worlds a script creates, and written
+ * verbatim into the server's {@code generator-settings}. Both sides therefore build the same
+ * surface, so the fixed coordinates and surface heights the fixtures assume cannot drift from the
+ * world they run in.
+ *
+ * <p>1.15 has no dimension set to build a generator into: the world is created from a {@code
+ * LevelInfo} whose generator type selects flat generation and whose generator options are this
+ * JSON, so this class hands the declaration over as it stands.
  */
 final class FlatWorldSettings {
 
@@ -33,57 +28,24 @@ final class FlatWorldSettings {
 
   private FlatWorldSettings() {}
 
-  /**
-   * One block layer and how many blocks thick it is, counted up from the bottom of the world.
-   *
-   * <p>Plain fields rather than a record: the Gson bundled with this Minecraft version predates
-   * record support and fails to bind their final fields.
-   */
-  private static final class Layer {
-    private String block;
-    private int height;
-  }
-
-  /** The declaration as written in {@code tests/flat-world.json}. */
-  private static final class Declaration {
-    private List<Layer> layers;
-    private String biome;
-  }
-
-  private static Declaration declaration() {
+  /** The declaration, validated, ready for {@code LevelInfo#setGeneratorOptions}. */
+  static JsonElement declaration() {
     try (InputStream in = FlatWorldSettings.class.getResourceAsStream(RESOURCE)) {
       if (in == null) {
         throw new IllegalStateException(RESOURCE + " is missing from the mod's resources");
       }
-      Declaration declared =
-          new Gson().fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), Declaration.class);
-      if (declared == null || declared.layers == null || declared.layers.isEmpty()) {
+      JsonElement declared =
+          new Gson().fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), JsonElement.class);
+      if (declared == null || !declared.isJsonObject()) {
+        throw new IllegalStateException(RESOURCE + " is not a JSON object");
+      }
+      JsonElement layers = declared.getAsJsonObject().get("layers");
+      if (layers == null || !layers.isJsonArray() || layers.getAsJsonArray().size() == 0) {
         throw new IllegalStateException(RESOURCE + " declares no layers");
       }
       return declared;
     } catch (IOException e) {
       throw new UncheckedIOException("could not read " + RESOURCE, e);
     }
-  }
-
-  /** The declared world, laid over the preset this version would build so nothing else shifts. */
-  static FlatChunkGeneratorConfig config(Registry<Biome> biomes) {
-    Declaration declared = declaration();
-    List<FlatChunkGeneratorLayer> layers = new ArrayList<>();
-    for (Layer layer : declared.layers) {
-      Block block = Registry.BLOCK.get(new Identifier(layer.block));
-      layers.add(new FlatChunkGeneratorLayer(layer.height, block));
-    }
-    // 1.16.5 has no StructureSet registry: the flat settings carry a StructuresConfig, and the
-    // declaration describes bare ground, so the generator places no structure. Features and lakes
-    // stay off for the same reason — the suites place what they assert on themselves.
-    Biome biome = biomes.get(new Identifier(declared.biome));
-    return new FlatChunkGeneratorConfig(
-        biomes,
-        new StructuresConfig(Optional.empty(), java.util.Map.of()),
-        layers,
-        false,
-        false,
-        Optional.empty());
   }
 }
