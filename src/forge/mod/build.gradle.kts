@@ -4,6 +4,7 @@ import java.net.URI
 import java.security.MessageDigest
 import net.minecheck.gradle.LaunchDescriptor
 import org.gradle.api.Project
+import org.gradle.kotlin.dsl.withGroovyBuilder
 
 plugins {
   id("xyz.wagyourtail.unimined")
@@ -59,23 +60,27 @@ dependencies {
   lwjgl2Natives("org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209:natives-linux")
 }
 
+val lwjgl2NativeDir = layout.buildDirectory.dir("lwjgl2-natives")
+
 val extractLwjgl2Natives by
   tasks.registering(Copy::class) {
     from(lwjgl2Natives.map { zipTree(it) })
-    into(layout.buildDirectory.dir("lwjgl2-natives"))
+    into(lwjgl2NativeDir)
   }
 
-tasks
-  .matching { it.name == "runClient" }
-  .configureEach {
-    if (this is JavaExec) {
-      dependsOn(extractLwjgl2Natives)
-      jvmArgs(
-        "-Djava.library.path=" +
-          layout.buildDirectory.dir("lwjgl2-natives").get().asFile.absolutePath
-      )
+// The lifecycle tests launch from a descriptor written by `devHelperClientLaunch`, which reads
+// `runClient` and never executes it, so `runClient`'s own dependencies never run there. Wiring the
+// extraction here as well means the directory exists in both launch paths.
+gradle.projectsEvaluated {
+  tasks
+    .matching { it.name == "runClient" }
+    .configureEach {
+      if (this is JavaExec) {
+        dependsOn(extractLwjgl2Natives)
+        jvmArgs("-Djava.library.path=" + lwjgl2NativeDir.get().asFile.absolutePath)
+      }
     }
-  }
+}
 
 repositories {
   // LWJGL 2's natives are published by Mojang, not on Central.
@@ -242,6 +247,22 @@ fun downgradedRuntimeDir(owner: Project): File =
   owner.layout.buildDirectory.dir("minecheck/java" + downgradeTo!!).get().asFile
 
 /**
+ * The jar that replaces a downgraded class directory on a launch classpath, or null for an entry
+ * that is not one of those directories.
+ *
+ * <p>FML 1.12.2 walks the launch classpath looking for coremods and opens every entry with {@code
+ * new ZipFile}; handed a directory it throws {@code FileNotFoundException: ... (Is a directory)} on
+ * every launch. The directories stay on MOD_CLASSES — Forge loads the mod from them — but the
+ * classpath carries a jar of the same classes, which FML can read.
+ */
+fun downgradedJarFor(entry: File): File? {
+  if (downgradeTo == null) return null
+  val owner =
+    downgradedModuleProjects.firstOrNull { downgradedRuntimeDir(it) == entry } ?: return null
+  return layout.buildDirectory.file("minecheck/java8-jars/${owner.name}-java8.jar").get().asFile
+}
+
+/**
  * Maps a runtime-classpath entry onto its downgraded replacement: each project's compiled classes
  * and processed resources become that module's downgraded runtime directory, and the two project
  * jars are dropped because that directory replaces them. Everything else (Minecraft, Forge, LuaJ)
@@ -353,7 +374,10 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
   fun join(c: List<String>): String =
     LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
-    "classpath" to task.classpath.asPath,
+    "classpath" to
+      task.classpath.files.joinToString(File.pathSeparator) { entry ->
+        (downgradedJarFor(entry)?.takeIf { it.isFile } ?: entry).absolutePath
+      },
     "javaExecutable" to
       (pinnedJdkJavaFile.takeIf { it.isFile }?.absolutePath
         ?: task.javaLauncher.get().executablePath.asFile.absolutePath),
@@ -487,6 +511,7 @@ tasks.register("devHelperClientLaunch") {
     tasks.named("classes"),
     configurations.runtimeClasspath,
     tasks.named("devHelperDownloadAssets"),
+    extractLwjgl2Natives,
   )
   val out = layout.buildDirectory.file("minecheck/client-launch.txt")
   outputs.file(out)
@@ -548,6 +573,36 @@ if (downgradeTo != null) {
     configurations = listOf(downgradedRuntimeInput)
   }
 
+  val downgradedJarDir = layout.buildDirectory.dir("minecheck/java8-jars")
+
+  val packageDowngradedRuntime by
+    tasks.registering {
+      group = "minecheck"
+      description = "Packages the downgraded class directories so FML can scan them as jars"
+      dependsOn(
+        ":common:downgradedRuntime",
+        ":platform-api:downgradedRuntime",
+        ":forge-mod:downgradedRuntime",
+      )
+      outputs.dir(downgradedJarDir)
+      doLast {
+        val out = downgradedJarDir.get().asFile
+        out.mkdirs()
+        for (owner in downgradedModuleProjects) {
+          val dir = downgradedRuntimeDir(owner)
+          val jar = File(out, owner.name + "-java8.jar")
+          jar.delete()
+          ant.withGroovyBuilder { "zip"("destfile" to jar, "basedir" to dir) }
+        }
+      }
+    }
+
+  // The descriptors are written from the run tasks without executing them, so the jar packaging
+  // has to be a dependency of the descriptor tasks too.
+  tasks
+    .matching { it.name == "devHelperClientLaunch" || it.name == "devHelperServerLaunch" }
+    .configureEach { dependsOn(packageDowngradedRuntime) }
+
   // The dev runs (and the descriptors the lifecycle tests launch from) get the same treatment:
   // their classpath and unimined's MOD_CLASSES both point at the downgraded directories.
   gradle.projectsEvaluated {
@@ -556,6 +611,7 @@ if (downgradeTo != null) {
       .configureEach {
         if (this is JavaExec) {
           dependsOn(
+            packageDowngradedRuntime,
             ":common:downgradedRuntime",
             ":platform-api:downgradedRuntime",
             ":forge-mod:downgradedRuntime",

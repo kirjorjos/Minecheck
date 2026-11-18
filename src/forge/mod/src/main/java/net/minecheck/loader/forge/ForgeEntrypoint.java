@@ -54,6 +54,7 @@ public class ForgeEntrypoint {
   private ForgeNetworkPlatform network;
   private volatile ScriptEngine engine;
   private final AtomicBoolean serverTickRunning = new AtomicBoolean();
+  private final AtomicBoolean clientTickRunning = new AtomicBoolean();
   private final AtomicBoolean rulesApplied = new AtomicBoolean();
 
   @Mod.EventHandler
@@ -186,7 +187,20 @@ public class ForgeEntrypoint {
     client.pumpViewWindow();
     if (client.isBootComplete()) {
       client.allowUnfocusedPlay();
-      e.tick();
+      // Not inline: on 1.12.2 the client tick runs on the JVM's main thread, and LuaJ refuses to
+      // yield a coroutine resumed there ("cannot yield main thread") — which every waitFor does.
+      // Hand the tick to a worker like the server path does, one at a time so a slow script step
+      // cannot overlap itself.
+      if (clientTickRunning.compareAndSet(false, true)) {
+        CompletableFuture.runAsync(
+            () -> {
+              try {
+                e.tick();
+              } finally {
+                clientTickRunning.set(false);
+              }
+            });
+      }
     }
   }
 
