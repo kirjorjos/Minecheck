@@ -159,6 +159,11 @@ public class YarnServerPlatform implements ServerPlatform {
     return java.util.List.copyOf(out);
   }
 
+  /** Loaded-chunk count seen on the previous poll, and how many polls in a row it has held. */
+  private int lastLoadedChunks = -1;
+
+  private int quietPolls;
+
   @Override
   public boolean isWorldGenSettled() {
     MinecraftServer s = server;
@@ -168,15 +173,35 @@ public class YarnServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           ServerWorld overworld = s.getWorld(net.minecraft.world.dimension.DimensionType.OVERWORLD);
-          // 1.15 exposes no pending-task count; the origin chunk every fixture stands on being
-          // generated is the observable form of "generation settled" there.
-          return overworld != null
-              && overworld
-                      .getChunkManager()
-                      .getChunk(0, 0, net.minecraft.world.chunk.ChunkStatus.FULL, false)
+          if (overworld == null) {
+            return false;
+          }
+          // 1.15 exposes no pending-task count. Two observables stand in for it: the spawn chunk,
+          // which vanilla keeps loaded through its START ticket, is generated — and the manager has
+          // stopped taking chunks on. A region still being generated grows every few ticks; a
+          // finished one sits still. Asking for chunk (0, 0) instead can never answer, because the
+          // spawn region sits wherever the seed put it and a server with no player online loads
+          // nothing else.
+          net.minecraft.server.world.ServerChunkManager chunks = overworld.getChunkManager();
+          net.minecraft.util.math.BlockPos spawn = overworld.getSpawnPos();
+          boolean spawnReady =
+              chunks.getChunk(
+                      spawn.getX() >> 4,
+                      spawn.getZ() >> 4,
+                      net.minecraft.world.chunk.ChunkStatus.FULL,
+                      false)
                   != null;
+          int loaded = chunks.getLoadedChunkCount();
+          quietPolls = loaded == lastLoadedChunks ? quietPolls + 1 : 0;
+          lastLoadedChunks = loaded;
+          return spawnReady && quietPolls >= QUIET_POLLS;
         });
   }
+
+  /**
+   * How many consecutive polls without a new chunk count as "generation has stopped taking work".
+   */
+  private static final int QUIET_POLLS = 20;
 
   @Override
   public Integer groundHeight(int x, int z) {
