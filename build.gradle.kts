@@ -640,6 +640,11 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
     coordinator = "client-features-client.lua"
     script = "client-features-client.lua"
     liveDriverFile.set(layout.projectDirectory.file("tests/scripts/live-driver.txt"))
+    // The camera and the run's view window are part of the client surface these suites cover: the
+    // camera is installed in `assist` (a lifecycle run has no human, so Lua drives it), and the
+    // view window is on, which exercises the documented non-fatal path under xvfb.
+    cameraMode.set("assist")
+    viewWindow.set(true)
     scriptsDir = layout.projectDirectory.dir("tests/scripts").asFile.absolutePath
     runDir = layout.projectDirectory.dir("$runRoot/run/client").asFile.absolutePath
     worldName = "minecheck_world"

@@ -114,7 +114,7 @@ Each run reads `config/minecheck/config.json` from the game's run directory. All
 | `restoreVanillaCamera` | boolean | `false` | Leave the camera and render path completely untouched — no render-delta pin, no capture readback. Scripting keeps working; every `captureScreenshot` fails. |
 | `ownTickClock` | boolean | `false` | Let the script hold, step and hand back the tick loop of the server this process runs (`pauseTicks` / `stepTicks` / `resumeTicks`). Off by default: owning the clock stops the world between captures, and a run that never asked for it should keep twenty ticks a second. |
 | `hideGameWindow` | boolean | `true` | Keep the client's own window from ever appearing: it is created visible never, not hidden afterwards. Set `false` for the ordinary window. |
-| `muteAudio` | boolean | `true` | Never open an audio device: no ALC context, source set or mixer thread is created. Set `false` to give the run sound back. |
+| `muteAudio` | boolean | `true` | Keep the run silent: the device open is refused where the loader allows a hook that early, and otherwise the startup device is closed and every play is suppressed. Set `false` to give the run sound back. |
 | `cameraMode` | string | `"off"` | `"off"`, `"assist"` or `"fullControl"`. `off` installs nothing: no camera entity, no bindings, no camera work in the render path. `assist` puts the human alongside Lua; a headless JVM has no human input at all, so only Lua drives it there. `restoreVanillaCamera` forces `"off"`. |
 | `cameraHorizontalSpeed` | number | `1.0` | Horizontal flight speed factor, 0–10. |
 | `cameraVerticalSpeed` | number | `1.0` | Vertical (jump/sneak) flight speed factor, 0–10. |
@@ -141,16 +141,18 @@ Four fields are about the client the run drives rather than about a script:
   commands and captures are all unaffected. It defaults to **on**; set it to `false` to get the
   ordinary client window back, and pair `viewWindow` with it when a run should be watchable at all.
   A config that cannot be read leaves the window visible rather than hiding it.
-- **`muteAudio`** keeps the sound engine from ever opening an audio device. The hook runs inside the
-  device open itself and refuses the handle, which is the path a machine with no sound card takes:
-  `SoundSystem` already catches it, and vanilla's existing no-audio state is what the rest of the
-  engine sees. Nothing after the device open happens — no ALC context, no source sets, no mixer
-  thread — because a scripted run has nobody to listen. It defaults to **on**; set it to `false` for
-  an audible client, which also brings the mixing work back. A config that cannot be read leaves
-  audio off, since nothing in a run checks sound and silence is the cheaper mistake. Vanilla
-  reports the refused device once at startup as `Error starting SoundSystem. Turning off sounds &
+- **`muteAudio`** keeps the run silent. On a loader that lets a hook reach the engine before it
+  starts, the device is never opened at all: the open is refused, which is the path a machine with
+  no sound card takes, and nothing after it happens — no ALC context, no source sets, no mixer
+  thread. Forge 28 has no such hook and posts no event a mod can receive before the engine starts,
+  so vanilla's startup device is closed on the first client tick, later sound reloads are refused,
+  and every play is suppressed before the engine mixes it. Either way a scripted run, which has
+  nobody to listen, never plays a sound. It defaults to **on**; set it to `false` for an audible
+  client, which also brings the mixing work back. A config that cannot be read leaves audio off,
+  since nothing in a run checks sound and silence is the cheaper mistake. Where the device open is
+  refused, vanilla reports it once at startup as `Error starting SoundSystem. Turning off sounds &
   music`; that line is this setting doing its job, not a fault, and Minecheck logs the same decision
-  as `muteAudio is on — no audio device will be opened` just above it.
+  just above it.
 - **`viewWindow`** opens a window that shows the client's frames when the game's own window is
   hidden. It is the run's **one** window: paired with `hideGameWindow=false` it opens nothing,
   because a client never has two windows at once. It installs no mouse listener and never grabs the
