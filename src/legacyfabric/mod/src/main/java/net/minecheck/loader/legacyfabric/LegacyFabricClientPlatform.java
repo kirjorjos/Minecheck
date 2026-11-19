@@ -313,9 +313,66 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     client.setScreen(new TitleScreen());
   }
 
+  /** Set by {@link #quit()} and applied from the client tick. */
+  private volatile boolean quitRequested;
+
   @Override
   public void quit() {
-    onClientThread(mc()::scheduleStop);
+    // Applied from the tick, like a leave: the teardown queues a client task and waits for it, so a
+    // quit that ran inside that queue waited for itself.
+    quitRequested = true;
+  }
+
+  /**
+   * Applies a pending {@link #quit()} from the client tick.
+   *
+   * <p>Dropping the world is what makes the integrated server write it. Clearing the client's
+   * running flag on its own left the save to a shutdown the process outran: the staged world held
+   * region files with no marker chunk in them, so the handoff server generated a world of its own
+   * and never saw the block the client had placed.
+   */
+  void applyPendingQuit() {
+    if (!quitRequested) {
+      return;
+    }
+    MinecraftClient client = mc();
+    if (!client.isOnThread()) {
+      return; // the tick is the only place this can run; anything else retries next tick
+    }
+    quitRequested = false;
+    // A held clock parks the server thread, and the save runs there.
+    net.minecheck.common.tick.TickClock.get().resume();
+    if (client.world != null && client.isIntegratedServerRunning()) {
+      net.minecraft.server.MinecraftServer server = LegacyFabricEntrypoint.server();
+      if (server != null) {
+        for (net.minecraft.server.world.ServerWorld world : server.worlds) {
+          if (world == null) {
+            continue;
+          }
+          // Written here rather than left to the shutdown save: that pass only takes the chunks it
+          // happens to unload, and the chunk a script just wrote stays loaded, so the marker was
+          // never on disk to hand over.
+          world.getChunkProvider().saveAllChunks(true);
+          world.getChunkProvider().flushChunks();
+        }
+      }
+      // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
+      // path is what makes the integrated server write its chunks before it stops.
+      client.connect(null);
+      client.setScreen(new TitleScreen());
+      // The write happens on the server's own thread as it stops, so the client stays up until that
+      // thread is done: leaving earlier is how the save ended up without the marker's chunk.
+      long deadline = System.currentTimeMillis() + 30_000L;
+      while (client.isIntegratedServerRunning() && System.currentTimeMillis() < deadline) {
+        try {
+          Thread.sleep(50L);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+      }
+    }
+    client.scheduleStop();
   }
 
   @Override

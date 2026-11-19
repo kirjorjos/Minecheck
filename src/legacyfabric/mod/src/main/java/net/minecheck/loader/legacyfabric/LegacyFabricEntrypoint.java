@@ -171,6 +171,9 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
     // queues a client task and waits for it, which cannot happen while that queue is draining.
     entrypoint.client.applyPendingLeave();
+    // Same reason, and the same place: a quit has to drop the world from the tick so the integrated
+    // server writes its save before the client stops.
+    entrypoint.client.applyPendingQuit();
     // The camera runs before the player does: it holds the body's rotation at the value the server
     // last saw, and doing that after the player ticked would be after the packet that carries the
     // change.
