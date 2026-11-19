@@ -1195,6 +1195,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       cmd.add("-s");
       cmd.add("-screen 0 1280x1024x24 -ac +extension GLX +render -noreset");
     }
+
     if (descriptorFile == null || !Files.isRegularFile(descriptorFile)) {
       getLogger()
           .lifecycle(
@@ -1207,7 +1208,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       cmd.addAll(systemProps);
       cmd.add(gradleTask);
       cmd.add("--console=plain");
-      return new ProcessBuilder(cmd);
+      ProcessBuilder wrapper = new ProcessBuilder(cmd);
+      addDisplayEnvironment(wrapper, useDisplay);
+      return wrapper;
     }
 
     Map<String, String> d = parseDescriptor(descriptorFile);
@@ -1245,8 +1248,23 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       pb.directory(new File(wd));
     }
 
+    addDisplayEnvironment(pb, useDisplay);
     pb.environment().putAll(LaunchDescriptor.parseEnvironment(d.get("environment")));
     return pb;
+  }
+
+  /**
+   * Points the GL stack at software rendering when the game runs under a virtual X server. A
+   * headless server has no GPU, and newer Mesa builds under Xvfb report no GLX configs at all
+   * unless the software path is asked for; LWJGL 2 enumerates those while Minecraft sets the window
+   * icon and dies with {@code ArrayIndexOutOfBoundsException: 0} when the list is empty.
+   */
+  private static void addDisplayEnvironment(ProcessBuilder pb, boolean useDisplay) {
+    if (!useDisplay) {
+      return;
+    }
+    pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+    pb.environment().put("GALLIUM_DRIVER", "llvmpipe");
   }
 
   /**
