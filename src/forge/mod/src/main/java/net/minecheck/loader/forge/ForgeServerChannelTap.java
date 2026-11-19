@@ -12,7 +12,7 @@ import java.util.logging.Logger;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.NetworkManager;
 import net.minecraft.server.MinecraftServer;
-import net.minecraftforge.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.FMLCommonHandler;
 
 /**
  * Dedicated-server <em>low-level frame tap</em>: the Forge-only way to observe another mod's

@@ -22,11 +22,12 @@ include(":platform-api")
 
 project(":platform-api").projectDir = file("src/platform-api")
 
-// No Forge on this line: 1.7.10 predates the userdev jar that unimined is built around (there is no
-// `forge-1.7.10-…-userdev.jar` to download, and the era's toolchain was ForgeGradle 1.2, which
-// needs
-// a Gradle this repo does not run) and 1.7.10's Forge predates Mixin entirely. Legacy Fabric covers
-// 1.7.10 with an intermediary and a yarn fork, so it is the one loader module here.
+// Forge on 1.7.10 is the FG2 era: `forge-1.7.10-…-userdev.jar` is published and unimined 1.4.1
+// carries the FG2 transformer beside its FG3 one, so this module builds like the other lines. The
+// line's Forge predates Mixin, so its hooks are native FML events, as on 1.12.2.
+include(":forge-mod")
+
+project(":forge-mod").projectDir = file("src/forge/mod")
 
 // No Fabric module here either: Fabric's loader starts at 1.14. Legacy Fabric is the intermediary
 // family that covers this line, so it gets a loader module of its own rather than sharing the

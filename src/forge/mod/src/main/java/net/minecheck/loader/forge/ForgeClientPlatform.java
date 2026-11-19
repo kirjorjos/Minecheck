@@ -55,7 +55,7 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.tileentity.TileEntitySign;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.world.EnumDifficulty;
 import net.minecraft.world.GameRules;
@@ -63,7 +63,7 @@ import net.minecraft.world.GameType;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
-import net.minecraftforge.fml.common.Loader;
+import cpw.mods.fml.common.Loader;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
@@ -916,7 +916,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     // a fresh 1.12.2 world puts its spawn away from the origin, so the server keeps only the spawn
     // chunks loaded and 0,0 stays generated-but-unloaded (`chunkExists` answers for loaded chunks).
     // Fixtures reach the origin by teleporting and then wait for that chunk themselves.
-    net.minecraft.util.math.BlockPos spawn = overworld.getSpawnPoint();
+    net.minecraft.util.BlockPos spawn = overworld.getSpawnPoint();
     boolean settled =
         overworld.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
     LOG.info(

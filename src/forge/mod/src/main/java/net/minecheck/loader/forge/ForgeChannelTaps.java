@@ -8,9 +8,9 @@ import io.netty.channel.ChannelPipeline;
 import java.util.Map;
 import java.util.logging.Logger;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.play.client.CPacketCustomPayload;
-import net.minecraft.network.play.server.SPacketCustomPayload;
-import net.minecraftforge.fml.common.network.internal.FMLProxyPacket;
+import net.minecraft.network.play.client.C17PacketCustomPayload;
+import net.minecraft.network.play.server.S3FPacketCustomPayload;
+import cpw.mods.fml.common.network.internal.FMLProxyPacket;
 
 /**
  * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical

@@ -30,9 +30,9 @@ unimined.minecraft {
   // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
   // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
   // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
-  mappings { mcp("stable", "39-1.12") }
+  mappings { mcp("stable", "12-1.7.10") }
   // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
-  minecraftForge { loader("14.23.5.2860") }
+  minecraftForge { loader("10.13.4.1614-1.7.10") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }

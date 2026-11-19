@@ -1,5 +1,6 @@
 package net.minecheck.loader.forge;
 
+import cpw.mods.fml.common.Loader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.logging.Level;
@@ -8,19 +9,18 @@ import net.minecheck.common.config.AudioPolicy;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.SoundManager;
 import net.minecraftforge.client.event.sound.PlaySoundEvent;
-import net.minecraftforge.fml.common.Loader;
 
 /**
  * Keeps this client silent, when {@code muteAudio} says so.
  *
- * <p>1.12.2 has neither Mixin nor an event that fires before the sound engine starts, so silence is
+ * <p>1.7.10 has neither Mixin nor an event that fires before the sound engine starts, so silence is
  * enforced twice: {@code PlaySoundEvent} refuses every play before the engine mixes it, and the
  * device vanilla opened during startup is shut down on the first client tick. The engine's own
  * {@code Library} object is asked to clean up, which is what closes the OpenAL device.
  *
- * <p>The one caveat this loader cannot avoid is the same as on 1.16.5: the device vanilla opens
- * before any mod runs exists for the few seconds between client start and the first tick, and a
- * later sound-system reload may reopen one.
+ * <p>This line's event carries the replacement as a public {@code result} field (a {@code
+ * SoundPoolEntry}) rather than a setter, and holding {@code null} there is what "play nothing" means
+ * to it.
  */
 final class ForgeSilentSound {
 
@@ -39,19 +39,16 @@ final class ForgeSilentSound {
     return AudioPolicy.muted(Loader.instance().getConfigDir().toPath());
   }
 
-  /**
-   * Refuses one play. Forge replaces the sound with whatever the event's result holds, so {@code
-   * null} means "play nothing" — the engine never sees it and nothing is mixed.
-   */
+  /** Refuses one play: a {@code null} result is the engine's own "nothing to play". */
   static void refuse(PlaySoundEvent event) {
     if (!muted()) {
       return;
     }
-    event.setResultSound(null);
+    event.result = null;
     if (!reported) {
       reported = true;
       LOG.info(
-          "Minecheck: muteAudio is on — no sound will be played (1.12.2 has no hook before the"
+          "Minecheck: muteAudio is on — no sound will be played (1.7.10 has no hook before the"
               + " engine starts, so vanilla's startup device is closed on the first client tick)");
     }
   }

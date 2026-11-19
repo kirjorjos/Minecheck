@@ -15,12 +15,12 @@ import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.BlockPos;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.gen.structure.template.PlacementSettings;
 import net.minecraft.world.gen.structure.template.Template;
 import net.minecraft.world.gen.structure.template.TemplateManager;
-import net.minecraftforge.fml.common.registry.ForgeRegistries;
+import cpw.mods.fml.common.registry.ForgeRegistries;
 
 public class ForgeServerPlatform implements ServerPlatform {
 
@@ -90,9 +90,9 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
   }
 
-  private static <T extends net.minecraftforge.registries.IForgeRegistryEntry<T>>
+  private static <T extends net.minecraftforge.fml.common.registry.IForgeRegistryEntry<T>>
       T requireRegistryEntry(
-          net.minecraftforge.registries.IForgeRegistry<T> registry,
+          net.minecraftforge.fml.common.registry.IForgeRegistry<T> registry,
           ResourceLocation id,
           String what) {
     T entry = registry.getValue(id);
@@ -222,7 +222,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           // The chunk the level spawned in, not chunk 0,0: a 1.12.2 world spawns its player away
           // from the origin and keeps only the spawn area loaded, so 0,0 is generated but unloaded
           // until a script teleports there and waits for it.
-          net.minecraft.util.math.BlockPos spawn = level.getSpawnPoint();
+          net.minecraft.util.BlockPos spawn = level.getSpawnPoint();
           return level.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
         });
   }
