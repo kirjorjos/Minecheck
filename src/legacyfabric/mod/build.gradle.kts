@@ -48,6 +48,35 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
+// --- Java 8 wiring (gradle.properties: minecheck.downgradeTo) -----------------------------------
+// The mod is compiled at 17 and downgraded to class file 52 in root build.gradle.kts. The dev runs
+// and the descriptors the lifecycle tests launch from have to read that downgraded output instead
+// of the raw compile output: a Java 8 JVM cannot load class file 61 at all.
+val downgradeTo = providers.gradleProperty("minecheck.downgradeTo").map { it.trim().toInt() }.orNull
+
+val downgradedModuleProjects = listOf(project(":common"), project(":platform-api"), project)
+
+fun downgradedRuntimeDir(owner: Project): File =
+  owner.layout.buildDirectory.dir("minecheck/java" + downgradeTo!!).get().asFile
+
+/**
+ * Maps a runtime-classpath entry onto its downgraded replacement: each project's compiled classes
+ * and processed resources become that module's downgraded runtime directory, and the other modules'
+ * jars are dropped because those directories carry the same classes. Everything else (Minecraft,
+ * the loader, LuaJ) is already loadable on Java 8 and is left alone.
+ */
+fun mapToDowngraded(file: File): File? {
+  if (downgradeTo == null) return file
+  for (owner in downgradedModuleProjects) {
+    val build = owner.layout.buildDirectory.get().asFile
+    if (file == File(build, "classes/java/main") || file == File(build, "resources/main")) {
+      return downgradedRuntimeDir(owner)
+    }
+    if (owner != project && file.parentFile == File(build, "libs")) return null
+  }
+  return file
+}
+
 // 1.12.2 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the
 // client dies with "no lwjgl64 in java.library.path" before it can open a window. Extract them from
 // the published natives artefact and point the client's library path at the directory.
@@ -74,6 +103,26 @@ gradle.projectsEvaluated {
       if (this is JavaExec) {
         dependsOn(extractLwjgl2Natives)
         jvmArgs("-Djava.library.path=" + lwjgl2NativeDir.get().asFile.absolutePath)
+        if (downgradeTo != null) {
+          dependsOn(
+            ":common:downgradedRuntime",
+            ":platform-api:downgradedRuntime",
+            ":legacyfabric-mod:downgradedRuntime",
+          )
+          classpath = files(classpath.files.mapNotNull { mapToDowngraded(it) })
+          // unimined hands the mod to the loader through MOD_CLASSES; the loader reads those
+          // paths rather than the classpath, so they point at the downgraded directories too.
+          val modClasses = environment["MOD_CLASSES"]
+          if (modClasses != null) {
+            environment["MOD_CLASSES"] =
+              modClasses.toString().split(File.pathSeparator).joinToString(File.pathSeparator) {
+                entry ->
+                val parts = entry.split("%%", limit = 2)
+                if (parts.size != 2) entry
+                else "${parts[0]}%%${mapToDowngraded(File(parts[1]))?.absolutePath ?: parts[1]}"
+              }
+          }
+        }
       }
     }
 }
@@ -111,12 +160,39 @@ tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
   filesMatching("fabric.mod.json") {
-    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
+    expand(
+      "version" to project.version.toString(),
+      "minecraft_version" to mcVersion,
+      "licence" to providers.gradleProperty("licence").getOrElse(""),
+    )
   }
 }
 
+// shadow copies `configurations` and asks each for its resolved artifacts, so the downgraded
+// inputs are declared as one: the runtime classpath minus the project outputs, plus the
+// downgraded directories that replace them.
+val downgradedRuntimeInput =
+  configurations.create("downgradedRuntimeInput") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+  }
+
+if (downgradeTo != null) {
+  dependencies.add(
+    downgradedRuntimeInput.name,
+    files(
+      downgradedModuleProjects.map { downgradedRuntimeDir(it) } +
+        project.configurations.runtimeClasspath.get().files.filter { mapToDowngraded(it) === it }
+    ),
+  )
+}
+
 tasks.shadowJar {
-  configurations = listOf(project.configurations.runtimeClasspath.get())
+  configurations =
+    listOf(
+      if (downgradeTo == null) project.configurations.runtimeClasspath.get()
+      else downgradedRuntimeInput
+    )
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces and
   // writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
@@ -169,10 +245,7 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
     "args" to join(task.args.orEmpty(), props),
     "jvmArgs" to join(task.jvmArgs.orEmpty(), props),
     "systemProperties" to
-      join(
-        task.systemProperties.map { (k, v) -> "$k=${v?.toString() ?: ""}" },
-        props,
-      ),
+      join(task.systemProperties.map { (k, v) -> "$k=${v?.toString() ?: ""}" }, props),
     "environment" to
       LaunchDescriptor.encodeEnvironment(
         task.environment.mapValues { (_, v) -> resolvePlaceholders(v?.toString() ?: "", props) }
@@ -189,14 +262,26 @@ fun writeDescriptor(task: JavaExec, out: File) {
 }
 
 tasks.register("devHelperClientLaunch") {
-  dependsOn(tasks.named("classes"), configurations.runtimeClasspath)
+  dependsOn(
+    tasks.named("classes"),
+    configurations.runtimeClasspath,
+    ":common:downgradedRuntime",
+    ":platform-api:downgradedRuntime",
+    ":legacyfabric-mod:downgradedRuntime",
+  )
   val out = layout.buildDirectory.file("minecheck/client-launch.txt")
   outputs.file(out)
   doLast { writeDescriptor(tasks.named("runClient").get() as JavaExec, out.get().asFile) }
 }
 
 tasks.register("devHelperServerLaunch") {
-  dependsOn(tasks.named("classes"), configurations.runtimeClasspath)
+  dependsOn(
+    tasks.named("classes"),
+    configurations.runtimeClasspath,
+    ":common:downgradedRuntime",
+    ":platform-api:downgradedRuntime",
+    ":legacyfabric-mod:downgradedRuntime",
+  )
   val out = layout.buildDirectory.file("minecheck/server-launch.txt")
   outputs.file(out)
   doLast { writeDescriptor(tasks.named("runServer").get() as JavaExec, out.get().asFile) }
