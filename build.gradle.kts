@@ -756,7 +756,10 @@ subprojects {
       .map { JavaVersion.toVersion(it.trim()) }
       .orNull
 
-  if (downgradeTarget != null && name in setOf("common", "platform-api", "forge-mod", "legacyfabric-mod")) {
+  if (
+    downgradeTarget != null &&
+      name in setOf("common", "platform-api", "forge-mod", "legacyfabric-mod")
+  ) {
     apply(plugin = "xyz.wagyourtail.jvmdowngrader")
 
     val target = downgradeTarget
