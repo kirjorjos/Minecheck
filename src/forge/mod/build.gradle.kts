@@ -661,8 +661,32 @@ val installPinnedJdk by
           .asFile
       archive.parentFile.mkdirs()
       if (!archive.isFile) {
-        URI(pinnedJdkArchive.url).toURL().openStream().use { input ->
-          archive.outputStream().use { input.copyTo(it) }
+        // Timeouts and one retry, for the reason the Stylua download has them (root build): a bare
+        // openStream() hangs until the socket gives up, and the build then reports a timeout that
+        // names neither the archive nor its URL.
+        var attempt = 0
+        while (true) {
+          attempt++
+          try {
+            val connection =
+              URI(pinnedJdkArchive.url).toURL().openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 600_000
+            connection.instanceFollowRedirects = true
+            connection.inputStream.use { input -> archive.outputStream().use { input.copyTo(it) } }
+            break
+          } catch (e: Exception) {
+            archive.delete()
+            if (attempt >= 3) {
+              throw GradleException(
+                "Minecheck: could not download ${pinnedJdkArchive.url}: ${e.message}", e
+              )
+            }
+            logger.warn(
+              "Minecheck: downloading ${pinnedJdkArchive.url} failed (attempt $attempt/3): ${e.message}"
+            )
+            Thread.sleep(2_000L * attempt)
+          }
         }
       }
       val actual =
