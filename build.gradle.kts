@@ -854,6 +854,40 @@ val styluaExe = styluaDir.map { it.file(styluaExeName).asFile }
 val styluaConfig = layout.projectDirectory.file("stylua.toml")
 val luaFiles = fileTree("tests/scripts") { include("*.lua") }
 
+/**
+ * Fetches a build tool, with the timeouts a build needs.
+ *
+ * <p>A bare `openStream()` has no connect or read timeout, so a release CDN that stops answering
+ * hangs until the socket itself gives up and the build dies with "Connection timed out" — a message
+ * that names neither the tool nor its URL, and that every job inherits because formatting is a
+ * dependency of the suites. The retry is here for the same reason: this is one archive from one
+ * host, and a transient failure of it should not fail a run that has nothing to do with it.
+ */
+fun downloadFile(url: String, dest: File) {
+  val attempts = 3
+  var last: Exception? = null
+  for (attempt in 1..attempts) {
+    try {
+      dest.parentFile.mkdirs()
+      val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
+      connection.connectTimeout = 30_000
+      connection.readTimeout = 300_000
+      connection.instanceFollowRedirects = true
+      connection.setRequestProperty("User-Agent", "minecheck-build")
+      connection.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+      return
+    } catch (e: Exception) {
+      last = e
+      dest.delete()
+      logger.warn("Minecheck: downloading $url failed (attempt $attempt/$attempts): ${e.message}")
+      if (attempt < attempts) {
+        Thread.sleep(2_000L * attempt)
+      }
+    }
+  }
+  throw GradleException("could not download $url: ${last?.message}", last)
+}
+
 val styluaDownload =
   tasks.register("styluaDownload") {
     val zip = layout.buildDirectory.file("stylua/$styluaVersion/$styluaTarget.zip")
@@ -862,10 +896,9 @@ val styluaDownload =
     doLast {
       val dest = zip.get().asFile
       if (!dest.exists()) {
-        dest.parentFile.mkdirs()
         val url =
           "https://github.com/JohnnyMorganz/StyLua/releases/download/v$styluaVersion/$styluaTarget.zip"
-        URI(url).toURL().openStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
+        downloadFile(url, dest)
       }
       val exe = styluaExe.get()
       if (!exe.exists()) {
