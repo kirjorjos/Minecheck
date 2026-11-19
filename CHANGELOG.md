@@ -20,7 +20,7 @@ Suggested shape, delete what you do not use:
 
 - First release of Minecheck for Minecraft 1.12.2, shipping the Forge build.
 - The shared script suites run on this line unmodified: the 1.13-era commands, selector arguments and
-  packet shapes they use are translated in the 1.12.2 platform (`LegacyCommandShim`, FML frame taps,
+  packet shapes they use are answered in the 1.12.2 platform (`LegacyCommandShim`, FML frame taps,
   per-part structure names, attribute base values).
 
 ## Changed
