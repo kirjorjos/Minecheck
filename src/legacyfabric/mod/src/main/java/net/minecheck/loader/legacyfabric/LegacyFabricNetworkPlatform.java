@@ -15,13 +15,13 @@ import net.minecheck.platform.api.net.WireFormatException;
  * <p>Legacy Fabric ships the loader and Mixin but no Fabric API, so there is no channel API to
  * register on: the mod's own channel travels as an ordinary {@code minecheck:main} custom payload,
  * sent with the packets vanilla already has and received through the two payload mixins. That is
- * the same wire shape the Forge line puts inside its {@code SimpleNetworkWrapper}, so a client and a
- * server of either loader can exchange the same encoded {@link MinecheckPacket} frames.
+ * the same wire shape the Forge line puts inside its {@code SimpleNetworkWrapper}, so a client and
+ * a server of either loader can exchange the same encoded {@link MinecheckPacket} frames.
  *
- * <p>Observing <em>another mod's</em> channel is the same hook: 1.12.2 hands every custom payload to
- * the play handler, unknown channels included, so the payload mixins see a foreign channel's bytes
- * as they arrive. No netty tap is needed here, and none is installed: a handler in the pipeline
- * below the play handler would be blind by construction.
+ * <p>Observing <em>another mod's</em> channel is the same hook: 1.12.2 hands every custom payload
+ * to the play handler, unknown channels included, so the payload mixins see a foreign channel's
+ * bytes as they arrive. No netty tap is needed here, and none is installed: a handler in the
+ * pipeline below the play handler would be blind by construction.
  */
 public class LegacyFabricNetworkPlatform implements NetworkPlatform {
 
@@ -48,7 +48,7 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
     if (dedicated) {
       return LegacyFabricEntrypoint.server() != null;
     }
-    return LegacyFabricClientPlatform.client() != null;
+    return net.minecraft.client.MinecraftClient.getInstance() != null;
   }
 
   @Override
@@ -68,8 +68,9 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
           player.networkHandler.sendPacket(LegacyPayloads.toClient(payload));
         }
       } else {
-        net.minecraft.client.MinecraftClient client = LegacyFabricClientPlatform.client();
-        if (client.getNetworkHandler() == null) {
+        net.minecraft.client.MinecraftClient client =
+            net.minecraft.client.MinecraftClient.getInstance();
+        if (client == null || client.getNetworkHandler() == null) {
           return false;
         }
         client.getNetworkHandler().sendPacket(LegacyPayloads.toServer(payload));
@@ -115,11 +116,11 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
   }
 
   /**
-   * Registers {@code observer} for {@code channel}. Unlike the Forge line this needs no per-connection
-   * install: the payload mixins are always in the path. A client that is not on a server yet still
-   * answers true, because the observer is what is being registered and the connection that matters
-   * may come later — the same reason the modern lines' channel registration does not depend on a
-   * live connection.
+   * Registers {@code observer} for {@code channel}. Unlike the Forge line this needs no
+   * per-connection install: the payload mixins are always in the path. A client that is not on a
+   * server yet still answers true, because the observer is what is being registered and the
+   * connection that matters may come later — the same reason the modern lines' channel registration
+   * does not depend on a live connection.
    */
   @Override
   public boolean observeChannel(String channel, Consumer<byte[]> observer) {
@@ -153,5 +154,63 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
   /** Whether the channel is the mod's own. */
   static boolean ours(String channel) {
     return CHANNEL_NAME.equals(channel);
+  }
+
+  /**
+   * One clientbound custom payload, straight off the netty thread.
+   *
+   * <p>Both consumers — the mod's own inbox and a watched channel — expect the game thread, so the
+   * payload is re-dispatched onto the client thread before it is handed over.
+   */
+  public static void onClientPayload(
+      net.minecraft.network.packet.s2c.play.CustomPayloadS2CPacket packet) {
+    if (packet == null) {
+      return;
+    }
+    String channel = packet.getChannel();
+    byte[] payload = LegacyPayloads.bytesOf(packet.getPayload());
+    if (channel == null || payload == null) {
+      return;
+    }
+    net.minecraft.client.MinecraftClient client =
+        net.minecraft.client.MinecraftClient.getInstance();
+    if (client == null) {
+      return;
+    }
+    client.execute(
+        () -> {
+          dispatch(channel, payload);
+          return null;
+        });
+  }
+
+  /**
+   * One serverbound custom payload, straight off the netty thread: re-dispatched onto the server
+   * thread, where both the inbox and the observers live.
+   */
+  public static void onServerPayload(
+      net.minecraft.network.packet.c2s.play.CustomPayloadC2SPacket packet) {
+    if (packet == null) {
+      return;
+    }
+    String channel = packet.getChannel();
+    byte[] payload = LegacyPayloads.bytesOf(packet.getPayload());
+    if (channel == null || payload == null) {
+      return;
+    }
+    net.minecraft.server.MinecraftServer server = LegacyFabricEntrypoint.server();
+    if (server == null) {
+      return;
+    }
+    server.submit(() -> dispatch(channel, payload));
+  }
+
+  /** Hands one payload to the mod's inbox or to the channel's observers. */
+  private static void dispatch(String channel, byte[] payload) {
+    if (ours(channel)) {
+      deliver(payload);
+      return;
+    }
+    observe(channel, payload);
   }
 }

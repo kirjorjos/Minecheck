@@ -12,12 +12,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * Sees every clientbound custom payload as it arrives.
  *
  * <p>1.12.2 hands the play handler every custom payload, including channels it does not know, so
- * this hook is both the mod's own receiver and the observation point for another mod's channel —
- * no netty tap is needed below the handler, and one would see nothing anyway.
+ * this hook is both the mod's own receiver and the observation point for another mod's channel — no
+ * netty tap is needed below the handler, and one would see nothing anyway.
  *
  * <p>{@code HEAD} and not {@code TAIL}: vanilla's own handling of an unknown channel only logs, but
- * a payload on a channel that is also registered by another mod must be observed whether or not that
- * mod's handler consumes it.
+ * a payload on a channel that is also registered by another mod must be observed whether or not
+ * that mod's handler consumes it.
  */
 @Mixin(ClientPlayNetworkHandler.class)
 public class ClientCustomPayloadMixin {

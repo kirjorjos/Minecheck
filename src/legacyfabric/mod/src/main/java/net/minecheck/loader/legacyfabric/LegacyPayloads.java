@@ -24,7 +24,8 @@ final class LegacyPayloads {
   }
 
   private static PacketByteBuf buffer(byte[] payload) {
-    PacketByteBuf buf = new PacketByteBuf(io.netty.buffer.Unpooled.buffer(Math.max(1, payload.length)));
+    PacketByteBuf buf =
+        new PacketByteBuf(io.netty.buffer.Unpooled.buffer(Math.max(1, payload.length)));
     buf.writeBytes(payload);
     return buf;
   }

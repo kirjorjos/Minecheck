@@ -12,9 +12,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  *
  * <p>Legacy Fabric ships the loader and Mixin but not Fabric API, so the tick callbacks the newer
  * lines get from {@code ClientTickEvents} are taken from the client's own tick method here instead.
- * Both phases are injected: the camera and the leave request run before vanilla ticks the player
- * (a rotation the server has already seen must not be sent afterwards), and the script step runs
- * after the tick that produced the frame it may capture.
+ * Both phases are injected: the camera and the leave request run before vanilla ticks the player (a
+ * rotation the server has already seen must not be sent afterwards), and the script step runs after
+ * the tick that produced the frame it may capture.
  *
  * <p>{@code require = 1}: a moved tick method would silently stop every client script, and a client
  * that boots and never runs is worse than one that fails to start.
