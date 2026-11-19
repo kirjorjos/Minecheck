@@ -11,17 +11,18 @@ import net.minecheck.common.config.CameraPolicy;
 import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
-import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.MultiPlayerLevel;
-import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.util.Mth;
+import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.util.math.MathHelper;
 import net.minecraftforge.fml.client.registry.ClientRegistry;
-import net.minecraftforge.fml.loading.FMLPaths;
-import org.lwjgl.glfw.GLFW;
+import net.minecraftforge.fml.common.Loader;
+import org.lwjgl.input.Keyboard;
+import org.lwjgl.opengl.Display;
 
 /**
- * The camera on the mojmap side.
+ * The camera on the 1.12.2 side.
  *
  * <p>It owns the one camera entity, the key binding and the per-tick flight, and delegates every
  * decision about <em>where</em> the camera is to {@link CameraController} in {@code :common}, which
@@ -41,14 +42,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
   /** Used when the config cannot be read at construction: the documented default speed. */
   private static final double DEFAULT_SPEED = 1.0;
 
-  /** The installed platform, for the scroll mixin: a wheel notch has no per-instance hook. */
+  /** The installed platform, for the scroll hook: a wheel notch has no per-instance hook. */
   private static volatile ForgeCameraPlatform current;
 
   private final ForgeClientPlatform owner;
   private final CameraMode mode;
   private final CameraController controller;
 
-  private KeyMapping toggleKey;
+  private KeyBinding toggleKey;
   private MinecheckCameraEntity camera;
 
   /**
@@ -61,7 +62,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   public ForgeCameraPlatform(ForgeClientPlatform owner) {
     this.owner = owner;
-    Path configDir = FMLPaths.CONFIGDIR.get();
+    Path configDir = Loader.instance().getConfigDir().toPath();
     this.mode = CameraPolicy.mode(configDir);
 
     double horizontal = DEFAULT_SPEED;
@@ -98,13 +99,11 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return false;
     }
     Minecraft mc = mc();
-    if (mc.screen != null) {
+    if (mc.currentScreen != null) {
       return false;
     }
-    long handle = mc.window.getWindow();
     boolean control =
-        GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
-            || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
+        Keyboard.isKeyDown(Keyboard.KEY_LCONTROL) || Keyboard.isKeyDown(Keyboard.KEY_RCONTROL);
     if (!control) {
       return false;
     }
@@ -118,12 +117,12 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     toggleKey =
-        new KeyMapping("key.minecheck.camera.toggle", GLFW.GLFW_KEY_F4, "key.categories.minecheck");
+        new KeyBinding("key.minecheck.camera.toggle", Keyboard.KEY_F4, "key.categories.minecheck");
     ClientRegistry.registerKeyBinding(toggleKey);
   }
 
   /**
-   * Whether the human's mouse and keys are the camera's this tick. The movement mixin asks this to
+   * Whether the human's mouse and keys are the camera's this tick. The movement hook asks this to
    * keep the player idle, so it must answer the same way the flight does.
    */
   public static boolean steering() {
@@ -131,7 +130,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     return platform != null
         && platform.active()
         && platform.humanInputAllowed()
-        && Minecraft.getInstance().screen == null;
+        && Minecraft.getMinecraft().currentScreen == null;
   }
 
   @Override
@@ -163,7 +162,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     }
     boolean allowed = humanInputAllowed();
     if (toggleKey != null) {
-      while (toggleKey.consumeClick()) {
+      while (toggleKey.isPressed()) {
         if (allowed) {
           toggle();
         }
@@ -173,13 +172,13 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     Minecraft mc = mc();
-    if (mc.player == null || mc.level == null || camera.level != mc.level) {
+    if (mc.player == null || mc.world == null || camera.world != mc.world) {
       detach();
       return;
     }
-    // Re-asserted every tick: vanilla computes the render camera from this field, and a spectator
-    // switch or a dimension change may have pointed it somewhere else since the last tick.
-    mc.cameraEntity = camera;
+    // Re-asserted every tick: vanilla computes the render camera from this field, and a respawn or
+    // a dimension change may have pointed it somewhere else since the last tick.
+    mc.setRenderViewEntity(camera);
     steer(mc.player, allowed);
     CameraPose moved = controller.tick(inputs(), allowed);
     if (moved != null) {
@@ -210,33 +209,32 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private void attach() {
     Minecraft mc = mc();
-    LocalPlayer player = mc.player;
-    MultiPlayerLevel level = mc.level;
+    EntityPlayerSP player = mc.player;
+    WorldClient level = mc.world;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
       return;
     }
     CameraPose start =
         new CameraPose(
-            player.x, player.y + player.getEyeHeight(), player.z, player.yRot, player.xRot);
-    baseYaw = player.yRot;
-    basePitch = player.xRot;
+            player.posX,
+            player.posY + player.getEyeHeight(),
+            player.posZ,
+            player.rotationYaw,
+            player.rotationPitch);
+    baseYaw = player.rotationYaw;
+    basePitch = player.rotationPitch;
     if (!controller.attach(start)) {
       return;
     }
     MinecheckCameraEntity entity = new MinecheckCameraEntity(level);
-    entity.setId(CAMERA_ENTITY_ID);
+    entity.setEntityId(CAMERA_ENTITY_ID);
     // Placed before the first publish so the old position is the camera's, not the origin: without
     // this the first rendered frame would interpolate the camera in from 0,0,0.
-    entity.setPos(start.x(), start.y(), start.z());
+    entity.setPosition(start.x(), start.y(), start.z());
     place(entity, start);
-    // The public path, deliberately. An invoker mixin on ClientLevel cannot be cast to from a class
-    // living in the mod's module on Forge: the game module does not read this one, so the interface
-    // is never added to the target and the cast throws ClassCastException at attach (measured). The
-    // entity's own tick is empty — the platform publishes its position and its old-position
-    // snapshot itself — so being in the level only means the level knows the entity.
-    level.addFreshEntity(entity);
-    mc.cameraEntity = entity;
+    level.spawnEntity(entity);
+    mc.setRenderViewEntity(entity);
     camera = entity;
     LOG.info(
         String.format(
@@ -250,10 +248,10 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     controller.detach();
     Minecraft mc = mc();
     if (entity != null) {
-      if (mc.cameraEntity == entity) {
-        mc.cameraEntity = mc.player;
+      if (mc.getRenderViewEntity() == entity) {
+        mc.setRenderViewEntity(mc.player);
       }
-      entity.remove();
+      entity.setDead();
     }
     LOG.info("Minecheck: camera detached");
   }
@@ -264,12 +262,12 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    * this entity's tick is empty on purpose, so it is done here instead.
    */
   private static void place(MinecheckCameraEntity entity, CameraPose pose) {
-    entity.xo = entity.x;
-    entity.yo = entity.y;
-    entity.zo = entity.z;
-    entity.setPos(pose.x(), pose.y(), pose.z());
-    entity.yRot = pose.yaw();
-    entity.xRot = pose.pitch();
+    entity.prevPosX = entity.posX;
+    entity.prevPosY = entity.posY;
+    entity.prevPosZ = entity.posZ;
+    entity.setPosition(pose.x(), pose.y(), pose.z());
+    entity.rotationYaw = pose.yaw();
+    entity.rotationPitch = pose.pitch();
   }
 
   // ------------------------------------------------------------------ input
@@ -287,9 +285,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     if (owner.viewWindowVisible()) {
       return true;
     }
-    long handle = mc().window.getWindow();
-    return GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_VISIBLE) == GLFW.GLFW_TRUE
-        && GLFW.glfwGetWindowAttrib(handle, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
+    return Display.isVisible() && Display.isActive();
   }
 
   /**
@@ -298,36 +294,32 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    * <p>Vanilla has already turned the player by the time this runs (mouse deltas are applied during
    * a frame, not a tick), so the turn is read as a delta from the angle the player is held at,
    * added to the camera, and the player is put back before the tick that would send it. The body is
-   * therefore always at the rotation the server last saw: an observer cannot tell it from an idle
-   * one, and the human keeps the view they were pointing at once the camera detaches.
-   *
-   * <p>When the human's look is not the camera's this tick the held angle follows the player
-   * instead, so a script that turns the player is not later read as one enormous mouse delta.
+   * therefore always at the rotation the server last saw.
    */
-  private void steer(LocalPlayer player, boolean allowed) {
-    if (!allowed || mc().screen != null) {
-      baseYaw = player.yRot;
-      basePitch = player.xRot;
+  private void steer(EntityPlayerSP player, boolean allowed) {
+    if (!allowed || mc().currentScreen != null) {
+      baseYaw = player.rotationYaw;
+      basePitch = player.rotationPitch;
       return;
     }
-    float yawDelta = Mth.wrapDegrees(player.yRot - (float) baseYaw);
-    float pitchDelta = player.xRot - (float) basePitch;
-    player.yRot = (float) baseYaw;
-    player.xRot = (float) basePitch;
+    float yawDelta = MathHelper.wrapDegrees(player.rotationYaw - (float) baseYaw);
+    float pitchDelta = player.rotationPitch - (float) basePitch;
+    player.rotationYaw = (float) baseYaw;
+    player.rotationPitch = (float) basePitch;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) {
       return;
     }
-    CameraPose current = controller.pose();
-    if (current == null) {
+    CameraPose pose = controller.pose();
+    if (pose == null) {
       return;
     }
     CameraPose turned =
         new CameraPose(
-            current.x(),
-            current.y(),
-            current.z(),
-            Mth.wrapDegrees((float) current.yaw() + yawDelta),
-            Mth.clamp((float) current.pitch() + pitchDelta, -90.0f, 90.0f));
+            pose.x(),
+            pose.y(),
+            pose.z(),
+            MathHelper.wrapDegrees((float) pose.yaw() + yawDelta),
+            MathHelper.clamp((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
     if (controller.setPose(turned)) {
       place(camera, turned);
     }
@@ -335,20 +327,20 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private CameraMovement.Inputs inputs() {
     Minecraft mc = mc();
-    if (mc.screen != null) {
+    if (mc.currentScreen != null) {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.options.keyUp.isDown(),
-        mc.options.keyDown.isDown(),
-        mc.options.keyLeft.isDown(),
-        mc.options.keyRight.isDown(),
-        mc.options.keyJump.isDown(),
-        mc.options.keySneak.isDown(),
-        mc.options.keySprint.isDown());
+        mc.gameSettings.keyBindForward.isKeyDown(),
+        mc.gameSettings.keyBindBack.isKeyDown(),
+        mc.gameSettings.keyBindLeft.isKeyDown(),
+        mc.gameSettings.keyBindRight.isKeyDown(),
+        mc.gameSettings.keyBindJump.isKeyDown(),
+        mc.gameSettings.keyBindSneak.isKeyDown(),
+        mc.gameSettings.keyBindSprint.isKeyDown());
   }
 
   private static Minecraft mc() {
-    return Minecraft.getInstance();
+    return Minecraft.getMinecraft();
   }
 }

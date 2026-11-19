@@ -4,6 +4,7 @@ import java.net.URI
 import java.security.MessageDigest
 import net.minecheck.gradle.LaunchDescriptor
 import org.gradle.api.Project
+import org.gradle.kotlin.dsl.withGroovyBuilder
 
 plugins {
   id("xyz.wagyourtail.unimined")
@@ -25,18 +26,22 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { mojmap() }
-  minecraftForge { loader("28.2.30") }
+  // No Mojang mappings this far back: 1.12.2 is mapped by MCP, and stable_39 is the last stable
+  // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
+  // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
+  // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
+  mappings { mcp("stable", "39-1.12") }
+  // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
+  minecraftForge { loader("14.23.5.2860") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge 28 (1.14.4) runs on Java 8 and only Java 8: its ModLauncher calls
-// sun.security.util.ManifestEntryVerifier(Manifest), a constructor that later JDK 8 builds no
-// longer have. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
+// Forge on 1.12.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
-// than whichever one happens to be installed. The line also has no Mixin at all — Forge only
-// starts shipping it with 1.15 — so its client hooks are native Forge events.
+// than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
+// reaches Forge with 1.15 — so its client hooks are native Forge events.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 tasks
@@ -46,7 +51,40 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
+// 1.12.2 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
+// client died with "no lwjgl64 in java.library.path" before it could open a window. Extract them
+// from the published natives artefact and point the client's library path at the directory.
+val lwjgl2Natives by configurations.creating
+
+dependencies {
+  lwjgl2Natives("org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209:natives-linux")
+}
+
+val lwjgl2NativeDir = layout.buildDirectory.dir("lwjgl2-natives")
+
+val extractLwjgl2Natives by
+  tasks.registering(Copy::class) {
+    from(lwjgl2Natives.map { zipTree(it) })
+    into(lwjgl2NativeDir)
+  }
+
+// The lifecycle tests launch from a descriptor written by `devHelperClientLaunch`, which reads
+// `runClient` and never executes it, so `runClient`'s own dependencies never run there. Wiring the
+// extraction here as well means the directory exists in both launch paths.
+gradle.projectsEvaluated {
+  tasks
+    .matching { it.name == "runClient" }
+    .configureEach {
+      if (this is JavaExec) {
+        dependsOn(extractLwjgl2Natives)
+        jvmArgs("-Djava.library.path=" + lwjgl2NativeDir.get().asFile.absolutePath)
+      }
+    }
+}
+
 repositories {
+  // LWJGL 2's natives are published by Mojang, not on Central.
+  maven("https://libraries.minecraft.net/") { content { includeGroup("org.lwjgl.lwjgl") } }
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
   maven("https://maven.shedaniel.me/") { content { includeGroup("me.shedaniel.cloth") } }
@@ -59,12 +97,10 @@ tasks.processResources {
   from(rootProject.file("tests/flat-world.json"))
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
-  filesMatching("META-INF/mods.toml") {
-    expand(
-      "version" to project.version.toString(),
-      "minecraft_version" to mcVersion,
-      "minecraft_next" to mcNext,
-    )
+  // 1.12.2's FML reads mcmod.info, not mods.toml; the version and game version are stamped in
+  // from the same single source (`gradle.properties` and the project version).
+  filesMatching("mcmod.info") {
+    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
   }
 }
 
@@ -211,6 +247,26 @@ fun downgradedRuntimeDir(owner: Project): File =
   owner.layout.buildDirectory.dir("minecheck/java" + downgradeTo!!).get().asFile
 
 /**
+ * The jar that replaces a downgraded class directory on a launch classpath, or null for an entry
+ * that is not one of those directories.
+ *
+ * <p>FML 1.12.2 walks the launch classpath looking for coremods and opens every entry with {@code
+ * new ZipFile}; handed a directory it throws {@code FileNotFoundException: ... (Is a directory)} on
+ * every launch. The directories stay on MOD_CLASSES — Forge loads the mod from them — but the
+ * classpath carries a jar of the same classes, which FML can read.
+ *
+ * <p>The jar holds the classes because the launch classloader must be able to see them (mixins and
+ * coremod hooks resolve mod types from it), which is also why a stale jar is worse than useless: it
+ * shadows the directories. The task that writes it therefore always reruns.
+ */
+fun downgradedJarFor(entry: File): File? {
+  if (downgradeTo == null) return null
+  val owner =
+    downgradedModuleProjects.firstOrNull { downgradedRuntimeDir(it) == entry } ?: return null
+  return layout.buildDirectory.file("minecheck/java8-jars/${owner.name}-java8.jar").get().asFile
+}
+
+/**
  * Maps a runtime-classpath entry onto its downgraded replacement: each project's compiled classes
  * and processed resources become that module's downgraded runtime directory, and the two project
  * jars are dropped because that directory replaces them. Everything else (Minecraft, Forge, LuaJ)
@@ -322,7 +378,10 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
   fun join(c: List<String>): String =
     LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
-    "classpath" to task.classpath.asPath,
+    "classpath" to
+      task.classpath.files.joinToString(File.pathSeparator) { entry ->
+        (downgradedJarFor(entry)?.takeIf { it.isFile } ?: entry).absolutePath
+      },
     "javaExecutable" to
       (pinnedJdkJavaFile.takeIf { it.isFile }?.absolutePath
         ?: task.javaLauncher.get().executablePath.asFile.absolutePath),
@@ -456,6 +515,7 @@ tasks.register("devHelperClientLaunch") {
     tasks.named("classes"),
     configurations.runtimeClasspath,
     tasks.named("devHelperDownloadAssets"),
+    extractLwjgl2Natives,
   )
   val out = layout.buildDirectory.file("minecheck/client-launch.txt")
   outputs.file(out)
@@ -517,6 +577,41 @@ if (downgradeTo != null) {
     configurations = listOf(downgradedRuntimeInput)
   }
 
+  val downgradedJarDir = layout.buildDirectory.dir("minecheck/java8-jars")
+
+  val packageDowngradedRuntime by
+    tasks.registering {
+      group = "minecheck"
+      description = "Packages the downgraded class directories so FML can scan them as jars"
+      dependsOn(
+        ":common:downgradedRuntime",
+        ":platform-api:downgradedRuntime",
+        ":forge-mod:downgradedRuntime",
+      )
+      outputs.dir(downgradedJarDir)
+      // Always repackage. The task declares no inputs (its content comes from other projects'
+      // outputs), so Gradle judged it up to date while the directories underneath had been rebuilt
+      // — and the stale jars sat on the launch classpath, where parent-first delegation made the
+      // game load yesterday's mod classes instead of the directories on MOD_CLASSES.
+      outputs.upToDateWhen { false }
+      doLast {
+        val out = downgradedJarDir.get().asFile
+        out.mkdirs()
+        for (owner in downgradedModuleProjects) {
+          val dir = downgradedRuntimeDir(owner)
+          val jar = File(out, owner.name + "-java8.jar")
+          jar.delete()
+          ant.withGroovyBuilder { "zip"("destfile" to jar, "basedir" to dir) }
+        }
+      }
+    }
+
+  // The descriptors are written from the run tasks without executing them, so the jar packaging
+  // has to be a dependency of the descriptor tasks too.
+  tasks
+    .matching { it.name == "devHelperClientLaunch" || it.name == "devHelperServerLaunch" }
+    .configureEach { dependsOn(packageDowngradedRuntime) }
+
   // The dev runs (and the descriptors the lifecycle tests launch from) get the same treatment:
   // their classpath and unimined's MOD_CLASSES both point at the downgraded directories.
   gradle.projectsEvaluated {
@@ -525,6 +620,7 @@ if (downgradeTo != null) {
       .configureEach {
         if (this is JavaExec) {
           dependsOn(
+            packageDowngradedRuntime,
             ":common:downgradedRuntime",
             ":platform-api:downgradedRuntime",
             ":forge-mod:downgradedRuntime",

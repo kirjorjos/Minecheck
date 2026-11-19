@@ -1188,7 +1188,14 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     if (useDisplay) {
       cmd.add(resolveExecutable("xvfb-run"));
       cmd.add("-a");
+      // Pinned, not left to xvfb-run's default screen: LWJGL 2 reads the X screen's modes while
+      // Minecraft sets the window icon, before any window exists, and a screen it cannot enumerate
+      // (no 24-bit depth, no GLX, no render extension) throws ArrayIndexOutOfBoundsException there
+      // and the game dies during initialization.
+      cmd.add("-s");
+      cmd.add(XVFB_SCREEN);
     }
+
     if (descriptorFile == null || !Files.isRegularFile(descriptorFile)) {
       getLogger()
           .lifecycle(
@@ -1201,7 +1208,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       cmd.addAll(systemProps);
       cmd.add(gradleTask);
       cmd.add("--console=plain");
-      return new ProcessBuilder(cmd);
+      ProcessBuilder wrapper = new ProcessBuilder(cmd);
+      addDisplayEnvironment(wrapper, useDisplay);
+      return wrapper;
     }
 
     Map<String, String> d = parseDescriptor(descriptorFile);
@@ -1230,13 +1239,36 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     cmd.addAll(LaunchDescriptor.splitList(d.get("args")));
 
     ProcessBuilder pb = new ProcessBuilder(cmd);
+    // The launch command, so a run that never reaches the game says why: the display wrapper, the
+    // JVM it picked and the arguments it handed on are the first things to check when a runner's
+    // client dies during initialization.
+    getLogger().lifecycle("Minecheck: launching {}", String.join(" ", cmd));
     String wd = d.get("workingDir");
     if (wd != null && !wd.isBlank()) {
       pb.directory(new File(wd));
     }
 
+    addDisplayEnvironment(pb, useDisplay);
     pb.environment().putAll(LaunchDescriptor.parseEnvironment(d.get("environment")));
     return pb;
+  }
+
+  /** The screen the client boots against; see {@link #launcherBuilder}. */
+  private static final String XVFB_SCREEN =
+      "-screen 0 1280x1024x24 -ac +extension GLX +render -noreset";
+
+  /**
+   * Points the GL stack at software rendering when the game runs under a virtual X server. A
+   * headless server has no GPU, and newer Mesa builds under Xvfb report no GLX configs at all
+   * unless the software path is asked for; LWJGL 2 enumerates those while Minecraft sets the window
+   * icon and dies with {@code ArrayIndexOutOfBoundsException: 0} when the list is empty.
+   */
+  private static void addDisplayEnvironment(ProcessBuilder pb, boolean useDisplay) {
+    if (!useDisplay) {
+      return;
+    }
+    pb.environment().put("LIBGL_ALWAYS_SOFTWARE", "1");
+    pb.environment().put("GALLIUM_DRIVER", "llvmpipe");
   }
 
   /**

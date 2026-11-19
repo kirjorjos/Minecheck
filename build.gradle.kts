@@ -93,8 +93,6 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerLoaderLifecycle("testFabric", "fabric")
-
 registerLoaderLifecycle("testForge", "forge")
 
 fun registerFailPathLifecycle(taskName: String, loader: String) {
@@ -143,8 +141,6 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerFailPathLifecycle("testFabricFail", "fabric")
-
 registerFailPathLifecycle("testForgeFail", "forge")
 
 fun registerSpawnLifecycle(taskName: String, loader: String) {
@@ -189,8 +185,6 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
-registerSpawnLifecycle("testFabricSpawn", "fabric")
 
 registerSpawnLifecycle("testForgeSpawn", "forge")
 
@@ -237,8 +231,6 @@ fun registerQueryLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerQueryLifecycle("testFabricQuery", "fabric")
-
 registerQueryLifecycle("testForgeQuery", "forge")
 
 fun registerBeaconLifecycle(taskName: String, loader: String) {
@@ -283,8 +275,6 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
-registerBeaconLifecycle("testFabricBeacon", "fabric")
 
 registerBeaconLifecycle("testForgeBeacon", "forge")
 
@@ -395,8 +385,6 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerWorldHandoffLifecycle("testFabricWorldHandoff", "fabric")
-
 registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
 
 fun registerPacketLifecycle(
@@ -448,8 +436,6 @@ fun registerPacketLifecycle(
   }
 }
 
-registerPacketLifecycle("testFabricPacket", "fabric")
-
 registerPacketLifecycle("testForgePacket", "forge")
 
 registerPacketLifecycle(
@@ -460,11 +446,7 @@ registerPacketLifecycle(
   "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
 )
 
-registerInputLifecycle("testFabricInput", "fabric")
-
 registerInputLifecycle("testForgeInput", "forge")
-
-registerLiveLifecycle("testFabricLive", "fabric")
 
 registerLiveLifecycle("testForgeLive", "forge")
 
@@ -571,8 +553,6 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerScreenshotsLifecycle("testFabricShots", "fabric")
-
 registerScreenshotsLifecycle("testForgeShots", "forge")
 
 /**
@@ -665,11 +645,7 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerServerFeaturesLifecycle("testFabricServerFeatures", "fabric")
-
 registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
-
-registerClientFeaturesLifecycle("testFabricClientFeatures", "fabric")
 
 registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
 
@@ -685,16 +661,6 @@ fun registerLoaderAggregate(loader: String, vararg taskNames: String) {
     dependsOn(*taskNames)
   }
 }
-
-registerLoaderAggregate(
-  "fabric",
-  "testFabric",
-  "testFabricFail",
-  "testFabricServerFeatures",
-  "testFabricClientFeatures",
-  "testFabricWorldHandoff",
-  "testFabricShots",
-)
 
 registerLoaderAggregate(
   "forge",
@@ -759,7 +725,7 @@ val checkLoaders =
     }
   }
 
-tasks.named("test") { dependsOn(checkLoaders, "testFabricAll", "testForgeAll", "spotlessCheck") }
+tasks.named("test") { dependsOn(checkLoaders, "testForgeAll", "spotlessCheck") }
 
 subprojects {
   apply(plugin = "java")
@@ -951,21 +917,20 @@ subprojects {
   tasks.withType<ProcessResources>().configureEach {
     val licence = providers.gradleProperty("licence")
     inputs.property("licence", licence)
-    filesMatching(listOf("fabric.mod.json", "**/mods.toml")) {
+    filesMatching("**/mods.toml") {
       filter { line: String -> line.replace("\${licence}", licence.get()) }
     }
   }
 }
 
-val loaderModules = listOf("fabric-mod", "forge-mod")
+val loaderModules = listOf("forge-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description =
-    "Builds every loader's distributable jar (:fabric-mod:productionJar, :forge-mod:productionJar)"
+  description = "Builds this line's distributable jar (:forge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1097,8 +1062,7 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
 // them, use `func_12345_a` / `field_12345_a`. Both spellings are SRG, so both count.
 val forgeProductionNames = Regex("(?:[mf]_[0-9]+_|(?:func|field)_[0-9]+_[a-zA-Z])")
 
-val productionNamespaces =
-  mapOf("fabric" to Regex("(?:method|field)_[0-9]+"), "forge" to forgeProductionNames)
+val productionNamespaces = mapOf("forge" to forgeProductionNames)
 
 val checkProductionJars =
   tasks.register("checkProductionJars") {
@@ -1107,7 +1071,7 @@ val checkProductionJars =
       "Asserts each distributable loader jar is remapped into its production namespace (issue #23)"
     dependsOn(loaderModules.map { ":$it:productionJar" })
     doLast {
-      val loaders = mapOf("fabric-mod" to "fabric", "forge-mod" to "forge")
+      val loaders = mapOf("forge-mod" to "forge")
       loaders.forEach { (module, loader) ->
         // The task's own output, not a directory scan: `build/libs` also holds jars from earlier
         // versions of the same loader, and "the newest file there" is exactly the guess that lets a
@@ -1156,7 +1120,7 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 
 val mcVersion: String = property("minecraft_version") as String
 
-val loaderArtifactNames = mapOf("fabric-mod" to "fabric", "forge-mod" to "forge")
+val loaderArtifactNames = mapOf("forge-mod" to "forge")
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects

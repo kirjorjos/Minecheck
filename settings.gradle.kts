@@ -22,9 +22,7 @@ include(":platform-api")
 
 project(":platform-api").projectDir = file("src/platform-api")
 
-include(":fabric-mod")
-
-project(":fabric-mod").projectDir = file("src/fabric/mod")
+// No Fabric here: Fabric's loader starts at 1.14, so this line is Forge only.
 
 include(":forge-mod")
 

@@ -1,46 +1,35 @@
 package net.minecheck.loader.forge;
 
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.level.Level;
+import net.minecraft.entity.Entity;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.world.World;
 
 /**
- * The client-only entity the camera looks through, on the mojmap side.
+ * The client-only entity the camera looks through, on the 1.12.2 side.
  *
  * <p>Its tick does nothing, on purpose: the platform moves it from the client tick hook, and no
- * vanilla system — gravity, fluid, collision, block effects — may alter where the camera is. A
- * marker type is used because the entity is never rendered and never sent to a server; everything
- * the renderer reads is written by {@link ForgeCameraPlatform}.
+ * vanilla system — gravity, fluid, collision, block effects — may alter where the camera is. {@code
+ * noClip} is set instead of 1.13's no-gravity flag, which 1.12.2 does not have. A plain {@link
+ * Entity} is used because the entity is never rendered and never sent to a server; everything the
+ * renderer reads is written by {@link ForgeCameraPlatform}.
  */
 final class MinecheckCameraEntity extends Entity {
 
-  MinecheckCameraEntity(Level level) {
-    super(EntityType.ARMOR_STAND, level);
-    setNoGravity(true);
-    this.noPhysics = true;
+  MinecheckCameraEntity(World world) {
+    super(world);
+    setSize(0.1f, 0.1f);
+    this.noClip = true;
   }
 
   @Override
-  public void tick() {}
-
-  /**
-   * Never sent anywhere: the camera exists on one client and has no server counterpart. Vanilla
-   * declares this abstract on {@code Entity}, so it has to be answered even when the answer is
-   * "impossible".
-   */
-  @Override
-  public Packet<?> getAddEntityPacket() {
-    throw new UnsupportedOperationException("the camera entity is client-only");
-  }
+  protected void entityInit() {}
 
   @Override
-  protected void defineSynchedData() {}
+  public void onUpdate() {}
 
   @Override
-  protected void readAdditionalSaveData(CompoundTag tag) {}
+  protected void readEntityFromNBT(NBTTagCompound tag) {}
 
   @Override
-  protected void addAdditionalSaveData(CompoundTag tag) {}
+  protected void writeEntityToNBT(NBTTagCompound tag) {}
 }
