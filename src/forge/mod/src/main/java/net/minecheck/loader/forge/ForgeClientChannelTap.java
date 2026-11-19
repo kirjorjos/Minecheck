@@ -3,6 +3,7 @@ package net.minecheck.loader.forge;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,7 +52,7 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
   static boolean observe(String channel, Consumer<byte[]> observer) {
     // Replaced, not appended: one engine owns a channel at a time, and an older engine instance's
     // observer would otherwise keep receiving payloads into a history no script polls.
-    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
+    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(Collections.singletonList(observer)));
     return install();
   }
 
@@ -60,7 +61,7 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
   }
 
   private static NetworkManager connection() {
-    NetHandlerPlayClient listener = Minecraft.getMinecraft().getConnection();
+    NetHandlerPlayClient listener = Minecraft.getMinecraft().getNetHandler();
     return listener == null ? null : listener.getNetworkManager();
   }
 

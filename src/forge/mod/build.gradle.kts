@@ -2,6 +2,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.net.URI
 import java.security.MessageDigest
+import java.util.jar.Attributes
+import java.util.jar.JarFile
+import java.util.jar.Manifest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import net.minecheck.gradle.LaunchDescriptor
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.withGroovyBuilder
@@ -44,6 +49,9 @@ unimined.minecraft {
 // reaches Forge with 1.15 — so its client hooks are native Forge events.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
+// The runs launch through the toolchain, not through a hand-set `executable`: Gradle rejects a
+// task that carries both, and unimined sets the launcher from `javaVersion`. 1.7.10 predates
+// ModLauncher, so any Java 8 works here (the pinned build is for the ModLauncher-era lines).
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
   .configureEach {
@@ -103,6 +111,90 @@ tasks.processResources {
     expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
   }
 }
+
+// --- Forge jar manifest --------------------------------------------------------------------
+/**
+ * The merged Forge jar keeps the `TweakClass` attribute of the published distribution's manifest,
+ * and FML adds every jar's declared tweak class to the launch on top of the one unimined passes. On
+ * a dedicated server that builds FMLTweaker twice — FMLServerTweaker is a subclass, so its
+ * constructor already installed the FML security manager — and the second install is refused with
+ * "Cannot replace the FML security manager". The attribute is dropped from a copy of the jar, and
+ * the runs use that copy in its place.
+ */
+val strippedForgeJar = layout.buildDirectory.file("minecheck/forge/forge-run.jar")
+
+/**
+ * The Forge jar whose manifest is copied. Taken from unimined's cache: task configuration order
+ * decides whether a run task's classpath already holds the jar by the time this runs, and the cache
+ * lookup keeps the copy independent of that order. The run classpaths are the fallback, for a cache
+ * layout that moved.
+ */
+fun forgeJarSource(): File {
+  fileTree(gradle.gradleUserHomeDir.resolve("caches/unimined")) {
+      include("**/forge-$mcVersion*-mcp-at.jar")
+    }
+    .files
+    .maxByOrNull { it.lastModified() }
+    ?.let {
+      return it
+    }
+  tasks
+    .matching { it.name == "runClient" || it.name == "runServer" }
+    .filterIsInstance<JavaExec>()
+    .forEach { run ->
+      run.classpath.files
+        .firstOrNull { it.name.endsWith("-mcp-at.jar") }
+        ?.let {
+          return it
+        }
+    }
+  throw GradleException("Minecheck: no Forge jar to copy the TweakClass out of")
+}
+
+/**
+ * Swaps the Forge jar for the copy without `TweakClass`, so the launch keeps one Forge classpath
+ * entry and one tweak class.
+ */
+fun useStrippedForgeJar(run: JavaExec) {
+  val entries = run.classpath.files
+  if (entries.none { it.name.endsWith("-mcp-at.jar") }) return
+  val stripped = strippedForgeJar.get().asFile
+  run.classpath =
+    files(entries.map { entry -> if (entry.name.endsWith("-mcp-at.jar")) stripped else entry })
+}
+
+val stripForgeTweakClass by
+  tasks.registering {
+    group = "minecheck"
+    description = "Drops the Forge jar's TweakClass attribute so FML builds one tweaker"
+    // Always repack: the jar is a copy of a cache artefact, and the task has to follow whatever
+    // version that artefact is. A stale copy is a launch that silently loads the unpatched
+    // manifest again.
+    outputs.file(strippedForgeJar)
+    outputs.upToDateWhen { false }
+    doLast {
+      val from = forgeJarSource()
+      val target = strippedForgeJar.get().asFile
+      target.parentFile.mkdirs()
+      JarFile(from).use { jar ->
+        val manifest = Manifest(jar.manifest)
+        manifest.mainAttributes.remove(Attributes.Name("TweakClass"))
+        ZipOutputStream(target.outputStream()).use { out ->
+          out.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
+          manifest.write(out)
+          out.closeEntry()
+          for (entry in jar.entries()) {
+            if (entry.isDirectory || entry.name.equals("META-INF/MANIFEST.MF", ignoreCase = true)) {
+              continue
+            }
+            out.putNextEntry(ZipEntry(entry.name))
+            jar.getInputStream(entry).use { it.copyTo(out) }
+            out.closeEntry()
+          }
+        }
+      }
+    }
+  }
 
 val commonOutput =
   project(":common")
@@ -509,6 +601,7 @@ tasks.register("devHelperDownloadAssets") {
 tasks.register("devHelperClientLaunch") {
   dependsOn(
     installPinnedJdk,
+    stripForgeTweakClass,
     ":common:downgradedRuntime",
     ":platform-api:downgradedRuntime",
     ":forge-mod:downgradedRuntime",
@@ -529,6 +622,7 @@ tasks.register("devHelperClientLaunch") {
 tasks.register("devHelperServerLaunch") {
   dependsOn(
     installPinnedJdk,
+    stripForgeTweakClass,
     ":common:downgradedRuntime",
     ":platform-api:downgradedRuntime",
     ":forge-mod:downgradedRuntime",
@@ -679,7 +773,8 @@ val installPinnedJdk by
             archive.delete()
             if (attempt >= 3) {
               throw GradleException(
-                "Minecheck: could not download ${pinnedJdkArchive.url}: ${e.message}", e
+                "Minecheck: could not download ${pinnedJdkArchive.url}: ${e.message}",
+                e,
               )
             }
             logger.warn(
@@ -748,8 +843,12 @@ gradle.projectsEvaluated {
     .matching { it.name == "runClient" || it.name == "runServer" }
     .configureEach {
       if (this is JavaExec) {
-        dependsOn(installPinnedJdk)
-        doFirst { setExecutable(pinnedJdkJavaFile.absolutePath) }
+        dependsOn(installPinnedJdk, stripForgeTweakClass)
+        // The stripped copy takes the place of the jar it was made from, so the launch keeps one
+        // Forge classpath entry and one tweak class. Read here rather than while configuring:
+        // unimined fills the run classpath later in the build, and this action runs when the task
+        // is realised, by which point it is complete.
+        useStrippedForgeJar(this)
       }
     }
 }

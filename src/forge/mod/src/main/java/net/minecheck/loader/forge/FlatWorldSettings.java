@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * surface, so the fixed coordinates and surface heights the fixtures assume cannot drift from the
  * world they run in.
  *
- * <p>1.12.2's {@code WorldSettings} takes the flat generator's settings as the option string, so
+ * <p>1.7.10's {@code WorldSettings} takes the flat generator's settings as the option string, so
  * this line hands the declaration over as text rather than as a parsed element.
  */
 final class FlatWorldSettings {
@@ -27,7 +27,7 @@ final class FlatWorldSettings {
 
   private FlatWorldSettings() {}
 
-  /** The declaration, validated, ready for {@code WorldSettings#setGeneratorOptions}. */
+  /** The declaration, validated, ready for {@code WorldSettings}' generator options. */
   static String declaration() {
     try (InputStream in = FlatWorldSettings.class.getResourceAsStream(RESOURCE)) {
       if (in == null) {

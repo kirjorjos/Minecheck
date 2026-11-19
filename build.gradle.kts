@@ -95,6 +95,8 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
 
 registerLoaderLifecycle("testLegacyfabric", "legacyfabric")
 
+registerLoaderLifecycle("testForge", "forge")
+
 fun registerFailPathLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
   tasks.register<MinecheckLifecycleTest>(taskName) {
@@ -143,6 +145,8 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
 
 registerFailPathLifecycle("testLegacyfabricFail", "legacyfabric")
 
+registerFailPathLifecycle("testForgeFail", "forge")
+
 fun registerSpawnLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
   tasks.register<MinecheckLifecycleTest>(taskName) {
@@ -187,6 +191,8 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
 }
 
 registerSpawnLifecycle("testLegacyfabricSpawn", "legacyfabric")
+
+registerSpawnLifecycle("testForgeSpawn", "forge")
 
 fun registerQueryLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -233,6 +239,8 @@ fun registerQueryLifecycle(taskName: String, loader: String) {
 
 registerQueryLifecycle("testLegacyfabricQuery", "legacyfabric")
 
+registerQueryLifecycle("testForgeQuery", "forge")
+
 fun registerBeaconLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
   tasks.register<MinecheckLifecycleTest>(taskName) {
@@ -277,6 +285,8 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
 }
 
 registerBeaconLifecycle("testLegacyfabricBeacon", "legacyfabric")
+
+registerBeaconLifecycle("testForgeBeacon", "forge")
 
 fun registerInputLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -387,6 +397,8 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
 
 registerWorldHandoffLifecycle("testLegacyfabricWorldHandoff", "legacyfabric")
 
+registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
+
 fun registerPacketLifecycle(
   taskName: String,
   loader: String,
@@ -438,6 +450,8 @@ fun registerPacketLifecycle(
 
 registerPacketLifecycle("testLegacyfabricPacket", "legacyfabric")
 
+registerPacketLifecycle("testForgePacket", "forge")
+
 // No frame tap on this line: Legacy Fabric ships no Forge to wrap the play connection, so a
 // foreign channel is observed at the payload handler itself, which is what `packet-tap` asserts.
 registerPacketLifecycle(
@@ -448,9 +462,21 @@ registerPacketLifecycle(
   "Boots the Legacy Fabric client + dedicated server in parallel and verifies foreign-channel observation at the custom-payload handler",
 )
 
+registerPacketLifecycle(
+  "testForgePacketTap",
+  "forge",
+  "packet-tap-client.lua",
+  "packet-tap-server.lua",
+  "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation at the netty frame tap",
+)
+
 registerInputLifecycle("testLegacyfabricInput", "legacyfabric")
 
+registerInputLifecycle("testForgeInput", "forge")
+
 registerLiveLifecycle("testLegacyfabricLive", "legacyfabric")
+
+registerLiveLifecycle("testForgeLive", "forge")
 
 val ciBaselines =
   providers
@@ -557,6 +583,8 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
 
 registerScreenshotsLifecycle("testLegacyfabricShots", "legacyfabric")
 
+registerScreenshotsLifecycle("testForgeShots", "forge")
+
 /**
  * The server-backed suites, as phases of one session: one client boot and one dedicated-server boot
  * instead of one of each per suite. Their per-suite tasks stay registered for debugging a single
@@ -649,7 +677,11 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
 
 registerServerFeaturesLifecycle("testLegacyfabricServerFeatures", "legacyfabric")
 
+registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
+
 registerClientFeaturesLifecycle("testLegacyfabricClientFeatures", "legacyfabric")
+
+registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
 
 /**
  * Every lifecycle suite for one loader, as one task. CI runs one of these per loader in its own
@@ -672,6 +704,16 @@ registerLoaderAggregate(
   "testLegacyfabricClientFeatures",
   "testLegacyfabricWorldHandoff",
   "testLegacyfabricShots",
+)
+
+registerLoaderAggregate(
+  "forge",
+  "testForge",
+  "testForgeFail",
+  "testForgeServerFeatures",
+  "testForgeClientFeatures",
+  "testForgeWorldHandoff",
+  "testForgeShots",
 )
 
 val metadataFile = layout.projectDirectory.file(".github/metadata.json")
@@ -756,7 +798,10 @@ subprojects {
       .map { JavaVersion.toVersion(it.trim()) }
       .orNull
 
-  if (downgradeTarget != null && name in setOf("common", "platform-api", "legacyfabric-mod")) {
+  if (
+    downgradeTarget != null &&
+      name in setOf("common", "platform-api", "legacyfabric-mod", "forge-mod")
+  ) {
     apply(plugin = "xyz.wagyourtail.jvmdowngrader")
 
     val target = downgradeTarget

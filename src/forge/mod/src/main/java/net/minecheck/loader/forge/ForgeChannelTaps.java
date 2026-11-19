@@ -1,5 +1,6 @@
 package net.minecheck.loader.forge;
 
+import cpw.mods.fml.common.network.internal.FMLProxyPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
@@ -10,7 +11,6 @@ import java.util.logging.Logger;
 import net.minecraft.network.NetworkManager;
 import net.minecraft.network.play.client.C17PacketCustomPayload;
 import net.minecraft.network.play.server.S3FPacketCustomPayload;
-import cpw.mods.fml.common.network.internal.FMLProxyPacket;
 
 /**
  * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical
@@ -32,36 +32,34 @@ final class ForgeChannelTaps {
 
   /**
    * The channel a custom-payload message travels on, or {@code null} when the message is something
-   * else. 1.12.2 hands a tap an {@link FMLProxyPacket}: FML's own handler sits in front of
-   * vanilla's {@link NetworkManager} and rewrites a custom payload into one of those before it
-   * reaches the stage the tap is anchored to, so a tap that only knows the vanilla packet classes
-   * sees nothing.
+   * else. On this line a mod payload may already have been wrapped into an {@link FMLProxyPacket}
+   * by FML's own handler, so both spellings are recognised.
    */
   static String channelOf(Object msg) {
     if (msg instanceof FMLProxyPacket) {
       return ((FMLProxyPacket) msg).channel();
     }
-    if (msg instanceof SPacketCustomPayload) {
-      return ((SPacketCustomPayload) msg).getChannelName();
+    if (msg instanceof S3FPacketCustomPayload) {
+      return ((S3FPacketCustomPayload) msg).func_149169_c();
     }
-    if (msg instanceof CPacketCustomPayload) {
-      return ((CPacketCustomPayload) msg).getChannelName();
+    if (msg instanceof C17PacketCustomPayload) {
+      return ((C17PacketCustomPayload) msg).getChannel();
     }
     return null;
   }
 
   /** A non-destructive copy of a custom payload's bytes, or {@code null} when it is not one. */
   static byte[] payloadOf(Object msg) {
-    ByteBuf data;
-    if (msg instanceof FMLProxyPacket) {
-      data = ((FMLProxyPacket) msg).payload();
-    } else if (msg instanceof SPacketCustomPayload) {
-      data = ((SPacketCustomPayload) msg).getBufferData();
-    } else if (msg instanceof CPacketCustomPayload) {
-      data = ((CPacketCustomPayload) msg).getBufferData();
-    } else {
+    if (msg instanceof S3FPacketCustomPayload) {
+      return ((S3FPacketCustomPayload) msg).func_149168_d();
+    }
+    if (msg instanceof C17PacketCustomPayload) {
+      return ((C17PacketCustomPayload) msg).getData();
+    }
+    if (!(msg instanceof FMLProxyPacket)) {
       return null;
     }
+    ByteBuf data = ((FMLProxyPacket) msg).payload();
     if (data == null) {
       return null;
     }
