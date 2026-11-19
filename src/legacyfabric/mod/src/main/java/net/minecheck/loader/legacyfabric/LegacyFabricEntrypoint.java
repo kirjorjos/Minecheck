@@ -58,7 +58,11 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     instance = this;
 
     FabricLoader loader = FabricLoader.getInstance();
-    Path configDir = loader.getConfigDir();
+    // Absolute, because this loader answers with a relative `config` on this line: a relative
+    // config dir makes the run directory derived from it relative too, so the dedicated server's
+    // staged save was copied beside the config instead of into the run directory and the server
+    // generated a world of its own.
+    Path configDir = loader.getConfigDir().toAbsolutePath().normalize();
     // Read from the loader rather than a constant: a hardcoded version silently reports the wrong
     // one the moment this build supports another Minecraft version.
     String mcVersion =

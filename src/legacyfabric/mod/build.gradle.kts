@@ -1,4 +1,5 @@
 import java.io.File
+import java.io.FileInputStream
 import net.minecheck.gradle.LaunchDescriptor
 
 plugins {
@@ -75,6 +76,48 @@ fun mapToDowngraded(file: File): File? {
     if (owner != project && file.parentFile == File(build, "libs")) return null
   }
   return file
+}
+
+// The world-handoff suite hands this server a save the client generated: the harness stages it and
+// passes the directory in, and the server run has to start from it. Without this the server builds
+// a world of its own and the marker the client placed is not there — which is exactly what the
+// handoff suite checks for.
+val dhServerInput = System.getProperty("dh.serverInput")
+
+if (dhServerInput != null) {
+  tasks
+    .matching { it.name == "runServer" }
+    .configureEach {
+      if (this is JavaExec) {
+        standardInput = FileInputStream(File(dhServerInput))
+      }
+    }
+}
+
+val dhServerSetupDir = System.getProperty("dh.serverSetupDir")
+
+if (dhServerSetupDir != null) {
+  tasks
+    .matching { it.name == "runServer" }
+    .configureEach {
+      doFirst {
+        val setupDir = file(dhServerSetupDir)
+        val target: File =
+          when (this) {
+            is JavaExec ->
+              when (val wd = workingDir) {
+                is File -> wd
+                else -> file(wd.toString())
+              }
+            else -> throw IllegalStateException("runServer is not a JavaExec")
+          }
+        target.mkdirs()
+        copy {
+          from(setupDir) { include("**") }
+          into(target)
+        }
+      }
+    }
 }
 
 // 1.12.2 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the

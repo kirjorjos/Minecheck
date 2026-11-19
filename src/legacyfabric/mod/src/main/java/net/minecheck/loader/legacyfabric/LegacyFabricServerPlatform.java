@@ -228,9 +228,11 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           if (!level.getChunkProvider().isChunkGenerated(x >> 4, z >> 4)) {
             return null;
           }
-          // 1.12.2 answers with the top position of the column; the height a player stands at is
-          // one above the surface block.
-          return level.getTopPosition(new BlockPos(x, 0, z)).getY() + 1;
+          // 1.12.2's top position of a column is already the first air block above the surface —
+          // the height a player standing there stands at — so it is returned as it is. Adding one
+          // put every script's surface one block high, and every marker it placed one block above
+          // where the world put the block.
+          return level.getTopPosition(new BlockPos(x, 0, z)).getY();
         });
   }
 

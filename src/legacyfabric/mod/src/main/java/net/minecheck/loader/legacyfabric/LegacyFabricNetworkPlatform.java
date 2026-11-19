@@ -124,6 +124,11 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
    */
   @Override
   public boolean observeChannel(String channel, Consumer<byte[]> observer) {
+    if (ours(channel)) {
+      // The mod's own transport consumes this channel two lines into the payload mixin, so a second
+      // observer here would be shadowed rather than fed. Reporting it as watched would be a lie.
+      return false;
+    }
     // Replaced, not appended: one engine owns a channel at a time.
     OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
     return true;

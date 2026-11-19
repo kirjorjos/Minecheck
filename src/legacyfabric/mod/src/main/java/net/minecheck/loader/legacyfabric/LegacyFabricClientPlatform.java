@@ -1147,7 +1147,10 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (!isChunkLoaded(x >> 4, z >> 4)) {
       return null;
     }
-    return client.world.getTopPosition(new BlockPos(x, 0, z)).getY() + 1;
+    // This line's top position of a column is already the first air block above the surface — the
+    // height a player standing there stands at — so it is returned as it is, matching the server
+    // platform and the newer lines' MOTION_BLOCKING read.
+    return client.world.getTopPosition(new BlockPos(x, 0, z)).getY();
   }
 
   @Override
