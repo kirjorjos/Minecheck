@@ -104,7 +104,29 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          String line = command.startsWith("/") ? command.substring(1) : command;
+          String line =
+              LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command);
+          ServerWorld world = s.getWorld(0);
+          Integer rule = LegacyCommandShim.gameruleValue(world, line);
+          if (rule != null) {
+            return rule;
+          }
+          Integer entity = LegacyCommandShim.executeIfEntity(world, line);
+          if (entity != null) {
+            return entity;
+          }
+          Integer data = LegacyCommandShim.dataGetEntity(world, line);
+          if (data != null) {
+            return data;
+          }
+          Integer tagged = LegacyCommandShim.tagCommand(world, line);
+          if (tagged != null) {
+            return tagged;
+          }
+          Integer conditional = LegacyCommandShim.executeIfBlock(world, line);
+          if (conditional != null) {
+            return conditional;
+          }
           return s.getCommandManager().execute(s, line);
         });
   }

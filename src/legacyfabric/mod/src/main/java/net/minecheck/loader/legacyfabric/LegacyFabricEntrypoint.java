@@ -25,15 +25,10 @@ import net.minecraft.server.MinecraftServer;
  * The Legacy Fabric entrypoint.
  *
  * <p>Legacy Fabric ships the loader and Mixin but no Fabric API, so this mod is an entrypoint plus
- * mixins and nothing else: the loader calls {@link #onInitialize()}, the tick and payload mixins
- * call the static hooks below. There is no client-setup event, so the client-side work that the
- * newer lines do at client setup is done on the first client tick.
- *
- * <p>The server side is wired here in full. The client platform is the piece still to come on this
- * line, so {@link #onClientTickEnd()} currently only advances the shared tick clock; a client
- * boots, joins and renders, but a client-side script action has nowhere to go yet. That is a
- * deliberate placeholder rather than a silent failure: {@link PlatformServices#client()} answers
- * {@code null}, which the common bootstrap already treats as "no client actions on this side".
+ * mixins and nothing else: the loader calls {@link #onInitialize()}, and the tick, frame, input,
+ * payload and sound mixins call the static hooks below. There is no client-setup event, so the
+ * client-side setup work the newer lines do at setup — camera install, pause-on-focus-loss — runs
+ * on the first client tick instead.
  */
 public final class LegacyFabricEntrypoint implements ModInitializer {
 
@@ -43,7 +38,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
   private static volatile LegacyFabricEntrypoint instance;
 
   private boolean dedicated;
-  private ClientPlatform client;
+  private LegacyFabricClientPlatform client;
   private LegacyFabricServerPlatform serverPlatform;
   private LegacyFabricNetworkPlatform network;
   private volatile ScriptEngine engine;
@@ -51,6 +46,9 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
   private final AtomicBoolean serverTickRunning = new AtomicBoolean();
   private final AtomicBoolean clientTickRunning = new AtomicBoolean();
   private final AtomicBoolean rulesApplied = new AtomicBoolean();
+
+  /** Set once the one-time client setup has run. */
+  private boolean clientSetupDone;
 
   /** The running dedicated or integrated server, published for the packet transport. */
   private volatile MinecraftServer server;
@@ -74,6 +72,9 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     // it, and a client needs it to query its own integrated server.
     serverPlatform = new LegacyFabricServerPlatform();
     network = new LegacyFabricNetworkPlatform(dedicated);
+    if (!dedicated) {
+      client = new LegacyFabricClientPlatform(configDir);
+    }
 
     // No recipe viewer is bridged on 1.12.2: EMI and REI do not exist for it, and JEI's 4.x line
     // predates the API these bridges were written against. The Lua API is unchanged.
@@ -155,21 +156,60 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
 
   // ------------------------------------------------------------------ tick hooks
 
-  /** Client tick start (from {@code ClientTickMixin}); currently only what both sides share. */
-  public static void onClientTickStart() {}
+  /**
+   * Client tick start, from {@code ClientTickMixin}: the work that must precede the player tick.
+   */
+  public static void onClientTickStart() {
+    LegacyFabricEntrypoint entrypoint = instance;
+    if (entrypoint == null || entrypoint.dedicated || entrypoint.client == null) {
+      return;
+    }
+    // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
+    // queues a client task and waits for it, which cannot happen while that queue is draining.
+    entrypoint.client.applyPendingLeave();
+    // The camera runs before the player does: it holds the body's rotation at the value the server
+    // last saw, and doing that after the player ticked would be after the packet that carries the
+    // change.
+    LegacySilentSound.shutDownDevice();
+    entrypoint.client.camera().tick();
+  }
 
   /**
-   * Client tick end: advances nothing but the shared clock.
-   *
-   * <p>The engine step belongs here once the client platform exists — a client script action needs
-   * screens, input and a world to act on, which is that platform.
+   * Client tick end, from {@code ClientTickMixin}: the engine step and the per-tick platform work.
    */
   public static void onClientTickEnd() {
     LegacyFabricEntrypoint entrypoint = instance;
-    if (entrypoint == null || entrypoint.dedicated) {
+    if (entrypoint == null || entrypoint.dedicated || entrypoint.client == null) {
       return;
     }
-    entrypoint.clientTickRunning.set(false);
+    if (!entrypoint.clientSetupDone) {
+      entrypoint.clientSetupDone = true;
+      entrypoint.client.installCameraBindings();
+      entrypoint.client.allowUnfocusedPlay();
+    }
+    entrypoint.client.hideWindowIfConfigured();
+    ScriptEngine e = entrypoint.engine;
+    if (e == null || e.isFinished()) {
+      return;
+    }
+    entrypoint.client.pinClientClock();
+    entrypoint.client.pumpViewWindow();
+    if (entrypoint.client.isBootComplete()) {
+      entrypoint.client.allowUnfocusedPlay();
+      // Not inline: this line's client tick runs on the JVM's main thread, and LuaJ refuses to
+      // yield a coroutine resumed there ("cannot yield main thread") — which every waitFor does.
+      // Hand the tick to a worker, one at a time so a slow script step cannot overlap itself.
+      if (entrypoint.clientTickRunning.compareAndSet(false, true)) {
+        CompletableFuture.runAsync(
+            () -> {
+              try {
+                e.tick();
+              } finally {
+                entrypoint.clientTickRunning.set(false);
+              }
+            });
+      }
+    }
   }
 
   /** Server tick start: a held clock parks the server thread here. */
