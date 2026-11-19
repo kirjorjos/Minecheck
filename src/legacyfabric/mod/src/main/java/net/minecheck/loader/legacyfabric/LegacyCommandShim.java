@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -66,7 +67,13 @@ final class LegacyCommandShim {
       // 1.12.2 prefixes a container slot with `slot.` (`slot.hotbar.0`), which 1.13 dropped.
       out = out.replaceAll(" (hotbar|inventory|weapon|armor|enderchest|horse)\\.", " slot.$1.");
     }
-    return LegacyFabricNbt.legacyId(out);
+    // The aliases are replaced inside the command, not applied to the whole string: a `setblock`
+    // naming a 1.13 id is the command 1.12.2 rejects ("There is no such block with name
+    // minecraft:oak_sign"), and it is only that one argument that needs the old name.
+    for (Map.Entry<String, String> alias : LegacyFabricNbt.legacyAliases().entrySet()) {
+      out = out.replace(alias.getKey(), alias.getValue());
+    }
+    return out;
   }
 
   /**

@@ -56,6 +56,16 @@ final class LegacyFabricNbt {
     return LEGACY_IDS.getOrDefault(id, id);
   }
 
+  /**
+   * Every rename, keyed by the 1.13 name.
+   *
+   * <p>Exposed so a command can have each one replaced in place: a rename applies to the id inside
+   * a command, not to the command as a whole.
+   */
+  static Map<String, String> legacyAliases() {
+    return LEGACY_IDS;
+  }
+
   /** The name the newer lines use, so one fixture can name a block and read it back. */
   static String modernId(String id) {
     return MODERN_IDS.getOrDefault(id, id);

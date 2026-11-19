@@ -17,6 +17,7 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtList;
 import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
@@ -337,10 +338,90 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
 
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {
-    // This line's template API is not wired yet: 1.12.2 keeps structure templates behind a manager
-    // this platform has not been taught to reach, and a fixture that places one must otherwise read
-    // as "placed" while nothing happened.
-    throw new IllegalStateException(
-        "spawnStructure is not implemented on the Legacy Fabric platform yet: " + id);
+    return onServerThread(() -> spawnStructureOnServerThread(id, x, y, z));
+  }
+
+  /**
+   * Places a vanilla structure template.
+   *
+   * <p>This mapping exposes no template manager, so the template is read straight out of the game
+   * jar — {@code assets/minecraft/structures/<id>.nbt} — and stamped block by block. A template
+   * carries a palette and a list of positions; each position takes the palette entry's block, and
+   * the block entity NBT it carries, if any. Block <em>states</em> are placed at the block's
+   * default state, which is what this line's templates mostly are (planks, slabs, snow); a template
+   * whose palette depends on orientation lands axis-aligned rather than rotated.
+   */
+  private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
+    Identifier location = parseId(id, "structure");
+    ServerWorld level = overworld();
+    NbtCompound template = null;
+    // 1.13 renamed the structure files: the group's own name left the file (`igloo/igloo_top`
+    // became `igloo/top`), so both spellings are tried before giving up.
+    for (String path : legacyStructurePaths(location.getPath())) {
+      template = loadBundledStructure(location.getNamespace(), path);
+      if (template != null) {
+        break;
+      }
+    }
+    if (template == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
+    placeTemplate(level, template, new BlockPos(x, y, z));
+    return true;
+  }
+
+  /** The names a structure can go by on 1.12.2, given the name a fixture uses. */
+  private static List<String> legacyStructurePaths(String path) {
+    List<String> out = new ArrayList<>();
+    out.add(path);
+    int slash = path.indexOf('/');
+    if (slash > 0) {
+      String group = path.substring(0, slash);
+      out.add(group + "/" + group + "_" + path.substring(slash + 1));
+    }
+    out.add(path.replace('/', '_'));
+    return out;
+  }
+
+  /** A structure file as NBT, or {@code null} when the game jar has none under that name. */
+  private static NbtCompound loadBundledStructure(String namespace, String path) {
+    String asset = "/assets/" + namespace + "/structures/" + path + ".nbt";
+    try (java.io.InputStream in = MinecraftServer.class.getResourceAsStream(asset)) {
+      if (in == null) {
+        return null;
+      }
+      return net.minecraft.nbt.NbtIo.readCompressed(in);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  /** Stamps one template into the world, palette entry by palette entry. */
+  private static void placeTemplate(ServerWorld level, NbtCompound template, BlockPos origin) {
+    NbtList blocks = template.getList("blocks", 10);
+    NbtList palette = template.getList("palette", 10);
+    for (int i = 0; i < blocks.size(); i++) {
+      NbtCompound entry = (NbtCompound) blocks.get(i);
+      int stateIndex = entry.getInt("state");
+      if (stateIndex < 0 || stateIndex >= palette.size()) {
+        continue;
+      }
+      NbtCompound paletteEntry = (NbtCompound) palette.get(stateIndex);
+      Block block = Block.get(paletteEntry.getString("Name"));
+      if (block == null) {
+        continue;
+      }
+      NbtList pos = entry.getList("pos", 3);
+      BlockPos at = origin.add(pos.getInt(0), pos.getInt(1), pos.getInt(2));
+      level.setBlockState(at, block.getDefaultState(), 2);
+      NbtCompound blockEntityTag =
+          entry.get("nbt") instanceof NbtCompound ? (NbtCompound) entry.get("nbt") : null;
+      if (blockEntityTag != null) {
+        BlockEntity blockEntity = level.getBlockEntity(at);
+        if (blockEntity != null) {
+          blockEntity.fromNbt(blockEntityTag);
+        }
+      }
+    }
   }
 }

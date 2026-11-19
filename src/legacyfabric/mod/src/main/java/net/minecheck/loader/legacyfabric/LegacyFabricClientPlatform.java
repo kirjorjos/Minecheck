@@ -418,6 +418,31 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                     // closes a container from the screen's own key handler.
                     invokeScreen(
                         screen, "keyPressed", new Class<?>[] {char.class, int.class}, 0, code);
+                    if (mc().currentScreen != screen) {
+                      // The screen handled the key and closed itself.
+                      return;
+                    }
+                    // Escape and the inventory key close a screen from the client's own key
+                    // handling on this line, not from the screen's: without this a container that
+                    // ignored the key stayed up, and every press meant for the world was spent as
+                    // a slot click instead.
+                    if (code == Keyboard.KEY_ESCAPE || code == inventoryKeyCode()) {
+                      mc().setScreen(null);
+                      return;
+                    }
+                    // Enter on the chat screen is the same story, and the submission has to be
+                    // made here too: the screen keeps the field, but sending it is the client's
+                    // job, so closing without it dropped the command the script had just typed.
+                    if (code == Keyboard.KEY_RETURN && screen instanceof ChatScreen) {
+                      TextFieldWidget field = findTextField(screen);
+                      String text = field == null ? "" : field.getText();
+                      if (!text.isEmpty()
+                          && mc().player != null
+                          && mc().getNetworkHandler() != null) {
+                        mc().getNetworkHandler().sendPacket(new ChatMessageC2SPacket(text));
+                      }
+                      mc().setScreen(null);
+                    }
                     return;
                   }
                   pressKeyCode(code, true);
@@ -482,6 +507,16 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       LOG.warning(String.format("keyDown: unresolvable key name '%s'", key));
     }
     return code;
+  }
+
+  /** The key code of the client's own inventory binding, or {@code -1} when it cannot be read. */
+  private static int inventoryKeyCode() {
+    for (KeyBinding binding : keyBindings(mc().options)) {
+      if ("key.inventory".equals(binding.getTranslationKey())) {
+        return binding.getCode();
+      }
+    }
+    return -1;
   }
 
   /** Every binding the options object holds, whether a single field or an array of them. */
@@ -821,12 +856,23 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     for (Class<?> type = widget.getClass(); type != null; type = type.getSuperclass()) {
       for (Field field : type.getDeclaredFields()) {
-        if (!Text.class.isAssignableFrom(field.getType())) {
+        // This line's buttons keep their label in a plain String field (`message`), while the
+        // newer lines hold a Text; both are read, and only the label-looking names are trusted so
+        // an unrelated string field cannot answer as the label.
+        boolean isText = Text.class.isAssignableFrom(field.getType());
+        boolean isLabelString =
+            field.getType() == String.class
+                && (field.getName().equals("message") || field.getName().equals("label"));
+        if (!isText && !isLabelString) {
           continue;
         }
         try {
           field.setAccessible(true);
-          String text = textOf(field.get(widget));
+          Object value = field.get(widget);
+          if (value instanceof String) {
+            return (String) value;
+          }
+          String text = textOf(value);
           if (text != null) {
             return text;
           }
