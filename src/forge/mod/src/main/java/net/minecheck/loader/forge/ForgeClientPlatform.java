@@ -591,6 +591,17 @@ public final class ForgeClientPlatform implements ClientPlatform {
                             new net.minecraft.client.gui.inventory.GuiInventory(mc().thePlayer));
                     return;
                   }
+                  // A swing goes through the player's own attack, at the entity the crosshair is
+                  // on from the look it has this instant. This line's own pick is objectMouseOver,
+                  // one frame behind, so a script that aims and swings in the same breath swung at
+                  // whatever the previous aim held and the mob never took damage.
+                  net.minecraft.entity.Entity swingTarget =
+                      code == keyCodeNamed("key.attack") ? pickedEntity(4.5) : null;
+                  if (swingTarget != null) {
+                    mc().playerController.attackEntity(mc().thePlayer, swingTarget);
+                    mc().thePlayer.swingItem();
+                    return;
+                  }
                   pressKeyCode(code, true);
                   lastPressTick = clientTicks;
                 }));
@@ -642,6 +653,59 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   /** The key whose release is waiting for the next client tick. */
   private static int pendingRelease = Keyboard.KEY_NONE;
+
+  /** The code bound to a binding id, or {@code Keyboard.KEY_NONE} when nothing is bound to it. */
+  private static int keyCodeNamed(String id) {
+    for (KeyBinding binding : keyBindings(mc().gameSettings)) {
+      if (id.equals(binding.getKeyDescription())) {
+        return binding.getKeyCode();
+      }
+    }
+    return Keyboard.KEY_NONE;
+  }
+
+  /**
+   * The entity the crosshair is on right now, or {@code null}.
+   *
+   * <p>Picked from the look the player has this instant rather than from the renderer's mouse-over,
+   * which is a frame behind.
+   */
+  private static net.minecraft.entity.Entity pickedEntity(double reach) {
+    Minecraft client = mc();
+    EntityPlayer player = client.thePlayer;
+    if (player == null || client.theWorld == null) {
+      return null;
+    }
+    Vec3 start = Vec3.createVectorHelper(player.posX, player.posY, player.posZ);
+    Vec3 direction = directionOf(player);
+    Vec3 end =
+        start.addVector(
+            direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach);
+    net.minecraft.util.AxisAlignedBB area =
+        player
+            .boundingBox
+            .addCoord(direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach)
+            .expand(1.0, 1.0, 1.0);
+    net.minecraft.entity.Entity best = null;
+    double bestDistance = reach;
+    for (Object candidate : client.theWorld.getEntitiesWithinAABBExcludingEntity(player, area)) {
+      net.minecraft.entity.Entity entity = (net.minecraft.entity.Entity) candidate;
+      if (!entity.canBeCollidedWith()) {
+        continue;
+      }
+      MovingObjectPosition hit =
+          entity.boundingBox.expand(0.3, 0.3, 0.3).calculateIntercept(start, end);
+      if (hit == null) {
+        continue;
+      }
+      double distance = start.distanceTo(hit.hitVec);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entity;
+      }
+    }
+    return best;
+  }
 
   private static void pressKeyCode(int code, boolean down) {
     KeyBinding.setKeyBindState(code, down);
