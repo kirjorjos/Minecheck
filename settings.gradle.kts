@@ -22,13 +22,15 @@ include(":platform-api")
 
 project(":platform-api").projectDir = file("src/platform-api")
 
-// No Fabric here: Fabric's loader starts at 1.14. Legacy Fabric covers this line, so it gets a
-// loader module of its own rather than sharing the fabric one.
+// No Forge on this line: 1.7.10 predates the userdev jar that unimined is built around (there is no
+// `forge-1.7.10-…-userdev.jar` to download, and the era's toolchain was ForgeGradle 1.2, which
+// needs
+// a Gradle this repo does not run) and 1.7.10's Forge predates Mixin entirely. Legacy Fabric covers
+// 1.7.10 with an intermediary and a yarn fork, so it is the one loader module here.
 
-include(":forge-mod")
-
-project(":forge-mod").projectDir = file("src/forge/mod")
-
+// No Fabric module here either: Fabric's loader starts at 1.14. Legacy Fabric is the intermediary
+// family that covers this line, so it gets a loader module of its own rather than sharing the
+// fabric one.
 include(":legacyfabric-mod")
 
 project(":legacyfabric-mod").projectDir = file("src/legacyfabric/mod")

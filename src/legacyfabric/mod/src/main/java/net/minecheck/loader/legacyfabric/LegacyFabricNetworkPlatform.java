@@ -63,8 +63,10 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
         if (server == null || server.getPlayerManager().getCurrentPlayerCount() == 0) {
           return false;
         }
-        for (net.minecraft.entity.player.ServerPlayerEntity player :
-            server.getPlayerManager().getPlayers()) {
+        // This line keeps the players in a raw public list rather than behind an accessor.
+        for (Object candidate : server.getPlayerManager().players) {
+          net.minecraft.entity.player.ServerPlayerEntity player =
+              (net.minecraft.entity.player.ServerPlayerEntity) candidate;
           player.networkHandler.sendPacket(LegacyPayloads.toClient(payload));
         }
       } else {
@@ -130,7 +132,8 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
       return false;
     }
     // Replaced, not appended: one engine owns a channel at a time.
-    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
+    OBSERVERS.put(
+        channel, new CopyOnWriteArrayList<>(java.util.Collections.singletonList(observer)));
     return true;
   }
 
@@ -173,7 +176,8 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
       return;
     }
     String channel = packet.getChannel();
-    byte[] payload = LegacyPayloads.bytesOf(packet.getPayload());
+    // This line's clientbound payload already carries its bytes; there is no buffer to read.
+    byte[] payload = packet.getPayload();
     if (channel == null || payload == null) {
       return;
     }
@@ -199,7 +203,8 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
       return;
     }
     String channel = packet.getChannel();
-    byte[] payload = LegacyPayloads.bytesOf(packet.getPayload());
+    // The serverbound packet keeps its bytes behind an unmapped accessor on this line.
+    byte[] payload = packet.method_7981();
     if (channel == null || payload == null) {
       return;
     }
@@ -207,7 +212,25 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
     if (server == null) {
       return;
     }
-    server.submit(() -> dispatch(channel, payload));
+    // No task queue on this line's server: the payload is parked and drained from the server tick,
+    // which is where the inbox and the observers run.
+    SERVER_TASKS.add(() -> dispatch(channel, payload));
+  }
+
+  /** Payloads waiting for the server thread, drained at the end of each tick. */
+  private static final java.util.Queue<Runnable> SERVER_TASKS =
+      new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+  /** Runs the payloads that arrived since the last tick, on the server thread. */
+  static void drainServerTasks() {
+    Runnable task;
+    while ((task = SERVER_TASKS.poll()) != null) {
+      try {
+        task.run();
+      } catch (RuntimeException e) {
+        LOG.warning("Minecheck: a delivered payload failed: " + e);
+      }
+    }
   }
 
   /** Hands one payload to the mod's inbox or to the channel's observers. */

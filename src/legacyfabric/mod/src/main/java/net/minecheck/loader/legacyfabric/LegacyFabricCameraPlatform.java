@@ -17,6 +17,7 @@ import net.minecraft.client.input.Input;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.ClientPlayerEntity;
+import net.minecraft.entity.player.ControllablePlayerEntity;
 import net.minecraft.util.math.MathHelper;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
@@ -33,6 +34,11 @@ import org.lwjgl.input.Mouse;
  * binding: {@code F4} is read from LWJGL directly and edge-detected here. Player input is the same
  * story from the other side — the zeroing the newer lines do from a mixin on the input tick is
  * {@code MovementInputMixin}'s job.
+ *
+ * <p>1.7.10 has no camera-entity accessors: the entity the renderer looks through is a {@code
+ * LivingEntity} field, and the player is a {@code ControllablePlayerEntity} field. Both are written
+ * directly here, which is why the camera entity is a {@link LegacyCameraEntity} — this line's
+ * render view entity cannot be a plain {@code Entity}.
  */
 public final class LegacyFabricCameraPlatform implements CameraPlatform {
 
@@ -150,7 +156,8 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
       return;
     }
     MinecraftClient mc = mc();
-    if (mc.player == null || mc.world == null || camera.world != mc.world) {
+    ControllablePlayerEntity player = mc.field_3805;
+    if (player == null || mc.world == null || camera.world != mc.world) {
       detach();
       return;
     }
@@ -164,11 +171,11 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
             || Keyboard.isKeyDown(Keyboard.KEY_RCONTROL))) {
       controller.adjustSpeed(wheel > 0 ? 1 : -1);
     }
-    // Re-asserted every tick: vanilla computes the render camera from this field, and a respawn or
+    // Re-asserted every tick: the renderer's view entity is read fresh each frame, and a respawn or
     // a dimension change may have pointed it somewhere else since the last tick.
-    mc.setCameraEntity(camera);
-    steer(mc.player, allowed);
-    CameraPose moved = controller.tick(inputs(mc.player), allowed);
+    mc.field_6279 = camera;
+    steer(player, allowed);
+    CameraPose moved = controller.tick(inputs(player), allowed);
     if (moved != null) {
       place(camera, moved);
     }
@@ -194,16 +201,23 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
   }
 
   /** The keys the camera reads this tick, taken from the input vanilla already computed. */
-  private static CameraMovement.Inputs inputs(ClientPlayerEntity player) {
-    Input input = player.input;
+  private static CameraMovement.Inputs inputs(ControllablePlayerEntity player) {
+    // The input object is the local player's, so the cast is what reaches it: this line keeps it on
+    // the client-side subclass, not on the player the field is typed as.
+    if (!(player instanceof ClientPlayerEntity)) {
+      return CameraMovement.Inputs.none();
+    }
+    Input input = ((ClientPlayerEntity) player).input;
     if (input == null) {
       return CameraMovement.Inputs.none();
     }
+    // This line's input is two axes rather than four flags: the forward axis is positive for
+    // forward and the sideways axis is positive for left, which is the mapping the booleans carry.
     return new CameraMovement.Inputs(
-        input.pressingForward,
-        input.pressingBack,
-        input.pressingLeft,
-        input.pressingRight,
+        input.movementForward > 0.0f,
+        input.movementForward < 0.0f,
+        input.movementSideways > 0.0f,
+        input.movementSideways < 0.0f,
         input.jumping,
         input.sneaking,
         Keyboard.isKeyDown(Keyboard.KEY_LCONTROL));
@@ -223,7 +237,7 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
    * vanilla turns the player by the same movement the camera reads, so the two must be separated or
    * the body turns with the camera and the server sees a rotating player.
    */
-  private void steer(ClientPlayerEntity player, boolean allowed) {
+  private void steer(ControllablePlayerEntity player, boolean allowed) {
     float yawDelta = MathHelper.wrapDegrees(player.yaw - (float) baseYaw);
     float pitchDelta = player.pitch - (float) basePitch;
     player.yaw = (float) baseYaw;
@@ -246,7 +260,7 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
 
   private void attach() {
     MinecraftClient mc = mc();
-    ClientPlayerEntity player = mc.player;
+    ControllablePlayerEntity player = mc.field_3805;
     ClientWorld level = mc.world;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
@@ -267,7 +281,7 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
     entity.updatePosition(start.x(), start.y(), start.z());
     place(entity, start);
     level.spawnEntity(entity);
-    mc.setCameraEntity(entity);
+    mc.field_6279 = entity;
     camera = entity;
     LOG.info(
         String.format(
@@ -281,8 +295,8 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
     controller.detach();
     MinecraftClient mc = mc();
     if (entity != null) {
-      if (mc.getCameraEntity() == entity) {
-        mc.setCameraEntity(mc.player);
+      if (mc.field_6279 == entity) {
+        mc.field_6279 = mc.field_3805;
       }
       entity.removed = true;
     }

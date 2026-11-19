@@ -10,6 +10,7 @@
   "client": [
     "ClientTickMixin",
     "ClientCustomPayloadMixin",
+    "CameraFovMixin",
     "FrameDrawnMixin",
     "MovementInputMixin",
     "SoundManagerMixin"
