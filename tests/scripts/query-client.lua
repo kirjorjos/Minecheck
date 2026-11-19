@@ -19,12 +19,15 @@ if not phase then
   end
 end
 
--- Client-side entity query. The server spawns a vex for this phase: vexes never spawn naturally in
--- the overworld, so the type is a handle the client can actually use to tell our target apart from
--- worldgen mobs.
+-- Client-side entity query. The server spawns a mob that never occurs naturally for this phase: a
+-- vex on 1.8 and later, a snow golem where the line predates it (one only exists when a player
+-- builds it), so the type is a handle the client can use to tell our target from worldgen mobs.
+local TARGET_TYPE = (tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0) < 8
+    and "minecraft:snow_golem"
+  or "minecraft:vex"
 local targetId = nil
 local seen = minecheck.waitFor(function()
-  local found = minecheck.findNearbyEntities("minecraft:vex")
+  local found = minecheck.findNearbyEntities(TARGET_TYPE)
   if #found == 1 then
     targetId = found[1].id
     return true
@@ -37,7 +40,7 @@ end
 minecheck.log("query test: client sees target id " .. tostring(targetId))
 
 local function target()
-  for _, e in pairs(minecheck.findNearbyEntities("minecraft:vex")) do
+  for _, e in pairs(minecheck.findNearbyEntities(TARGET_TYPE)) do
     if e.id == targetId then
       return e
     end
@@ -64,12 +67,12 @@ for _ = 1, 40 do
     killed = true
     break
   end
-  -- pos is the entity's feet; a vex is 0.8 tall, so its middle is 0.4 up.
+  -- pos is the entity's feet, so aim a little above them rather than at the feet themselves.
   minecheck.lookAt(t.pos.x, t.pos.y + 0.4, t.pos.z)
   minecheck.press("key.attack", 0.7)
 end
 minecheck.expect(killed, "punched the target to death")
-minecheck.expect(#minecheck.findNearbyEntities("minecraft:vex") == 0, "the client no longer sees it")
+minecheck.expect(#minecheck.findNearbyEntities(TARGET_TYPE) == 0, "the client no longer sees it")
 
 if not phase then
   local left = minecheck.leaveWorld(60)

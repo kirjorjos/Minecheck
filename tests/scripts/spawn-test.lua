@@ -90,9 +90,16 @@ local itemFound = minecheck.waitFor(function()
 end, 5)
 check(itemFound, "diamond item drop exists on the server")
 
--- structure
+-- structure: 1.7.10 ships no structure templates at all (its villages are generated in code), so
+-- the only honest expectation there is that the call reports why instead of placing something else.
+local minor = tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0
 local igloo = minecheck.spawnStructure("minecraft:igloo/top", { x = 10, y = FIXTURE_Y, z = 10 })
-check(igloo.success, "spawnStructure igloo/top succeeded")
+if minor >= 9 then
+  check(igloo.success, "spawnStructure igloo/top succeeded")
+else
+  check(not igloo.success, "spawnStructure reports that this line has no structure templates")
+  check(igloo.error ~= nil, "spawnStructure's refusal carries a reason")
+end
 
 -- A phase leaves the session running: the coordinator owns the player-leave wait and the stop (see
 -- `_G.MINECHECK_PHASE` in docs/lua-api.md).

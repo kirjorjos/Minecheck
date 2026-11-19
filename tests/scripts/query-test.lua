@@ -151,9 +151,12 @@ check(still, "findEntities(tag) reports the cow settled and still")
 -- The spec's "punch a mob with a particular tag" example, driven from the *client*: the client
 -- finds the target through its own view of the world, aims at it, and attacks until it dies.
 --
--- A vex is the test double because it never spawns naturally in the overworld, so a client-side
--- type query can only match the one we spawn. A scoreboard tag could not be the client-side handle
--- at all: vanilla never syncs entity tags to clients.
+-- The test double is a mob that never spawns naturally in the overworld, so a client-side type
+-- query can only match the one we spawn. A scoreboard tag could not be the client-side handle at
+-- all: vanilla never syncs entity tags to clients. A vex is the usual choice; 1.7.10 predates it,
+-- and a snow golem is the same kind of handle there — it exists only when a player builds one.
+local MINOR = tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0
+local TARGET_TYPE = MINOR < 8 and "minecraft:snow_golem" or "minecraft:vex"
 local vx = math.floor(px)
 local vz = math.floor(pz)
 local vy = math.floor(py) + 2 -- Guaranteed air for the spawn (the player's own column above their head; a tree or ceiling there
@@ -178,9 +181,9 @@ if minor < 16 then
   -- proves it landed.
   vexNbt.Attributes = { { Name = "generic.knockbackResistance", Base = 1.0 } }
 end
-local vex = minecheck.spawnEntity("minecraft:vex", { x = vx + 0.5, y = vy, z = vz + 0.5 }, vexNbt)
-check(vex.success, "spawnEntity vex succeeded")
-check(minecheck.runCommand("tag @e[type=minecraft:vex] add punchtarget").result >= 1, "marked the punch target")
+local vex = minecheck.spawnEntity(TARGET_TYPE, { x = vx + 0.5, y = vy, z = vz + 0.5 }, vexNbt)
+check(vex.success, "spawnEntity the target succeeded")
+check(minecheck.runCommand("tag @e[type=" .. TARGET_TYPE .. "] add punchtarget").result >= 1, "marked the punch target")
 -- Survival plus a real weapon: a creative player's attacks deal no damage, and a bare fist needs ten
 -- hits on a vex. `gamemode` reports the players it *changed*, so an already-survival player returns
 -- 0 — assert the resulting mode instead.
@@ -198,7 +201,11 @@ check(
 -- ("Unknown item 'minecraft:netherite_sword'"), so earlier lines swing a diamond sword instead.
 local swordItem = minor >= 16 and "minecraft:netherite_sword" or "minecraft:diamond_sword"
 local swordCommand
-if minor < 17 then
+if minor < 8 then
+  -- Neither `replaceitem` (1.8) nor `item replace` (1.17) exists here: a give is the only way to
+  -- put the sword in the hand, and on a fresh join the first free slot is the selected one.
+  swordCommand = "give " .. player .. " " .. swordItem .. " 1 0"
+elseif minor < 17 then
   swordCommand = "replaceitem entity " .. player .. " hotbar.0 " .. swordItem
 else
   swordCommand = "item replace entity " .. player .. " hotbar.0 with " .. swordItem
@@ -210,11 +217,13 @@ check(minecheck.runCommand(swordCommand).result >= 1, "client player given a swo
 local knockbackImmune
 if minor < 16 then
   knockbackImmune = minecheck.runCommand(
-    "data get entity @e[type=minecraft:vex,tag=punchtarget,limit=1] Attributes[0].Base"
+    "data get entity @e[type=" .. TARGET_TYPE .. ",tag=punchtarget,limit=1] Attributes[0].Base"
   ).result >= 1
 else
   knockbackImmune = minecheck.runCommand(
-    "attribute @e[type=minecraft:vex,tag=punchtarget,limit=1] minecraft:generic.knockback_resistance base set 1.0"
+    "attribute @e[type="
+      .. TARGET_TYPE
+      .. ",tag=punchtarget,limit=1] minecraft:generic.knockback_resistance base set 1.0"
   ).result >= 1
 end
 check(knockbackImmune, "punch target is knockback-immune")
@@ -234,6 +243,6 @@ if not _G.MINECHECK_PHASE then
   check(left, "client left after query test")
   -- The client only leaves once the target is gone, so its absence proves a real player attack
   -- killed it (findEntities by tag, the only side where tags exist).
-  check(#minecheck.findEntities("minecraft:vex", "punchtarget") == 0, "the punched target died")
+  check(#minecheck.findEntities(TARGET_TYPE, "punchtarget") == 0, "the punched target died")
   minecheck.runCommand("stop")
 end
