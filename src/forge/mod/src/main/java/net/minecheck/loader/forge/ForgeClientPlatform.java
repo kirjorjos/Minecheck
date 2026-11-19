@@ -963,6 +963,11 @@ public final class ForgeClientPlatform implements ClientPlatform {
     List<EntityInfo> out = new ArrayList<>();
     for (Object candidate : level.loadedEntityList) {
       Entity entity = (Entity) candidate;
+      // A killed entity stays in this line's list until the world ticks it out, so a script that
+      // waits for its target to be gone would see the corpse forever.
+      if (entity.isDead) {
+        continue;
+      }
       ResourceLocation actual = entityTypeId(entity);
       if (typeId != null && !typeId.equals(actual)) {
         continue;
