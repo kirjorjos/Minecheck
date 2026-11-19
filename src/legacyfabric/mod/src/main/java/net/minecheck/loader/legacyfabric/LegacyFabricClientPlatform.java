@@ -295,12 +295,21 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return; // the tick is the only place this can run; anything else retries next tick
     }
     leaveRequested = false;
-    IntegratedServer server = client.getServer();
-    if (client.world != null && client.isIntegratedServerRunning() && server != null) {
-      server.stopServer();
-    } else if (client.getNetworkHandler() != null) {
+    // A held clock parks the server thread, and the teardown waits for that thread to finish — so
+    // the clock is released first. Left held, the leave deadlocked the client in the integrated
+    // server's own shutdown, which is the one state a script cannot wait its way out of.
+    net.minecheck.common.tick.TickClock.get().resume();
+    // Only for a server this client does not own. On an integrated world the disconnect below
+    // stops the server itself; calling stop directly from this thread waits on a task the same
+    // thread has to drain.
+    if (client.world != null
+        && !client.isIntegratedServerRunning()
+        && client.getNetworkHandler() != null) {
       client.getNetworkHandler().clearWorld();
     }
+    // What vanilla's own "Save and Quit to Title" does: it drops the world and stops an integrated
+    // server through the client's own connection path.
+    client.connect(null);
     client.setScreen(new TitleScreen());
   }
 

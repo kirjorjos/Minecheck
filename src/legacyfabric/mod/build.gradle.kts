@@ -96,9 +96,14 @@ val extractLwjgl2Natives by
 
 // The lifecycle tests launch from a descriptor written by `devHelperClientLaunch`, which reads
 // `runClient` and never executes it, so `runClient`'s own dependencies never run there.
+//
+// Both runs need the downgraded classes, not just the client: the dedicated server is the same Java
+// 8 runtime, and without the mapping it is handed this module's Java 17 compile output and dies on
+// `UnsupportedClassVersionError: ... MinecraftServer ... class file version 61.0` before the world
+// loads.
 gradle.projectsEvaluated {
   tasks
-    .matching { it.name == "runClient" }
+    .matching { it.name == "runClient" || it.name == "runServer" }
     .configureEach {
       if (this is JavaExec) {
         dependsOn(extractLwjgl2Natives)
