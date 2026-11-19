@@ -1190,8 +1190,8 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       cmd.add("-a");
       // Pinned, not left to xvfb-run's default screen: LWJGL 2 reads the X screen's modes while
       // Minecraft sets the window icon, before any window exists, and a screen it cannot enumerate
-      // (no 24-bit depth, no GLX, no render extension, or RandR with no screens) throws
-      // ArrayIndexOutOfBoundsException there and the game dies during initialization.
+      // (no 24-bit depth, no GLX, no render extension) throws ArrayIndexOutOfBoundsException there
+      // and the game dies during initialization.
       cmd.add("-s");
       cmd.add(XVFB_SCREEN);
       logDisplayProbe();
@@ -1254,17 +1254,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     return pb;
   }
 
-  /**
-   * The screen the client boots against; see {@link #launcherBuilder}.
-   *
-   * <p>RandR is disabled on purpose. LWJGL 2 asks X for its display modes through XRandR when the
-   * extension is present, and a virtual X server can report the extension with no screens attached
-   * — which is what the CI runner's Xvfb does, so the game dies on {@code getScreenNames()[0]}
-   * while Minecraft sets the window icon. Without RandR it takes the GLX path instead, which is the
-   * same path it uses on a real desktop.
-   */
+  /** The screen the client boots against; see {@link #launcherBuilder}. */
   private static final String XVFB_SCREEN =
-      "-screen 0 1280x1024x24 -ac +extension GLX +render -extension RANDR -noreset";
+      "-screen 0 1280x1024x24 -ac +extension GLX +render -noreset";
 
   /**
    * Logs what the virtual X server actually offers. A client that dies while enumerating display
