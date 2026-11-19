@@ -1193,7 +1193,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       // (no 24-bit depth, no GLX, no render extension) throws ArrayIndexOutOfBoundsException there
       // and the game dies during initialization.
       cmd.add("-s");
-      cmd.add("-screen 0 1280x1024x24 -ac +extension GLX +render -noreset");
+      cmd.add(XVFB_SCREEN);
     }
 
     if (descriptorFile == null || !Files.isRegularFile(descriptorFile)) {
@@ -1252,6 +1252,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     pb.environment().putAll(LaunchDescriptor.parseEnvironment(d.get("environment")));
     return pb;
   }
+
+  /** The screen the client boots against; see {@link #launcherBuilder}. */
+  private static final String XVFB_SCREEN =
+      "-screen 0 1280x1024x24 -ac +extension GLX +render -noreset";
 
   /**
    * Points the GL stack at software rendering when the game runs under a virtual X server. A

@@ -11,5 +11,9 @@
       "-deobf"
     ],
     "artifactsDir": "build/artifacts"
-  }
+  },
+  "setup": [
+    "sudo apt-get update",
+    "sudo apt-get install -y libgl1-mesa-dri libglx-mesa0 libgl1 mesa-utils x11-xserver-utils"
+  ]
 }

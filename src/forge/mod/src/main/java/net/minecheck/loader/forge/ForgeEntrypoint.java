@@ -170,6 +170,9 @@ public class ForgeEntrypoint {
   public void onClientTick(TickEvent.ClientTickEvent event) {
     if (event.phase == TickEvent.Phase.START) {
       if (client != null) {
+        // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
+        // queues a client task and waits for it, which cannot happen while that queue is draining.
+        client.applyPendingLeave();
         // The camera runs before the player does: it holds the body's rotation at the value the
         // server last saw, and doing that after the player ticked would be after the packet that
         // carries the change.
