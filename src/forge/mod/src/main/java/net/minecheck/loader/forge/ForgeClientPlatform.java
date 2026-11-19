@@ -94,6 +94,9 @@ public class ForgeClientPlatform implements ClientPlatform {
   /** Set once the window handling has been settled (or the config said not to). */
   private boolean windowSettled;
 
+  /** Set by {@link #leaveWorld()} and applied by the client tick. */
+  private volatile boolean leaveRequested;
+
   /**
    * 1.12.2 runs on LWJGL 2, which has no way to hide a window: {@code Display} can resize it, move
    * it off screen or minimise it, but hiding it is a GLFW concept. The pause-on-lost-focus rule is
@@ -803,17 +806,34 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void leaveWorld() {
-    onClientThread(
-        () -> {
-          Minecraft mc = mc();
-          if (mc.world != null) {
-            mc.world.sendQuittingDisconnectingPacket();
-          }
-          // loadWorld(null) alone leaves the "Saving world" progress screen up; the main menu is
-          // what makes isOnTitleScreen() true after leaving.
-          mc.loadWorld(null);
-          mc.displayGuiScreen(new GuiMainMenu());
-        });
+    // Deliberately not a scheduled task. loadWorld(null) stops the integrated server by queueing a
+    // task on the client's own scheduled-task queue and waiting for it, so a leave that ran inside
+    // that queue waited for itself and never returned. The tick hook applies the request from the
+    // tick instead, which is where 1.12.2 runs its own quit-to-title.
+    leaveRequested = true;
+  }
+
+  /** Applies a pending {@link #leaveWorld()} from the client tick, outside the task queue. */
+  void applyPendingLeave() {
+    if (!leaveRequested) {
+      return;
+    }
+    Minecraft mc = mc();
+    if (!mc.isCallingFromMinecraftThread()) {
+      return; // the tick is the only place this can run; anything else retries next tick
+    }
+    leaveRequested = false;
+    // Only for a server this client does not own. On an integrated world the quit packet races the
+    // integrated server's own shutdown: the server stops first, and loadWorld's initiateShutdown
+    // then queues the task it waits for on a queue nobody drains, hanging the client's tick.
+    // loadWorld's shutdown disconnects the local player itself, so nothing is missing without it.
+    if (mc.world != null && !mc.isIntegratedServerRunning()) {
+      mc.world.sendQuittingDisconnectingPacket();
+    }
+    // loadWorld(null) alone leaves the "Saving world" progress screen up; the main menu is what
+    // makes isOnTitleScreen() true after leaving.
+    mc.loadWorld(null);
+    mc.displayGuiScreen(new GuiMainMenu());
   }
 
   @Override

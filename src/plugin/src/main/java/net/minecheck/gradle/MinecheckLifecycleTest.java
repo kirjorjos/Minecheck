@@ -1194,7 +1194,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       // and the game dies during initialization.
       cmd.add("-s");
       cmd.add(XVFB_SCREEN);
-      logDisplayProbe();
     }
 
     if (descriptorFile == null || !Files.isRegularFile(descriptorFile)) {
@@ -1257,37 +1256,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   /** The screen the client boots against; see {@link #launcherBuilder}. */
   private static final String XVFB_SCREEN =
       "-screen 0 1280x1024x24 -ac +extension GLX +render -noreset";
-
-  /**
-   * Logs what the virtual X server actually offers. A client that dies while enumerating display
-   * modes says nothing about why, and the server's extensions and modes are the difference between
-   * a working headless run and one that finds no screens at all.
-   */
-  private void logDisplayProbe() {
-    List<String> cmd =
-        new ArrayList<>(
-            List.of(
-                resolveExecutable("xvfb-run"),
-                "-a",
-                "-s",
-                XVFB_SCREEN,
-                "sh",
-                "-c",
-                "Xvfb -version 2>&1 | head -2; xrandr --query 2>&1 | head -12; "
-                    + "glxinfo -B 2>&1 | head -12"));
-    try {
-      Process probe = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-      String out = new String(probe.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-      probe.waitFor();
-      for (String line : out.split("\n")) {
-        if (!line.isBlank()) {
-          getLogger().lifecycle("Minecheck: display | {}", line.strip());
-        }
-      }
-    } catch (Exception e) {
-      getLogger().lifecycle("Minecheck: display probe failed: {}", e.toString());
-    }
-  }
 
   /**
    * Points the GL stack at software rendering when the game runs under a virtual X server. A
