@@ -15,14 +15,7 @@
       "tier": -1
     }
   ],
-  "holder": {
-    "granted_at": "2026-11-19T01:11:23Z",
-    "id": "e-9",
-    "kind": "pr",
-    "lease_until": "2026-11-19T02:41:23Z",
-    "pr": "211",
-    "sha": "5c5471f2a800701b4d16c091ba4a9317ac0b203b"
-  },
+  "holder": null,
   "last_runs": {
     "211": {
       "at": "2026-11-19T00:48:27Z",
