@@ -15,4 +15,14 @@ Suggested shape, delete what you do not use:
 
 ## Changed
 -
--->
+
+## Added
+
+- First release of Minecheck for Minecraft 1.12.2, shipping the Forge build.
+- The shared script suites run on this line unmodified: the 1.13-era commands, selector arguments and
+  packet shapes they use are translated in the 1.12.2 platform (`LegacyCommandShim`, FML frame taps,
+  per-part structure names, attribute base values).
+
+## Changed
+
+- The Forge 1.12.2 build targets Java 8, the JVM Forge 14.23.5 starts on.
