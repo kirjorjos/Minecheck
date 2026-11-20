@@ -26,18 +26,27 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.12.2 is mapped by MCP, and stable_39 is the last stable
-  // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
-  // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
+  // No Mojang mappings this far back: 1.12 is mapped by MCP, and stable_39 is the last stable
+  // release for it (the 1.12 artifact, which FG 2.x asks for with the game version suffixed).
+  // Forge resolves its production members by SRG name, so the remapped jar is still checked by
+  // `checkProductionJars`.
   mappings { mcp("stable", "39-1.12") }
-  // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
-  minecraftForge { loader("14.23.5.2860") }
+  // 14.21.1.2443 is the last 1.12 Forge build, and the one a user on this version installs.
+  minecraftForge {
+    loader("14.21.1.2443")
+    // FML 1.12 installs its security manager in the tweaker's constructor and rejects any later
+    // `System.setSecurityManager`. The merged jar's manifest names the client tweaker too, so a
+    // server launch builds one twice and dies before the game starts ("Cannot replace the FML
+    // security manager"). 1.12.2's FML dedupes them, so the sibling line never needed this;
+    // unimined's FG3 path ships juuxel's unprotect agent for the same reason, its FG2 path does
+    // not, and this line asks for it explicitly.
+    unprotectRuntime = true
+  }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.12.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.12 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -51,7 +60,7 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
-// 1.12.2 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
+// 1.12 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
 // client died with "no lwjgl64 in java.library.path" before it could open a window. Extract them
 // from the published natives artefact and point the client's library path at the directory.
 val lwjgl2Natives by configurations.creating
