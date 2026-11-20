@@ -1646,7 +1646,12 @@ public final class LuaMinecheck {
         net.minecheck.platform.api.SlotInfo dest = client.getSlot(to, screen);
         final int destStart = dest.empty() ? 0 : dest.count();
         int placed = 0;
-        while (placed < want) {
+        // A click can be dropped when it lands while the previous slot update is still in flight,
+        // which left a partial move behind a `moveItem(..., count)` that then reported false. Ask
+        // again instead of giving up, and take the count from the container rather than counting
+        // clicks: the slots are what the caller asserts on.
+        int misses = 0;
+        while (placed < want && misses < 3) {
           final int expected = destStart + placed + 1;
           if (!callOnClientThread(() -> client.clickSlot(to, 1, "pickup"))) {
             break;
@@ -1654,12 +1659,14 @@ public final class LuaMinecheck {
           if (!await(
               () -> {
                 net.minecheck.platform.api.SlotInfo d = client.getSlot(to, screen);
-                return !d.empty() && d.count() == expected;
+                return !d.empty() && d.count() >= expected;
               },
               2000)) {
-            break;
+            misses++;
+            continue;
           }
-          placed++;
+          misses = 0;
+          placed = client.getSlot(to, screen).count() - destStart;
         }
         final int placedCount = placed;
         boolean restored = true;

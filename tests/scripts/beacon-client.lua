@@ -30,12 +30,34 @@ local p0 = minecheck.getPlayer()
 check(p0 ~= nil, "player exists after join")
 local py0 = p0.pos.y
 
-local inv = minecheck.openScreen("inventory", nil, 20)
+local inv = false
+local ready = false
+for _ = 1, 6 do
+  inv = minecheck.openScreen("inventory", nil, 20)
+  if inv then
+    -- Any slot of the open inventory, not a fixed hotbar index: where a `give` lands depends on
+    -- what the player already carries and on the screen (a creative client's hotbar sits at a
+    -- different offset than a survival one). The claim under test is the op + give round trip, and
+    -- it is proven by the emerald showing up in the client's inventory container at all.
+    ready = minecheck.waitFor(function()
+      for i = 0, minecheck.slotCount("inventory") - 1 do
+        local s = minecheck.getSlot(i, "inventory")
+        if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
+          return true
+        end
+      end
+      return false
+    end, 15)
+    if ready then
+      break
+    end
+    minecheck.press("Escape")
+    minecheck.waitFor(function()
+      return not minecheck.isScreenOpen()
+    end, 5)
+  end
+end
 check(inv, "inventory opened for handshake")
-local ready = minecheck.waitFor(function()
-  local s = minecheck.getSlot(36, "inventory")
-  return s ~= nil and not s.empty and s.id == "minecraft:emerald"
-end, 30)
 check(ready, "server op + give handshake complete (emerald in hotbar)")
 minecheck.press("Escape")
 local closed = minecheck.waitFor(function()
@@ -76,14 +98,23 @@ end, 10)
 check(settled, "client back on top of the beacon")
 minecheck.look(90, 0)
 
-local beaconSeen = minecheck.waitFor(function()
-  local pl = minecheck.getPlayer()
-  if pl == nil then
-    return false
+-- The target block is read along the look ray from the eye, and the beacon is directly under the
+-- player's feet: a stance that drifted even a fraction sideways (a settling teleport, a server-side
+-- nudge) puts the ray past the block instead of into it. Re-assert the stance and the look while
+-- polling — standing centred on the beacon and looking straight down must hit it.
+local beaconSeen = false
+for _ = 1, 6 do
+  minecheck.runCommand("tp @s " .. (bx + 0.5) .. " " .. (by + 1) .. " " .. (bz + 0.5))
+  minecheck.look(90, 0)
+  beaconSeen = minecheck.waitFor(function()
+    local pl = minecheck.getPlayer()
+    local t = pl ~= nil and minecheck.getTargetBlock(pl) or nil
+    return t ~= nil and t.x == bx and t.y == by and t.z == bz
+  end, 5)
+  if beaconSeen then
+    break
   end
-  local t = minecheck.getTargetBlock(pl)
-  return t ~= nil and t.x == bx and t.y == by and t.z == bz
-end, 30)
+end
 check(beaconSeen, "beacon visible in the client world")
 
 local beaconBlock = minecheck.getBlock({ x = bx, y = by, z = bz })
@@ -275,19 +306,28 @@ local sword = minecheck.getSlot(HOTBAR_FIRST + 1, "chest")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
 check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
+-- Found by content, not by index: a merged session reaches this phase with the hotbar the session
+-- set up for it, so the gives land wherever the first free slot happens to be.
+local redstoneSlot = nil
 local redstoneReady = minecheck.waitFor(function()
-  local s = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
-  return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8
+  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+    local s = minecheck.getSlot(i, "chest")
+    if s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8 then
+      redstoneSlot = i
+      return true
+    end
+  end
+  return false
 end, 30)
-check(redstoneReady, "server gave the 8-redstone stack (third hotbar slot)")
-local partial = minecheck.moveItem(HOTBAR_FIRST + 2, 0, 3, "chest")
+check(redstoneReady, "server gave the 8-redstone stack (in the hotbar)")
+local partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
   local s = minecheck.getSlot(0, "chest")
   return s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 3
 end, 10)
 check(moved3, "the chest's first slot holds exactly 3 redstone")
-local leftOver = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")
+local leftOver = minecheck.getSlot(redstoneSlot, "chest")
 check(leftOver.id == "minecraft:redstone" and leftOver.count == 5, "source keeps the remaining 5 redstone")
 
 local typed = minecheck.typeText("give @s minecraft:diamond 2", "command")

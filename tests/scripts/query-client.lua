@@ -67,6 +67,24 @@ for _ = 1, 40 do
     killed = true
     break
   end
+  -- The target can end up out of reach: a line without `NoGravity` drops it from the cell above
+  -- the player's head, and in a merged session the player stands on a six-block beacon pyramid, so
+  -- it lands at the bottom of the tower. Step to it rather than swinging at air — an op client can,
+  -- and a client that is not op simply stays where it is and the swings below are unchanged.
+  local p = minecheck.getPlayer()
+  if p ~= nil then
+    local dx = t.pos.x - p.pos.x
+    local dy = t.pos.y - p.pos.y
+    local dz = t.pos.z - p.pos.z
+    if dx * dx + dy * dy + dz * dz > 9 then
+      minecheck.runCommand("tp @s " .. string.format("%.2f %.2f %.2f", t.pos.x - 1.5, t.pos.y, t.pos.z))
+      minecheck.waitFor(function()
+        local now = minecheck.getPlayer()
+        local still = target()
+        return now ~= nil and still ~= nil and math.abs(now.pos.x - (still.pos.x - 1.5)) < 1.5
+      end, 5)
+    end
+  end
   -- pos is the entity's feet, so aim a little above them rather than at the feet themselves.
   minecheck.lookAt(t.pos.x, t.pos.y + 0.4, t.pos.z)
   minecheck.press("key.attack", 0.7)

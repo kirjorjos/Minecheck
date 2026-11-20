@@ -17,6 +17,10 @@ local function check(result, name)
 end
 
 minecheck.runCommand("op " .. player)
+-- Survival explicitly: the chest assertions below click slots, and a creative client's clicks do not
+-- move items between containers. A standalone run inherits survival from the world; a merged
+-- session must not depend on whatever mode the world was left in.
+minecheck.runCommand("gamemode survival " .. player)
 
 local g1 = minecheck.runCommand("give " .. player .. " minecraft:emerald 1")
 check(g1.result > 0, "emerald given")
