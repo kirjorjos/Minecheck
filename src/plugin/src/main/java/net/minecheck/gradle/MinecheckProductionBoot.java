@@ -64,6 +64,10 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
   private static final String FABRIC_INSTALLER = "https://meta.fabricmc.net/v2/versions/installer";
   private static final String FABRIC_LAUNCHER =
       "https://meta.fabricmc.net/v2/versions/loader/%s/%s/%s/server/jar";
+  private static final String LEGACY_FABRIC_INSTALLER =
+      "https://meta.legacyfabric.net/v2/versions/installer";
+  private static final String LEGACY_FABRIC_LAUNCHER =
+      "https://meta.legacyfabric.net/v2/versions/loader/%s/%s/%s/server/jar";
   private static final String QUILT_INSTALLER =
       "https://quiltmc.org/api/v1/download-latest-installer/java-universal";
   private static final String FORGE_INSTALLER =
@@ -90,6 +94,8 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
 
   private static final Pattern FABRIC_LOADER =
       Pattern.compile("fabric\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
+  private static final Pattern LEGACY_FABRIC_LOADER =
+      Pattern.compile("legacyFabric\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
   private static final Pattern FABRIC_API = Pattern.compile("fabric-api:fabric-api:([^\"\\s]+)");
   private static final Pattern QUILT_LOADER =
       Pattern.compile("quilt\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
@@ -200,8 +206,10 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
     }
 
     String buildFile = readBuildFile(root, loader);
+    // A line that pins a JDK ships Java 8 bytecode for every loader on it, so the JVM the Gradle
+    // build runs on cannot start those servers either.
     String java =
-        loader.equals("forge")
+        loader.equals("forge") || loader.equals("legacyfabric")
             ? getForgeJavaExecutable().getOrElse(getJavaExecutable().get())
             : getJavaExecutable().get();
     List<String> command;
@@ -214,6 +222,12 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         downloadModrinth("fabric-api", minecraft, api, mods.resolve("fabric-api-" + api + ".jar"));
         getLogger().lifecycle("Minecheck:   loader {}, fabric-api {}", loaderVersion, api);
         command = installFabric(workdir, minecraft, loaderVersion, java);
+      }
+      case "legacyfabric" -> {
+        String loaderVersion =
+            match(LEGACY_FABRIC_LOADER, buildFile, "Legacy Fabric loader version", "legacyfabric");
+        getLogger().lifecycle("Minecheck:   loader {}", loaderVersion);
+        command = installLegacyFabric(workdir, minecraft, loaderVersion, java);
       }
       case "quilt" -> {
         String loaderVersion = match(QUILT_LOADER, buildFile, "Quilt loader version", "quilt");
@@ -396,6 +410,17 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
     return List.of(java, "-Xmx1536M", "-jar", "fabric-server.jar", "nogui");
   }
 
+  /** Legacy Fabric mirrors Fabric meta on its own host, installer version included. */
+  private List<String> installLegacyFabric(
+      Path workdir, String minecraft, String loader, String java) {
+    String installer = legacyFabricInstallerVersion();
+    getLogger().lifecycle("Minecheck:   installer {}", installer);
+    download(
+        String.format(LEGACY_FABRIC_LAUNCHER, minecraft, loader, installer),
+        workdir.resolve("legacyfabric-server.jar"));
+    return List.of(java, "-Xmx1536M", "-jar", "legacyfabric-server.jar", "nogui");
+  }
+
   private List<String> installQuilt(Path workdir, String minecraft, String loader, String java) {
     Path installer = workdir.resolve("quilt-installer.jar");
     download(QUILT_INSTALLER, installer);
@@ -443,6 +468,12 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         workdir.resolve("install.log"),
         1200,
         false);
+    // 1.7.10's installer leaves one universal jar beside the installer, and no
+    // libraries/net/minecraftforge/forge/<mc>-<version> directory at all; that jar is the server.
+    Path universal = workdir.resolve("forge-" + minecraft + "-" + version + "-universal.jar");
+    if (Files.isRegularFile(universal)) {
+      return List.of(java, "-Xmx1536M", "-jar", universal.getFileName().toString(), "nogui");
+    }
     Path libraries =
         workdir.resolve("libraries/net/minecraftforge/forge/" + minecraft + "-" + version);
     if (!Files.isDirectory(libraries)) {
@@ -594,6 +625,17 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       }
     }
     throw failure("the Fabric meta API lists no stable installer version");
+  }
+
+  private String legacyFabricInstallerVersion() {
+    for (JsonElement entry : fetchJson(LEGACY_FABRIC_INSTALLER).getAsJsonArray()) {
+      JsonObject version = entry.getAsJsonObject();
+      JsonElement stable = version.get("stable");
+      if (stable != null && stable.getAsBoolean()) {
+        return version.get("version").getAsString();
+      }
+    }
+    throw failure("the Legacy Fabric meta API lists no stable installer version");
   }
 
   /**

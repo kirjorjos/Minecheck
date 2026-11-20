@@ -241,6 +241,16 @@ tasks.shadowJar {
       if (downgradeTo == null) project.configurations.runtimeClasspath.get()
       else downgradedRuntimeInput
     )
+  if (downgradeTo != null) {
+    // The configuration is a plain `files(...)` list, which Gradle cannot trace back to the tasks
+    // that write those directories, so the dependency has to be declared by hand (build
+    // validation refuses the task otherwise).
+    dependsOn(
+      ":common:downgradedRuntime",
+      ":platform-api:downgradedRuntime",
+      ":legacyfabric-mod:downgradedRuntime",
+    )
+  }
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces and
   // writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")

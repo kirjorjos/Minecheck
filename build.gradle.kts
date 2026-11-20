@@ -1003,14 +1003,16 @@ subprojects {
   }
 }
 
-val loaderModules = listOf("legacyfabric-mod")
+// Both loaders this line's metadata names: one that is listed there but missing here is promised to
+// a release and absent from it.
+val loaderModules = listOf("forge-mod", "legacyfabric-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description = "Builds this line's distributable jar (:legacyfabric-mod:productionJar)"
+  description = "Builds this line's distributable jars, one productionJar per loader"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1090,7 +1092,7 @@ val bootMinecraftVersion = property("minecraft_version").toString()
 // load it.
 val pinnedForgeJava: String =
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
-    project(":legacyfabric-mod")
+    project(":forge-mod")
       .layout
       .buildDirectory
       .dir("jdk/8.0.292/bin/java")
@@ -1109,7 +1111,7 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   description = "Boots every packaged loader jar in an installed dedicated server"
   dependsOn("collectArtifacts")
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
-    dependsOn(":legacyfabric-mod:installPinnedJdk")
+    dependsOn(":forge-mod:installPinnedJdk")
   }
   minecraftVersion.set(bootMinecraftVersion)
   modVersion.set(project.version.toString())
@@ -1206,7 +1208,7 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 
 val mcVersion: String = property("minecraft_version") as String
 
-val loaderArtifactNames = mapOf("legacyfabric-mod" to "legacyfabric")
+val loaderArtifactNames = mapOf("forge-mod" to "forge", "legacyfabric-mod" to "legacyfabric")
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects
