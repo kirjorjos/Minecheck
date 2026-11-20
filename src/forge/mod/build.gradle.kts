@@ -1,7 +1,14 @@
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
+import java.util.jar.Attributes
+import java.util.jar.Manifest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 import net.minecheck.gradle.LaunchDescriptor
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.withGroovyBuilder
@@ -420,6 +427,54 @@ fun writeDescriptor(task: JavaExec, out: File) {
   out.writeText(sb.toString())
 }
 
+// --- the server's copy of the dev game jar ------------------------------------------------------
+// The 1.12 dev runs use unimined's FG2 merge of the Forge server jar and Minecraft, and it inherits
+// that jar's `TweakClass: FMLTweaker`. FML 1.12's CoreModManager scans `java.class.path` for tweak
+// classes and launches every one it finds, so the dedicated server builds FMLTweaker (from the
+// merged jar) beside the FMLServerTweaker the launch asks for, and the second constructor dies with
+// "Cannot replace the FML security manager". The client wants FMLTweaker and is unaffected; the
+// server runs against a copy of the jar with just that attribute dropped.
+val serverGameDir = layout.buildDirectory.dir("minecheck/server-games")
+
+/** Whether [jar]'s manifest declares a tweak class, i.e. FML would launch it from the classpath. */
+fun declaresTweakClass(jar: File): Boolean {
+  if (!jar.isFile || !jar.name.endsWith(".jar")) return false
+  return try {
+    ZipFile(jar).use { zip ->
+      val entry = zip.getEntry("META-INF/MANIFEST.MF") ?: return@use false
+      Manifest(zip.getInputStream(entry)).mainAttributes.getValue("TweakClass") != null
+    }
+  } catch (e: IOException) {
+    false
+  }
+}
+
+fun copyWithoutTweakClass(source: File, target: File) {
+  ZipFile(source).use { zip ->
+    ZipOutputStream(target.outputStream().buffered()).use { out ->
+      for (entry in zip.entries()) {
+        val data: ByteArray
+        if (entry.name == "META-INF/MANIFEST.MF") {
+          val manifest = Manifest(zip.getInputStream(entry))
+          manifest.mainAttributes.remove(Attributes.Name("TweakClass"))
+          val buffer = ByteArrayOutputStream()
+          manifest.write(buffer)
+          data = buffer.toByteArray()
+        } else {
+          data = zip.getInputStream(entry).use { stream -> stream.readBytes() }
+        }
+        out.putNextEntry(ZipEntry(entry.name))
+        out.write(data)
+        out.closeEntry()
+      }
+    }
+  }
+}
+
+/** The server's stand-in for [entry] when the game jar declares a tweak class. */
+fun serverGameJarFor(entry: File): File =
+  if (declaresTweakClass(entry)) File(serverGameDir.get().asFile, entry.name) else entry
+
 /**
  * The classpath file Forge's game module layer is built from.
  *
@@ -737,4 +792,32 @@ gradle.projectsEvaluated {
         doFirst { setExecutable(pinnedJdkJavaFile.absolutePath) }
       }
     }
+}
+
+// Runs after the downgrade mapping above, so it only ever swaps the game jar itself. The jar list
+// is captured here rather than read inside the task: unimined's classpath is what both the
+// descriptor and the run use, and after the swap it names the patched copies.
+gradle.projectsEvaluated {
+  val server = tasks.named("runServer").get() as JavaExec
+  val entries = server.classpath.files.toList()
+  val mapped = entries.map { serverGameJarFor(it) }
+  val sources = entries.filterIndexed { index, entry -> mapped[index] != entry }
+  server.classpath = files(mapped)
+  if (sources.isEmpty()) return@projectsEvaluated
+  val prepare =
+    tasks.register("prepareServerGameJars") {
+      group = "minecheck"
+      description = "Copies the dev game jars the server must not read a tweak class from"
+      inputs.files(sources)
+      outputs.dir(serverGameDir)
+      doLast {
+        val out = serverGameDir.get().asFile
+        out.mkdirs()
+        for (jar in sources) {
+          copyWithoutTweakClass(jar, File(out, jar.name))
+        }
+      }
+    }
+  server.dependsOn(prepare)
+  tasks.named("devHelperServerLaunch") { dependsOn(prepare) }
 }
