@@ -445,6 +445,13 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         false);
     Path libraries =
         workdir.resolve("libraries/net/minecraftforge/forge/" + minecraft + "-" + version);
+    // 1.12's installer predates that layout: it writes the universal jar and the vanilla server
+    // jar at the root and lets the jar's own ServerLaunchWrapper build the classpath from
+    // `libraries/`. Started with `-jar`, on the line's Java 8, which is what a user does.
+    Path universal = workdir.resolve("forge-" + minecraft + "-" + version + "-universal.jar");
+    if (!Files.isDirectory(libraries) && Files.isRegularFile(universal)) {
+      return List.of(java, "-Xmx1536M", "-jar", universal.getFileName().toString(), "nogui");
+    }
     if (!Files.isDirectory(libraries)) {
       throw failure("the Forge installer produced no " + libraries + " in " + workdir);
     }
