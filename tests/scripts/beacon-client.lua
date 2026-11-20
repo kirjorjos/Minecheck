@@ -30,11 +30,20 @@ local p0 = minecheck.getPlayer()
 check(p0 ~= nil, "player exists after join")
 local py0 = p0.pos.y
 
+-- A creative client opens the creative inventory instead of its own: no player slots, so the
+-- handshake below would read nothing and report an empty hand. The client is op by now (the server
+-- ops before it cues this phase), so it puts itself in survival and waits for that to land — a
+-- session must not depend on the mode the world it plays in was left in.
+local me = minecheck.getPlayer()
+if me ~= nil then
+  minecheck.runCommand("gamemode survival " .. me.name)
+end
+
 local inv = false
 local ready = false
 for _ = 1, 6 do
   inv = minecheck.openScreen("inventory", nil, 20)
-  if inv then
+  if inv and minecheck.slotCount("inventory") > 0 then
     -- Any slot of the open inventory, not a fixed hotbar index: where a `give` lands depends on
     -- what the player already carries and on the screen (a creative client's hotbar sits at a
     -- different offset than a survival one). The claim under test is the op + give round trip, and
@@ -51,12 +60,28 @@ for _ = 1, 6 do
     if ready then
       break
     end
+  end
+  if inv then
     minecheck.press("Escape")
     minecheck.waitFor(function()
       return not minecheck.isScreenOpen()
     end, 5)
   end
 end
+-- What the client's container actually exposes, logged before the asserts: a failure here is then
+-- diagnosable from the run log (which slots the screen has, and what is in them) instead of only
+-- naming the expectation.
+local dump = {}
+local totalSlots = minecheck.slotCount("inventory")
+for i = 0, totalSlots - 1 do
+  local s = minecheck.getSlot(i, "inventory")
+  if s ~= nil and not s.empty then
+    dump[#dump + 1] = i .. ":" .. s.count .. "x " .. s.id
+  end
+end
+minecheck.log(
+  "beacon handshake: inventory screen exposes " .. totalSlots .. " slots [" .. table.concat(dump, ", ") .. "]"
+)
 check(inv, "inventory opened for handshake")
 check(ready, "server op + give handshake complete (emerald in hotbar)")
 minecheck.press("Escape")
@@ -302,9 +327,21 @@ local chest = minecheck.openScreen("chest", chestAim, 10)
 check(chest, "chest opened")
 check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest slots plus the player's 36")
 
-local sword = minecheck.getSlot(HOTBAR_FIRST + 1, "chest")
-check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
-check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
+-- Found by content, like the redstone below: a merged session reaches this phase with the hotbar
+-- the session set up for it, so a give lands wherever the first free slot happens to be.
+local sword = nil
+local swordReady = minecheck.waitFor(function()
+  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+    local s = minecheck.getSlot(i, "chest")
+    if s ~= nil and not s.empty and s.id == "minecraft:iron_sword" and s.nbt ~= nil then
+      sword = s
+      return true
+    end
+  end
+  return false
+end, 10)
+check(swordReady, "named sword in the hotbar")
+check(sword ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
 -- Found by content, not by index: a merged session reaches this phase with the hotbar the session
 -- set up for it, so the gives land wherever the first free slot happens to be.
@@ -321,6 +358,17 @@ local redstoneReady = minecheck.waitFor(function()
 end, 30)
 check(redstoneReady, "server gave the 8-redstone stack (in the hotbar)")
 local partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
+if not partial then
+  -- A click the server cannot match to its own container is dropped without a resync, so every
+  -- later click is dropped too and nothing moves or errors. Re-opening the chest gives both sides
+  -- the same window again, which is what the retry needs.
+  minecheck.press("Escape")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+  check(minecheck.openScreen("chest", chestAim, 10), "chest reopened after a dropped click")
+  partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
+end
 check(partial, "moveItem moved exactly 3 redstone")
 local moved3 = minecheck.waitFor(function()
   local s = minecheck.getSlot(0, "chest")

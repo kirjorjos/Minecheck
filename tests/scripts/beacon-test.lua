@@ -21,6 +21,10 @@ minecheck.runCommand("op " .. player)
 -- move items between containers. A standalone run inherits survival from the world; a merged
 -- session must not depend on whatever mode the world was left in.
 minecheck.runCommand("gamemode survival " .. player)
+-- A known starting inventory: the gives below are asserted as slots, and a merged session reaches
+-- this phase with whatever the world it plays in left in the player's hotbar. A standalone run
+-- starts from an empty one, so this only makes the two agree.
+minecheck.runCommand("clear " .. player)
 
 local g1 = minecheck.runCommand("give " .. player .. " minecraft:emerald 1")
 check(g1.result > 0, "emerald given")

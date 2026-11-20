@@ -1362,6 +1362,14 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     GuiContainer screen = (GuiContainer) client.currentScreen;
+    // 1.7.10 applies the local half of a click to the player's open container and names the
+    // screen's
+    // window in the packet. If the two disagree (a screen that outlived the container the client
+    // was told to open), the click is applied to another container, the packet carries that slot's
+    // stack, and the server silently drops it: nothing moves and nothing errors.
+    if (client.thePlayer.openContainer != screen.inventorySlots) {
+      client.thePlayer.openContainer = screen.inventorySlots;
+    }
     client.playerController.windowClick(
         screen.inventorySlots.windowId, slot, button, itemAction(actionType), client.thePlayer);
     return true;
