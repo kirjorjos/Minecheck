@@ -19,12 +19,15 @@ if not phase then
   end
 end
 
--- Client-side entity query. The server spawns a vex for this phase: vexes never spawn naturally in
--- the overworld, so the type is a handle the client can actually use to tell our target apart from
--- worldgen mobs.
+-- Client-side entity query. The server spawns a mob that never occurs naturally for this phase: a
+-- vex on 1.8 and later, a snow golem where the line predates it (one only exists when a player
+-- builds it), so the type is a handle the client can use to tell our target from worldgen mobs.
+local TARGET_TYPE = (tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0) < 8
+    and "minecraft:snow_golem"
+  or "minecraft:vex"
 local targetId = nil
 local seen = minecheck.waitFor(function()
-  local found = minecheck.findNearbyEntities("minecraft:vex")
+  local found = minecheck.findNearbyEntities(TARGET_TYPE)
   if #found == 1 then
     targetId = found[1].id
     return true
@@ -37,7 +40,7 @@ end
 minecheck.log("query test: client sees target id " .. tostring(targetId))
 
 local function target()
-  for _, e in pairs(minecheck.findNearbyEntities("minecraft:vex")) do
+  for _, e in pairs(minecheck.findNearbyEntities(TARGET_TYPE)) do
     if e.id == targetId then
       return e
     end
@@ -64,12 +67,30 @@ for _ = 1, 40 do
     killed = true
     break
   end
-  -- pos is the entity's feet; a vex is 0.8 tall, so its middle is 0.4 up.
+  -- The target can end up out of reach: a line without `NoGravity` drops it from the cell above
+  -- the player's head, and in a merged session the player stands on a six-block beacon pyramid, so
+  -- it lands at the bottom of the tower. Step to it rather than swinging at air — an op client can,
+  -- and a client that is not op simply stays where it is and the swings below are unchanged.
+  local p = minecheck.getPlayer()
+  if p ~= nil then
+    local dx = t.pos.x - p.pos.x
+    local dy = t.pos.y - p.pos.y
+    local dz = t.pos.z - p.pos.z
+    if dx * dx + dy * dy + dz * dz > 9 then
+      minecheck.runCommand("tp @s " .. string.format("%.2f %.2f %.2f", t.pos.x - 1.5, t.pos.y, t.pos.z))
+      minecheck.waitFor(function()
+        local now = minecheck.getPlayer()
+        local still = target()
+        return now ~= nil and still ~= nil and math.abs(now.pos.x - (still.pos.x - 1.5)) < 1.5
+      end, 5)
+    end
+  end
+  -- pos is the entity's feet, so aim a little above them rather than at the feet themselves.
   minecheck.lookAt(t.pos.x, t.pos.y + 0.4, t.pos.z)
   minecheck.press("key.attack", 0.7)
 end
 minecheck.expect(killed, "punched the target to death")
-minecheck.expect(#minecheck.findNearbyEntities("minecraft:vex") == 0, "the client no longer sees it")
+minecheck.expect(#minecheck.findNearbyEntities(TARGET_TYPE) == 0, "the client no longer sees it")
 
 if not phase then
   local left = minecheck.leaveWorld(60)

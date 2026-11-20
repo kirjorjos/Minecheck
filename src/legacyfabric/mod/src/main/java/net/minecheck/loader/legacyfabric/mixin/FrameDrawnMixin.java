@@ -17,8 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(InGameHud.class)
 public class FrameDrawnMixin {
 
-  @Inject(method = "render(F)V", at = @At("TAIL"), require = 0)
-  private void minecheck$frameDrawn(float tickDelta, CallbackInfo ci) {
+  @Inject(method = "render(FZII)V", at = @At("TAIL"), require = 0)
+  private void minecheck$frameDrawn(
+      float tickDelta, boolean inGame, int mouseX, int mouseY, CallbackInfo ci) {
     LegacyFabricClientPlatform.notifyFrameDrawn();
   }
 }

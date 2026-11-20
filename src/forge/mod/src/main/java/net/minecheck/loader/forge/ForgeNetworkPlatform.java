@@ -1,7 +1,15 @@
 package net.minecheck.loader.forge;
 
+import cpw.mods.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.network.NetworkRegistry;
+import cpw.mods.fml.common.network.simpleimpl.IMessage;
+import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
+import cpw.mods.fml.common.network.simpleimpl.MessageContext;
+import cpw.mods.fml.common.network.simpleimpl.SimpleNetworkWrapper;
+import cpw.mods.fml.relauncher.Side;
 import io.netty.buffer.ByteBuf;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.net.MinecheckPacket;
@@ -11,13 +19,6 @@ import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.server.MinecraftServer;
-import net.minecraftforge.fml.common.FMLCommonHandler;
-import net.minecraftforge.fml.common.network.NetworkRegistry;
-import net.minecraftforge.fml.common.network.simpleimpl.IMessage;
-import net.minecraftforge.fml.common.network.simpleimpl.IMessageHandler;
-import net.minecraftforge.fml.common.network.simpleimpl.MessageContext;
-import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
-import net.minecraftforge.fml.relauncher.Side;
 
 /**
  * Forge transport over an FML {@code SimpleNetworkWrapper}.
@@ -27,8 +28,10 @@ import net.minecraftforge.fml.relauncher.Side;
  * watching another mod's channel needs a lower-level tap — {@link ForgeClientChannelTap} on a
  * client, {@link ForgeServerChannelTap} on a dedicated server.
  *
- * <p>Messages arrive on the netty thread and are re-dispatched onto the game thread before they
- * reach the script engine's inbox.
+ * <p>Messages arrive on the netty thread. This line's server has no task queue to hand work to, so
+ * an inbound frame is parked and drained from the server tick by {@link #drainServerTasks()}, the
+ * same marshaling the Legacy Fabric transport uses. The client does have one ({@code
+ * Minecraft.addScheduledTask}) and uses it.
  */
 public class ForgeNetworkPlatform implements NetworkPlatform {
 
@@ -37,6 +40,9 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
 
   /** The process's one network platform; FML's message handlers are instantiated by reflection. */
   private static volatile Consumer<MinecheckPacket> sink = packet -> {};
+
+  /** Frames waiting for the server thread, drained at the end of each server tick. */
+  private static final ConcurrentLinkedQueue<Runnable> SERVER_TASKS = new ConcurrentLinkedQueue<>();
 
   private final boolean dedicated;
   private final boolean registered;
@@ -65,7 +71,13 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
 
   @Override
   public boolean isAvailable() {
-    return registered && (!dedicated || server() != null);
+    if (!registered) {
+      return false;
+    }
+    if (dedicated) {
+      return server() != null;
+    }
+    return Minecraft.getMinecraft() != null;
   }
 
   @Override
@@ -77,7 +89,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     try {
       if (dedicated) {
         MinecraftServer server = server();
-        if (server == null || server.getPlayerList().getCurrentPlayerCount() == 0) {
+        if (server == null || server.getConfigurationManager().getCurrentPlayerCount() == 0) {
           return false;
         }
         channel.sendToAll(new MinecheckS2CMessage(payload));
@@ -101,7 +113,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     if (server == null) {
       return false;
     }
-    EntityPlayerMP player = server.getPlayerList().getPlayerByUsername(playerName);
+    EntityPlayerMP player = server.getConfigurationManager().getPlayerByUsername(playerName);
     if (player == null) {
       return false;
     }
@@ -151,14 +163,30 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     }
   }
 
-  /** Server-side receiver: netty thread into the server thread. */
+  /** Parks work for the server thread, which this line has no task queue to hand it to. */
+  static void queueForServerThread(Runnable task) {
+    SERVER_TASKS.add(task);
+  }
+
+  /** Runs the work that arrived since the last tick, on the server thread. */
+  static void drainServerTasks() {
+    Runnable task;
+    while ((task = SERVER_TASKS.poll()) != null) {
+      try {
+        task.run();
+      } catch (RuntimeException e) {
+        LOG.warning("Minecheck: a delivered packet failed: " + e);
+      }
+    }
+  }
+
+  /** Server-side receiver: netty thread into the server thread, which has no task queue here. */
   public static final class HandlerC2S implements IMessageHandler<MinecheckC2SMessage, IMessage> {
 
     @Override
     public IMessage onMessage(MinecheckC2SMessage message, MessageContext ctx) {
       final byte[] payload = message.payload();
-      final MinecraftServer server = ctx.getServerHandler().player.getServer();
-      server.addScheduledTask(() -> deliver(payload));
+      SERVER_TASKS.add(() -> deliver(payload));
       return null;
     }
   }
@@ -169,7 +197,11 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     @Override
     public IMessage onMessage(MinecheckS2CMessage message, MessageContext ctx) {
       final byte[] payload = message.payload();
-      Minecraft.getMinecraft().addScheduledTask(() -> deliver(payload));
+      Minecraft client = Minecraft.getMinecraft();
+      if (client == null) {
+        return null;
+      }
+      client.addScheduledTask(() -> deliver(payload));
       return null;
     }
   }

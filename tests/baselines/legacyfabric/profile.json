@@ -1,0 +1,8 @@
+{
+  "width": 854,
+  "height": 480,
+  "guiScale": 1,
+  "scale": 1.0,
+  "chatVisible": false,
+  "renderer": "llvmpipe (LLVM 20.1.2, 256 bits)"
+}

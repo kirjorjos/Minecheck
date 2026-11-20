@@ -1,15 +1,9 @@
 {
-  "loaders": [
-    "forge",
-    "legacyfabric"
-  ],
+  "loaders": ["legacyfabric", "forge"],
   "release": {
     "prefix": "MineCheck-",
     "nameFormat": "{loader}-{mc}-{version}{deobf}.jar",
-    "variants": [
-      "",
-      "-deobf"
-    ],
+    "variants": ["", "-deobf"],
     "artifactsDir": "build/artifacts"
   },
   "setup": [

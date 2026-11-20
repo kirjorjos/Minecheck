@@ -22,8 +22,8 @@ unimined.minecraft {
   // cover this line: upstream intermediary starts at 1.14.
   mappings {
     legacyIntermediary()
-    // 604 is the newest legacy yarn build for 1.12.2 (meta.legacyfabric.net/v2/versions/yarn).
-    legacyYarn(604)
+    // 603 is the newest legacy yarn build for 1.7.10 (meta.legacyfabric.net/v2/versions/yarn).
+    legacyYarn(603)
   }
   // 0.20.1 is the newest loader release that still supports 1.12.2.
   legacyFabric { loader("0.20.1") }
@@ -241,6 +241,16 @@ tasks.shadowJar {
       if (downgradeTo == null) project.configurations.runtimeClasspath.get()
       else downgradedRuntimeInput
     )
+  if (downgradeTo != null) {
+    // The configuration is a plain `files(...)` list, which Gradle cannot trace back to the tasks
+    // that write those directories, so the dependency has to be declared by hand (build
+    // validation refuses the task otherwise).
+    dependsOn(
+      ":common:downgradedRuntime",
+      ":platform-api:downgradedRuntime",
+      ":legacyfabric-mod:downgradedRuntime",
+    )
+  }
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces and
   // writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")

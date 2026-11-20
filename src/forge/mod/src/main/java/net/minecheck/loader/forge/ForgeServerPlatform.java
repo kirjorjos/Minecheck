@@ -1,12 +1,22 @@
 package net.minecheck.loader.forge;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
+import java.util.logging.Logger;
+import net.minecheck.platform.api.EntityInfo;
 import net.minecheck.platform.api.ServerPlatform;
 import net.minecraft.block.Block;
-import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
-import net.minecraft.entity.EntityLiving;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -14,20 +24,54 @@ import net.minecraft.nbt.JsonToNBT;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
-import net.minecraft.util.ResourceLocation;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.WorldServer;
-import net.minecraft.world.gen.structure.template.PlacementSettings;
-import net.minecraft.world.gen.structure.template.Template;
-import net.minecraft.world.gen.structure.template.TemplateManager;
-import net.minecraftforge.fml.common.registry.ForgeRegistries;
+import net.minecraft.world.gen.ChunkProviderServer;
 
+/**
+ * The server-side half of the Forge platform.
+ *
+ * <p>Every action is executed on the server thread: the script engine is driven from the server
+ * tick, but a client's integrated server is queried from the client thread, so the marshaling here
+ * is what makes one implementation serve both.
+ *
+ * <p>1.7.10's server has no {@code submit} and no {@code isCallingFromMinecraftThread}, so the
+ * marshaling is its own: calls made off the server thread are queued and run from {@link
+ * #setServer}, which the tick hook calls on the server thread once per tick. That is one tick of
+ * latency for a cross-thread call, which is what a caller waiting on the answer pays; it is bounded
+ * by {@link #WAIT_SECONDS} so a stopped server reports an error instead of hanging the caller for
+ * ever.
+ */
 public class ForgeServerPlatform implements ServerPlatform {
+
+  private static final Logger LOG = Logger.getLogger("Minecheck");
+
+  /** How long a caller waits for its queued server-thread action to run. */
+  private static final long WAIT_SECONDS = 10;
 
   private volatile MinecraftServer server;
 
+  /** The thread the server ticks on, learned from the first tick the hook reports. */
+  private volatile Thread serverThread;
+
+  /** Calls made off the server thread, drained at the end of the next server tick. */
+  private final ConcurrentLinkedQueue<Runnable> pending = new ConcurrentLinkedQueue<>();
+
   public void setServer(MinecraftServer server) {
     this.server = server;
+    if (server == null) {
+      return;
+    }
+    serverThread = Thread.currentThread();
+    Runnable task;
+    while ((task = pending.poll()) != null) {
+      try {
+        task.run();
+      } catch (RuntimeException e) {
+        // The caller has already been failed through its future; one bad action must not stop the
+        // rest of the queue from running.
+        LOG.warning("Minecheck: queued server action failed: " + e);
+      }
+    }
   }
 
   private MinecraftServer requireServer() {
@@ -39,12 +83,15 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   private <T> T onServerThread(Supplier<T> action) {
-    MinecraftServer s = requireServer();
-    if (s.isCallingFromMinecraftThread()) {
+    requireServer();
+    Thread thread = serverThread;
+    // Before the first tick there is no server thread to hand work to, and nothing else is running
+    // on the world either, so the call runs where it is.
+    if (thread == null || thread == Thread.currentThread()) {
       return action.get();
     }
-    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
-    s.addScheduledTask(
+    CompletableFuture<T> done = new CompletableFuture<>();
+    pending.add(
         () -> {
           try {
             done.complete(action.get());
@@ -52,31 +99,51 @@ public class ForgeServerPlatform implements ServerPlatform {
             done.completeExceptionally(t);
           }
         });
-    return done.join();
+    try {
+      return done.get(WAIT_SECONDS, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      throw new IllegalStateException("the server did not reach the action in time", e);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while waiting for the server", e);
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof RuntimeException) {
+        throw (RuntimeException) cause;
+      }
+      if (cause instanceof Error) {
+        throw (Error) cause;
+      }
+      throw new IllegalStateException(cause);
+    }
   }
 
   private WorldServer overworld() {
-    WorldServer level = requireServer().getWorld(0);
+    WorldServer level = requireServer().worldServerForDimension(0);
     if (level == null) {
       throw new IllegalStateException("overworld not available yet");
     }
     return level;
   }
 
+  /** The chunk provider of a server world, which is the only one that answers about chunks. */
+  private static ChunkProviderServer chunks(WorldServer level) {
+    return (ChunkProviderServer) level.getChunkProvider();
+  }
+
   /**
-   * 1.12.2 resource locations are strict: they must be lower-case and non-empty. Trim and lower the
-   * id first, so {@code minecraft:Gold_Block} is a name error and not a crash in the parser.
+   * A registry id as this line reads it: trimmed and lower-cased, so {@code minecraft:Gold_Block}
+   * is a name error and not a crash in the parser.
    */
-  private static ResourceLocation parseId(String id, String what) {
+  private static String parseId(String id, String what) {
     if (id == null) {
       throw new IllegalArgumentException("invalid " + what + " id: null");
     }
     String trimmed = id.trim().toLowerCase(java.util.Locale.ROOT);
-    try {
-      return new ResourceLocation(trimmed);
-    } catch (RuntimeException e) {
-      throw new IllegalArgumentException("invalid " + what + " id: " + id, e);
+    if (!trimmed.matches("([a-z0-9_.\\-]+:)?[a-z0-9_./\\-]+")) {
+      throw new IllegalArgumentException("invalid " + what + " id: " + id);
     }
+    return trimmed;
   }
 
   private static NBTTagCompound parseTag(String nbt) {
@@ -84,22 +151,11 @@ public class ForgeServerPlatform implements ServerPlatform {
       return new NBTTagCompound();
     }
     try {
-      return JsonToNBT.getTagFromJson(nbt);
+      // This line's reader answers a generic tag; a command or fixture always writes a compound.
+      return (NBTTagCompound) JsonToNBT.func_150315_a(nbt);
     } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
-  }
-
-  private static <T extends net.minecraftforge.registries.IForgeRegistryEntry<T>>
-      T requireRegistryEntry(
-          net.minecraftforge.registries.IForgeRegistry<T> registry,
-          ResourceLocation id,
-          String what) {
-    T entry = registry.getValue(id);
-    if (entry == null) {
-      throw new IllegalArgumentException("unknown " + what + ": " + id);
-    }
-    return entry;
   }
 
   @Override
@@ -107,25 +163,26 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          String line = command.startsWith("/") ? command.substring(1) : command;
-          line = LegacyCommandShim.translate(line);
-          Integer rule = LegacyCommandShim.gameruleValue(s.getWorld(0), line);
+          String line =
+              LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command);
+          WorldServer world = s.worldServerForDimension(0);
+          Integer rule = LegacyCommandShim.gameruleValue(world, line);
           if (rule != null) {
             return rule;
           }
-          Integer entity = LegacyCommandShim.executeIfEntity(s, line);
+          Integer entity = LegacyCommandShim.executeIfEntity(world, line);
           if (entity != null) {
             return entity;
           }
-          Integer data = LegacyCommandShim.dataGetEntity(s, line);
+          Integer data = LegacyCommandShim.dataGetEntity(world, line);
           if (data != null) {
             return data;
           }
-          Integer tagged = LegacyCommandShim.tagCommand(s, line);
+          Integer tagged = LegacyCommandShim.tagCommand(world, line);
           if (tagged != null) {
             return tagged;
           }
-          Integer conditional = LegacyCommandShim.executeIfBlock(s.getWorld(0), line);
+          Integer conditional = LegacyCommandShim.executeIfBlock(world, line);
           if (conditional != null) {
             return conditional;
           }
@@ -139,7 +196,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> s.getPlayerList().getPlayerByUsername(name) != null);
+    return onServerThread(() -> s.getConfigurationManager().getPlayerByUsername(name) != null);
   }
 
   @Override
@@ -148,63 +205,70 @@ public class ForgeServerPlatform implements ServerPlatform {
         () -> {
           WorldServer level = overworld();
           net.minecraft.world.GameRules rules = level.getGameRules();
-          // 1.12.2 has no insomnia rule; it arrives in 1.15, and mob spawning is off anyway.
+          // doWeatherCycle arrives in 1.11; this line knows no such rule and creates nothing for
+          // it.
+          // Weather is pinned by the run's own clock instead.
           rules.setOrCreateGameRule("doMobSpawning", "false");
           rules.setOrCreateGameRule("doDaylightCycle", "false");
-          rules.setOrCreateGameRule("doWeatherCycle", "false");
           return null;
         });
   }
 
   @Override
-  public java.util.List<net.minecheck.platform.api.EntityInfo> findEntities(
-      String type, String tag) {
+  public List<EntityInfo> findEntities(String type, String tag) {
     return onServerThread(() -> findEntitiesOnServerThread(type, tag));
   }
 
-  private java.util.List<net.minecheck.platform.api.EntityInfo> findEntitiesOnServerThread(
-      String type, String tag) {
-    ResourceLocation typeId = type == null ? null : parseId(type, "entity type");
+  private List<EntityInfo> findEntitiesOnServerThread(String type, String tag) {
+    String typeId = type == null ? null : parseId(type, "entity type");
     WorldServer level = overworld();
-    java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
-    // Players keep their own list on 1.12.2: the first thing a script asks for is the player that
-    // just joined, which is not in the loaded-entity list until the world ticks it.
-    java.util.Map<Integer, Entity> entities = new java.util.LinkedHashMap<>();
-    for (Entity entity : level.loadedEntityList) {
+    List<EntityInfo> out = new ArrayList<>();
+    // Players keep their own list on this line: the first thing a script asks for is the player
+    // that just joined, which is not in the loaded-entity list until the world ticks it.
+    Map<Integer, Entity> entities = new LinkedHashMap<>();
+    for (Object o : level.loadedEntityList) {
+      Entity entity = (Entity) o;
       entities.put(entity.getEntityId(), entity);
     }
-    for (Entity entity : level.playerEntities) {
+    for (Object o : level.playerEntities) {
+      Entity entity = (Entity) o;
       entities.put(entity.getEntityId(), entity);
     }
     for (Entity entity : entities.values()) {
-      // 1.12.2 keeps a removed entity in the list until the next tick, and a dying mob stays listed
-      // for its death animation. Neither is something a client can observe as present.
-      if (entity.isDead
-          || (entity instanceof EntityLiving && ((EntityLiving) entity).getHealth() <= 0)) {
+      // A removed entity stays listed until the next tick; it is not something a client observes.
+      if (entity.isDead) {
         continue;
       }
-      ResourceLocation actual = EntityList.getKey(entity);
-      if (actual == null && entity instanceof net.minecraft.entity.player.EntityPlayer) {
-        // 1.12.2 has no registry entry for the player class, so the entity that joined first is the
-        // one a script cannot name.
-        actual = new ResourceLocation("minecraft", "player");
-      }
+      String actual = entityId(entity);
       if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
-      if (tag != null && !entity.getTags().contains(tag)) {
+      java.util.Set<String> tags = LegacyCommandShim.tagsOf(entity);
+      if (tag != null && !tags.contains(tag)) {
         continue;
       }
       out.add(
-          new net.minecheck.platform.api.EntityInfo(
-              entity.getEntityId(),
-              actual == null ? "" : actual.toString(),
-              entity.posX,
-              entity.posY,
-              entity.posZ,
-              new java.util.HashSet<>(entity.getTags())));
+          new EntityInfo(
+              entity.getEntityId(), actual, entity.posX, entity.posY, entity.posZ, tags));
     }
-    return java.util.List.copyOf(out);
+    return Collections.unmodifiableList(out);
+  }
+
+  /**
+   * The 1.13-style id of an entity.
+   *
+   * <p>1.7.10 names its entity types in CamelCase and without a namespace ({@code Zombie}), and it
+   * has no id for the player class, so both are translated here rather than leaking this line's
+   * spelling into a script.
+   */
+  private static String entityId(Entity entity) {
+    String legacy = EntityList.getEntityString(entity);
+    if (legacy == null) {
+      // The player is the one entity this line registers no type for; the newer lines answer
+      // `minecraft:player` for it.
+      return "minecraft:player";
+    }
+    return MinecheckNames.modernEntityId(legacy);
   }
 
   @Override
@@ -215,15 +279,14 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          WorldServer level = s.getWorld(0);
+          WorldServer level = s.worldServerForDimension(0);
           if (level == null) {
             return false;
           }
-          // The chunk the level spawned in, not chunk 0,0: a 1.12.2 world spawns its player away
-          // from the origin and keeps only the spawn area loaded, so 0,0 is generated but unloaded
-          // until a script teleports there and waits for it.
-          net.minecraft.util.math.BlockPos spawn = level.getSpawnPoint();
-          return level.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
+          // The chunk the level spawned in, not chunk 0,0: this line's world spawns its player away
+          // from the origin, so 0,0 is generated but unloaded until something forces it.
+          net.minecraft.util.ChunkCoordinates spawn = level.getSpawnPoint();
+          return chunks(level).chunkExists(spawn.posX >> 4, spawn.posZ >> 4);
         });
   }
 
@@ -232,15 +295,25 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           WorldServer level = overworld();
-          // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a
-          // height" is a property of the loaded chunk, not of one block in it.
-          if (!level.getChunkProvider().chunkExists(x >> 4, z >> 4)) {
+          if (!chunks(level).chunkExists(x >> 4, z >> 4)) {
             return null;
           }
-          // 1.12.2's heightmap already reports the first air block above the surface, which is
-          // the height the newer lines get from MOTION_BLOCKING plus one.
-          return level.getHeight(x, z);
+          // This line has no column-top query, so the column is scanned from the build limit down
+          // and the first block that is not air is the surface. The answer is one above it — the
+          // height a player standing there stands at — which is what the newer lines' top position
+          // is.
+          for (int y = level.getHeight() - 1; y >= 0; y--) {
+            if (!level.isAirBlock(x, y, z)) {
+              return y + 1;
+            }
+          }
+          return 0;
         });
+  }
+
+  /** The chunk a world coordinate falls in, for a load-before-use call. */
+  private static int floorChunk(double coordinate) {
+    return (int) Math.floor(coordinate) >> 4;
   }
 
   @Override
@@ -249,7 +322,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> overworld().getChunkProvider().chunkExists(chunkX, chunkZ));
+    return onServerThread(() -> chunks(overworld()).chunkExists(chunkX, chunkZ));
   }
 
   @Override
@@ -257,11 +330,11 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           WorldServer level = overworld();
-          // Reading the chunk through makes the load synchronous rather than a later tick. 1.12.2
-          // has no per-chunk forced ticket exposed without Forge's ticket manager, so the load is
-          // not held against unload the way `forceload add` holds it.
-          level.getChunk(chunkX, chunkZ);
-          return level.getChunkProvider().chunkExists(chunkX, chunkZ);
+          // Reading the chunk through makes the load synchronous rather than a later tick. This
+          // line has no forced-chunk ticket exposed in its API, so the chunk is loaded but not held
+          // against unload.
+          level.getChunkProvider().loadChunk(chunkX, chunkZ);
+          return chunks(level).chunkExists(chunkX, chunkZ);
         });
   }
 
@@ -271,45 +344,25 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   private int spawnEntityOnServerThread(String id, double x, double y, double z, String nbt) {
-    ResourceLocation location = parseId(id, "entity type");
-    requireRegistryEntry(ForgeRegistries.ENTITIES, location, "entity type");
+    String location = parseId(id, "entity type");
     WorldServer level = overworld();
     NBTTagCompound tag = parseTag(nbt);
-    tag.setString("id", location.toString());
+    // The template is read by this line's own type table, which keys on the CamelCase name, so the
+    // id is translated before it reaches it.
+    String legacy = MinecheckNames.legacyEntityId(location);
+    tag.setString("id", legacy == null ? location.substring(location.indexOf(':') + 1) : legacy);
     Entity entity = EntityList.createEntityFromNBT(tag, level);
     if (entity == null) {
-      throw new IllegalArgumentException("entity type cannot be spawned directly: " + id);
+      throw new IllegalArgumentException("unknown entity type: " + id);
     }
     entity.setPosition(x, y, z);
-    if (entity instanceof EntityLiving) {
-      ((EntityLiving) entity)
-          .onInitialSpawn(level.getDifficultyForLocation(new BlockPos(entity)), null);
-      applyAttributeBases((EntityLiving) entity, tag);
-    }
-    if (!level.spawnEntity(entity)) {
+    // The chunk is read through first: this line's spawn answers false for a position in a chunk
+    // that is not loaded, and a script may name a spot far from any player.
+    level.getChunkProvider().loadChunk(floorChunk(x), floorChunk(z));
+    if (!level.spawnEntityInWorld(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
     return entity.getEntityId();
-  }
-
-  /**
-   * Applies the attribute base values a script asked for at spawn. 1.12.2 reads only attribute
-   * <em>modifiers</em> from an entity tag, so a base such as knockback resistance was dropped and
-   * the punch target slid out from under the crosshair on the first hit.
-   */
-  private static void applyAttributeBases(EntityLiving entity, NBTTagCompound tag) {
-    if (!tag.hasKey("Attributes", 9)) {
-      return;
-    }
-    net.minecraft.nbt.NBTTagList list = tag.getTagList("Attributes", 10);
-    for (int i = 0; i < list.tagCount(); i++) {
-      NBTTagCompound entry = list.getCompoundTagAt(i);
-      net.minecraft.entity.ai.attributes.IAttributeInstance instance =
-          entity.getAttributeMap().getAttributeInstanceByName(entry.getString("Name"));
-      if (instance != null && entry.hasKey("Base")) {
-        instance.setBaseValue(entry.getDouble("Base"));
-      }
-    }
   }
 
   @Override
@@ -319,25 +372,28 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private boolean spawnBlockOnServerThread(
       String id, int x, int y, int z, String nbt, boolean replace) {
-    ResourceLocation location = parseId(id, "block");
-    Block block = requireRegistryEntry(ForgeRegistries.BLOCKS, location, "block");
+    String location = parseId(id, "block");
+    Block block = Block.getBlockFromName(MinecheckNames.legacyId(location));
+    if (block == null) {
+      throw new IllegalArgumentException("unknown block: " + id);
+    }
     WorldServer level = overworld();
-    BlockPos pos = new BlockPos(x, y, z);
-    if (!replace && !level.isAirBlock(pos)) {
+    if (!replace && !level.isAirBlock(x, y, z)) {
       return false;
     }
-    IBlockState state = block.getDefaultState();
-    if (!level.setBlockState(pos, state, 3)) {
+    // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
+    // is placed at metadata 0, which is what the newer lines' default state resolves to.
+    if (!level.setBlock(x, y, z, block, 0, 3)) {
       return false;
     }
     NBTTagCompound tag = parseTag(nbt);
     if (!tag.getKeySet().isEmpty()) {
-      TileEntity tile = level.getTileEntity(pos);
-      if (tile != null) {
+      TileEntity blockEntity = level.getTileEntity(x, y, z);
+      if (blockEntity != null) {
         tag.setInteger("x", x);
         tag.setInteger("y", y);
         tag.setInteger("z", z);
-        tile.readFromNBT(tag);
+        blockEntity.readFromNBT(tag);
       }
     }
     return true;
@@ -350,129 +406,39 @@ public class ForgeServerPlatform implements ServerPlatform {
 
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
-    ResourceLocation location = parseId(id, "item");
-    Item item = requireRegistryEntry(ForgeRegistries.ITEMS, location, "item");
+    String location = parseId(id, "item");
+    Object registered = Item.itemRegistry.getObject(location);
+    if (!(registered instanceof Item)) {
+      throw new IllegalArgumentException("unknown item: " + id);
+    }
     WorldServer level = overworld();
-    ItemStack stack = new ItemStack(item, count);
+    ItemStack stack = new ItemStack((Item) registered, count, 0);
     NBTTagCompound tag = parseTag(nbt);
     if (!tag.getKeySet().isEmpty()) {
       stack.setTagCompound(tag);
     }
     EntityItem itemEntity = new EntityItem(level, x, y, z, stack);
-    if (!level.spawnEntity(itemEntity)) {
+    level.getChunkProvider().loadChunk(floorChunk(x), floorChunk(z));
+    if (!level.spawnEntityInWorld(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
     return itemEntity.getEntityId();
   }
 
+  /**
+   * Places a vanilla structure template.
+   *
+   * <p>This line predates bundled templates: 1.7.10 has no {@code assets/minecraft/structures}, and
+   * its world generator builds villages and temples from code. There is nothing to stamp, so the
+   * name is reported as unknown rather than silently doing nothing — the same answer a name that
+   * does not exist gets on the newer lines.
+   */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {
-    return onServerThread(() -> spawnStructureOnServerThread(id, x, y, z));
-  }
-
-  private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
-    ResourceLocation location = parseId(id, "structure");
-    WorldServer level = overworld();
-    TemplateManager manager = level.getStructureTemplateManager();
-    MinecraftServer server = level.getMinecraftServer();
-    Template template = null;
-    for (String path : legacyTemplatePaths(location.getPath())) {
-      template = loadTemplate(manager, server, new ResourceLocation(location.getNamespace(), path));
-      if (template != null) {
-        break;
-      }
-    }
-    if (template == null) {
-      // A dedicated server in a development run has no vanilla assets in its resource pack, so
-      // every
-      // template answers null there; the structure files still ship with the game.
-      template = loadBundledTemplate(location);
-    }
-    if (template == null) {
-      throw new IllegalArgumentException("unknown structure: " + id);
-    }
-    template.addBlocksToWorld(level, new BlockPos(x, y, z), new PlacementSettings(), 2);
-    return true;
-  }
-
-  /**
-   * The names a structure can go by on 1.12.2, given the name a fixture uses. 1.13 renamed the
-   * structure files: the group's own name left the file ({@code igloo/igloo_top} became {@code
-   * igloo/top}), and a part that used to be a directory became a flat id.
-   */
-  private static java.util.List<String> legacyTemplatePaths(String path) {
-    java.util.List<String> out = new java.util.ArrayList<>();
-    out.add(path);
-    int slash = path.indexOf('/');
-    if (slash > 0) {
-      String group = path.substring(0, slash);
-      out.add(group + "/" + group + "_" + path.substring(slash + 1));
-    }
-    out.add(path.replace('/', '_'));
-    return out;
-  }
-
-  /** A template, or {@code null} when this line has none under that name. */
-  private static Template loadTemplate(
-      TemplateManager manager, MinecraftServer server, ResourceLocation id) {
-    try {
-      return manager.get(server, id);
-    } catch (RuntimeException e) {
-      return null;
-    }
-  }
-
-  /** A structure's template read out of the game jar, or {@code null} when it is not there. */
-  private static Template loadBundledTemplate(ResourceLocation location) {
-    for (String path : legacyTemplatePaths(location.getPath())) {
-      String asset = "/assets/" + location.getNamespace() + "/structures/" + path + ".nbt";
-      for (Class<?> anchor : new Class<?>[] {MinecraftServer.class, ForgeServerPlatform.class}) {
-        java.io.InputStream in = anchor.getResourceAsStream(asset);
-        if (in == null) {
-          in = openClasspathEntry(asset.substring(1));
-        }
-        if (in == null) {
-          continue;
-        }
-        try (java.io.InputStream stream = in) {
-          Template template = new Template();
-          template.read(net.minecraft.nbt.CompressedStreamTools.readCompressed(stream));
-          return template;
-        } catch (java.io.IOException e) {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-
-  /** An entry of whichever classpath jar carries it, or {@code null} when none does. */
-  private static java.io.InputStream openClasspathEntry(String entryName) {
-    String classpath = System.getProperty("java.class.path", "");
-    for (String element : classpath.split(java.io.File.pathSeparator)) {
-      try {
-        java.nio.file.Path path = java.nio.file.Paths.get(element);
-        if (!java.nio.file.Files.isRegularFile(path)) {
-          continue;
-        }
-        final java.util.zip.ZipFile jar = new java.util.zip.ZipFile(path.toFile());
-        java.util.zip.ZipEntry entry = jar.getEntry(entryName);
-        if (entry == null) {
-          jar.close();
-          continue;
-        }
-        java.io.InputStream raw = jar.getInputStream(entry);
-        return new java.io.FilterInputStream(raw) {
-          @Override
-          public void close() throws java.io.IOException {
-            super.close();
-            jar.close();
-          }
-        };
-      } catch (RuntimeException | java.io.IOException e) {
-        // Not a readable jar: the next classpath entry may have the file.
-      }
-    }
-    return null;
+    return onServerThread(
+        () -> {
+          throw new IllegalArgumentException(
+              "unknown structure: " + id + " (this line has no bundled structure templates)");
+        });
   }
 }

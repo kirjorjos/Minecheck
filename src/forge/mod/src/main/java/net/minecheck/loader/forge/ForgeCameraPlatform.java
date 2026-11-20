@@ -1,5 +1,7 @@
 package net.minecheck.loader.forge;
 
+import cpw.mods.fml.client.registry.ClientRegistry;
+import cpw.mods.fml.common.Loader;
 import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -12,17 +14,15 @@ import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.client.entity.EntityClientPlayerMP;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.util.math.MathHelper;
-import net.minecraftforge.fml.client.registry.ClientRegistry;
-import net.minecraftforge.fml.common.Loader;
+import net.minecraft.util.MathHelper;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 
 /**
- * The camera on the 1.12.2 side.
+ * The camera on the Forge 1.7.10 side.
  *
  * <p>It owns the one camera entity, the key binding and the per-tick flight, and delegates every
  * decision about <em>where</em> the camera is to {@link CameraController} in {@code :common}, which
@@ -36,8 +36,12 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
-  /** The client-only entity id: negative, so it cannot collide with a server-assigned one. */
-  private static final int CAMERA_ENTITY_ID = -1;
+  /**
+   * The client-only entity id, held by {@link MinecheckCameraEntity}: negative, so it cannot
+   * collide with a server-assigned one. This line's id field is private, so the entity answers the
+   * id itself.
+   */
+  static final int CAMERA_ENTITY_ID = -1;
 
   /** Used when the config cannot be read at construction: the documented default speed. */
   private static final double DEFAULT_SPEED = 1.0;
@@ -172,14 +176,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     Minecraft mc = mc();
-    if (mc.player == null || mc.world == null || camera.world != mc.world) {
+    if (mc.thePlayer == null || mc.theWorld == null || camera.worldObj != mc.theWorld) {
       detach();
       return;
     }
     // Re-asserted every tick: vanilla computes the render camera from this field, and a respawn or
     // a dimension change may have pointed it somewhere else since the last tick.
-    mc.setRenderViewEntity(camera);
-    steer(mc.player, allowed);
+    mc.renderViewEntity = camera;
+    steer(mc.thePlayer, allowed);
     CameraPose moved = controller.tick(inputs(), allowed);
     if (moved != null) {
       place(camera, moved);
@@ -209,8 +213,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private void attach() {
     Minecraft mc = mc();
-    EntityPlayerSP player = mc.player;
-    WorldClient level = mc.world;
+    EntityClientPlayerMP player = mc.thePlayer;
+    WorldClient level = mc.theWorld;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
       return;
@@ -218,7 +222,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     CameraPose start =
         new CameraPose(
             player.posX,
-            player.posY + player.getEyeHeight(),
+            // posY is the eye position on this line; the camera starts there.
+            player.posY,
             player.posZ,
             player.rotationYaw,
             player.rotationPitch);
@@ -228,13 +233,12 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     MinecheckCameraEntity entity = new MinecheckCameraEntity(level);
-    entity.setEntityId(CAMERA_ENTITY_ID);
     // Placed before the first publish so the old position is the camera's, not the origin: without
     // this the first rendered frame would interpolate the camera in from 0,0,0.
     entity.setPosition(start.x(), start.y(), start.z());
     place(entity, start);
-    level.spawnEntity(entity);
-    mc.setRenderViewEntity(entity);
+    level.spawnEntityInWorld(entity);
+    mc.renderViewEntity = entity;
     camera = entity;
     LOG.info(
         String.format(
@@ -248,8 +252,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     controller.detach();
     Minecraft mc = mc();
     if (entity != null) {
-      if (mc.getRenderViewEntity() == entity) {
-        mc.setRenderViewEntity(mc.player);
+      if (mc.renderViewEntity == entity) {
+        mc.renderViewEntity = mc.thePlayer;
       }
       entity.setDead();
     }
@@ -296,13 +300,13 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    * added to the camera, and the player is put back before the tick that would send it. The body is
    * therefore always at the rotation the server last saw.
    */
-  private void steer(EntityPlayerSP player, boolean allowed) {
+  private void steer(EntityClientPlayerMP player, boolean allowed) {
     if (!allowed || mc().currentScreen != null) {
       baseYaw = player.rotationYaw;
       basePitch = player.rotationPitch;
       return;
     }
-    float yawDelta = MathHelper.wrapDegrees(player.rotationYaw - (float) baseYaw);
+    float yawDelta = MathHelper.wrapAngleTo180_float(player.rotationYaw - (float) baseYaw);
     float pitchDelta = player.rotationPitch - (float) basePitch;
     player.rotationYaw = (float) baseYaw;
     player.rotationPitch = (float) basePitch;
@@ -318,8 +322,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
             pose.x(),
             pose.y(),
             pose.z(),
-            MathHelper.wrapDegrees((float) pose.yaw() + yawDelta),
-            MathHelper.clamp((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
+            MathHelper.wrapAngleTo180_float((float) pose.yaw() + yawDelta),
+            MathHelper.clamp_float((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
     if (controller.setPose(turned)) {
       place(camera, turned);
     }
@@ -331,13 +335,13 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.gameSettings.keyBindForward.isKeyDown(),
-        mc.gameSettings.keyBindBack.isKeyDown(),
-        mc.gameSettings.keyBindLeft.isKeyDown(),
-        mc.gameSettings.keyBindRight.isKeyDown(),
-        mc.gameSettings.keyBindJump.isKeyDown(),
-        mc.gameSettings.keyBindSneak.isKeyDown(),
-        mc.gameSettings.keyBindSprint.isKeyDown());
+        mc.gameSettings.keyBindForward.getIsKeyPressed(),
+        mc.gameSettings.keyBindBack.getIsKeyPressed(),
+        mc.gameSettings.keyBindLeft.getIsKeyPressed(),
+        mc.gameSettings.keyBindRight.getIsKeyPressed(),
+        mc.gameSettings.keyBindJump.getIsKeyPressed(),
+        mc.gameSettings.keyBindSneak.getIsKeyPressed(),
+        mc.gameSettings.keyBindSprint.getIsKeyPressed());
   }
 
   private static Minecraft mc() {

@@ -177,6 +177,9 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     // The camera runs before the player does: it holds the body's rotation at the value the server
     // last saw, and doing that after the player ticked would be after the packet that carries the
     // change.
+    // This is the client's own thread: the platform has no `isOnThread` to ask, so the tick is
+    // where it learns the thread the leave and quit checks compare against.
+    LegacyFabricClientPlatform.markClientThread();
     LegacySilentSound.shutDownDevice();
     entrypoint.client.camera().tick();
   }
@@ -241,6 +244,8 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
       return;
     }
     platform.setServer(ticking);
+    // Payloads arrive on a netty thread; this is the tick boundary they are handed over at.
+    LegacyFabricNetworkPlatform.drainServerTasks();
     if (entrypoint.rulesApplied.compareAndSet(false, true)) {
       platform.applyDeterministicRules();
     }

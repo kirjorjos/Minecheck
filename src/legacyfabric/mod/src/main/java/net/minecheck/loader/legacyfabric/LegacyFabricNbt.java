@@ -17,7 +17,6 @@ import net.minecraft.nbt.NbtInt;
 import net.minecraft.nbt.NbtIntArray;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.nbt.NbtLong;
-import net.minecraft.nbt.NbtLongArray;
 import net.minecraft.nbt.NbtShort;
 import net.minecraft.nbt.NbtString;
 
@@ -71,6 +70,94 @@ final class LegacyFabricNbt {
     return MODERN_IDS.getOrDefault(id, id);
   }
 
+  /**
+   * 1.7.10's entity type names, keyed by the 1.13 id.
+   *
+   * <p>This line names a type in CamelCase and without a namespace ({@code Zombie}), and its type
+   * table is keyed on that spelling, so an id has to be translated before an entity can be spawned
+   * from NBT and translated back before one can be named in a script.
+   */
+  private static final Map<String, String> ENTITY_IDS = new HashMap<>();
+
+  /** The reverse of {@link #ENTITY_IDS}. */
+  private static final Map<String, String> MODERN_ENTITY_IDS = new HashMap<>();
+
+  static {
+    entity("minecraft:item", "Item");
+    entity("minecraft:xp_orb", "XPOrb");
+    entity("minecraft:leash_knot", "LeashKnot");
+    entity("minecraft:painting", "Painting");
+    entity("minecraft:arrow", "Arrow");
+    entity("minecraft:snowball", "Snowball");
+    entity("minecraft:fireball", "Fireball");
+    entity("minecraft:small_fireball", "SmallFireball");
+    entity("minecraft:ender_pearl", "ThrownEnderpearl");
+    entity("minecraft:eye_of_ender", "EyeOfEnderSignal");
+    entity("minecraft:potion", "ThrownPotion");
+    entity("minecraft:experience_bottle", "ThrownExpBottle");
+    entity("minecraft:item_frame", "ItemFrame");
+    entity("minecraft:wither_skull", "WitherSkull");
+    entity("minecraft:tnt", "PrimedTnt");
+    entity("minecraft:falling_block", "FallingSand");
+    entity("minecraft:fireworks_rocket", "FireworksRocketEntity");
+    entity("minecraft:boat", "Boat");
+    entity("minecraft:minecart", "MinecartRideable");
+    entity("minecraft:chest_minecart", "MinecartChest");
+    entity("minecraft:furnace_minecart", "MinecartFurnace");
+    entity("minecraft:tnt_minecart", "MinecartTNT");
+    entity("minecraft:hopper_minecart", "MinecartHopper");
+    entity("minecraft:spawner_minecart", "MinecartSpawner");
+    entity("minecraft:commandblock_minecart", "MinecartCommandBlock");
+    entity("minecraft:creeper", "Creeper");
+    entity("minecraft:skeleton", "Skeleton");
+    entity("minecraft:spider", "Spider");
+    entity("minecraft:giant", "Giant");
+    entity("minecraft:zombie", "Zombie");
+    entity("minecraft:slime", "Slime");
+    entity("minecraft:ghast", "Ghast");
+    entity("minecraft:zombie_pigman", "PigZombie");
+    entity("minecraft:enderman", "Enderman");
+    entity("minecraft:cave_spider", "CaveSpider");
+    entity("minecraft:silverfish", "Silverfish");
+    entity("minecraft:blaze", "Blaze");
+    entity("minecraft:magma_cube", "LavaSlime");
+    entity("minecraft:ender_dragon", "EnderDragon");
+    entity("minecraft:wither", "WitherBoss");
+    entity("minecraft:witch", "Witch");
+    entity("minecraft:bat", "Bat");
+    entity("minecraft:pig", "Pig");
+    entity("minecraft:sheep", "Sheep");
+    entity("minecraft:cow", "Cow");
+    entity("minecraft:chicken", "Chicken");
+    entity("minecraft:squid", "Squid");
+    entity("minecraft:wolf", "Wolf");
+    entity("minecraft:mooshroom", "MushroomCow");
+    entity("minecraft:snow_golem", "SnowMan");
+    entity("minecraft:ocelot", "Ozelot");
+    entity("minecraft:iron_golem", "VillagerGolem");
+    entity("minecraft:horse", "Horse");
+    entity("minecraft:villager", "Villager");
+    entity("minecraft:end_crystal", "EnderCrystal");
+  }
+
+  private static void entity(String modern, String legacy) {
+    ENTITY_IDS.put(modern, legacy);
+    MODERN_ENTITY_IDS.put(legacy, modern);
+  }
+
+  /** The name this line's entity type table knows an id by, or {@code null} when it has none. */
+  static String legacyEntityId(String modern) {
+    return ENTITY_IDS.get(modern);
+  }
+
+  /** The id the newer lines use for a type this line names in CamelCase. */
+  static String modernEntityId(String legacy) {
+    String modern = MODERN_ENTITY_IDS.get(legacy);
+    // A type this table does not list still has an id a script can compare: the lowercase of its
+    // own name, which is how 1.12.2 derives the id the table lists explicitly.
+    return modern != null ? modern : "minecraft:" + legacy.toLowerCase(java.util.Locale.ROOT);
+  }
+
   /** Whether a tag holds a number, which is what a {@code data get} path can round. */
   static boolean isNumber(NbtElement element) {
     return element instanceof NbtByte
@@ -90,7 +177,9 @@ final class LegacyFabricNbt {
   /** A compound as the documented map shape. */
   static Map<String, Object> toMap(NbtCompound compound) {
     Map<String, Object> out = new HashMap<>();
-    for (String key : compound.getKeys()) {
+    // This line's key set is raw: it is read as objects and each is used as the string it is.
+    for (Object rawKey : compound.getKeys()) {
+      String key = (String) rawKey;
       NbtElement element = compound.get(key);
       // A string is read through the compound, because this line's string tag keeps its value
       // private and exposes no accessor of its own.
@@ -113,16 +202,14 @@ final class LegacyFabricNbt {
     if (isNumber(element)) {
       return numericValue(element);
     }
-    if (element instanceof NbtByteArray
-        || element instanceof NbtIntArray
-        || element instanceof NbtLongArray) {
+    if (element instanceof NbtByteArray || element instanceof NbtIntArray) {
       return arrayValue(element);
     }
     if (element instanceof NbtList) {
       NbtList list = (NbtList) element;
       List<Object> out = new ArrayList<>();
       for (int i = 0; i < list.size(); i++) {
-        out.add(value(list.get(i)));
+        out.add(value(elementAt(list, i)));
       }
       return out;
     }
@@ -154,6 +241,28 @@ final class LegacyFabricNbt {
     } catch (ReflectiveOperationException | RuntimeException e) {
       return null;
     }
+  }
+
+  /**
+   * The element at an index of a list tag.
+   *
+   * <p>This line's list exposes no index accessor at all — it answers by type — so the element is
+   * read out of the list's own backing {@code value} field, which is what the array tags need the
+   * same reflective route for.
+   */
+  private static NbtElement elementAt(NbtList list, int index) {
+    try {
+      Field field = NbtList.class.getDeclaredField("value");
+      field.setAccessible(true);
+      Object values = field.get(list);
+      if (values instanceof List && index < ((List<?>) values).size()) {
+        Object element = ((List<?>) values).get(index);
+        return element instanceof NbtElement ? (NbtElement) element : null;
+      }
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return null;
+    }
+    return null;
   }
 
   /** An array tag as a list of numbers, from the tag's own backing array. */

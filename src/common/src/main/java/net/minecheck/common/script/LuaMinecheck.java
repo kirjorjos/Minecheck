@@ -1637,16 +1637,37 @@ public final class LuaMinecheck {
           globals.yield(LuaValue.NIL);
           return LuaValue.TRUE;
         }
-        if (!callOnClientThread(() -> client.clickSlot(from, 0, "pickup"))) {
-          return LuaValue.FALSE;
+        boolean picked = false;
+        for (int attempt = 0; attempt < 3 && !picked; attempt++) {
+          if (!callOnClientThread(() -> client.clickSlot(from, 0, "pickup"))) {
+            break;
+          }
+          picked = await(() -> client.getSlot(from, screen).empty(), 5000);
+          if (picked) {
+            settle(250);
+            picked = client.getSlot(from, screen).empty();
+          }
         }
-        if (!await(() -> client.getSlot(from, screen).empty(), 5000)) {
+        if (!picked) {
+          LOG.warning(
+              "moveItem: the pickup click left "
+                  + describe(client.getSlot(from, screen))
+                  + " in slot "
+                  + from
+                  + " (screen "
+                  + screen
+                  + ")");
           return LuaValue.FALSE;
         }
         net.minecheck.platform.api.SlotInfo dest = client.getSlot(to, screen);
         final int destStart = dest.empty() ? 0 : dest.count();
         int placed = 0;
-        while (placed < want) {
+        // A click can be dropped when it lands while the previous slot update is still in flight,
+        // which left a partial move behind a `moveItem(..., count)` that then reported false. Ask
+        // again instead of giving up, and take the count from the container rather than counting
+        // clicks: the slots are what the caller asserts on.
+        int misses = 0;
+        while (placed < want && misses < 3) {
           final int expected = destStart + placed + 1;
           if (!callOnClientThread(() -> client.clickSlot(to, 1, "pickup"))) {
             break;
@@ -1654,13 +1675,24 @@ public final class LuaMinecheck {
           if (!await(
               () -> {
                 net.minecheck.platform.api.SlotInfo d = client.getSlot(to, screen);
-                return !d.empty() && d.count() == expected;
+                return !d.empty() && d.count() >= expected;
               },
               2000)) {
-            break;
+            misses++;
+            continue;
           }
-          placed++;
+          settle(250);
+          int now = client.getSlot(to, screen).count() - destStart;
+          if (now <= placed) {
+            // The server rejected that click and reverted it: nothing was placed after all.
+            misses++;
+            continue;
+          }
+          misses = 0;
+          placed = now;
         }
+        settle(300);
+        placed = client.getSlot(to, screen).count() - destStart;
         final int placedCount = placed;
         boolean restored = true;
         if (placedCount < total) {
@@ -1673,7 +1705,32 @@ public final class LuaMinecheck {
                       return !s.empty() && s.count() == total - placedCount;
                     },
                     2000);
+            if (restored) {
+              settle(250);
+              net.minecheck.platform.api.SlotInfo back = client.getSlot(from, screen);
+              restored = !back.empty() && back.count() == total - placedCount;
+            }
           }
+        }
+        if (!restored || placedCount != want) {
+          LOG.warning(
+              "moveItem: moved "
+                  + placedCount
+                  + " of "
+                  + want
+                  + " from slot "
+                  + from
+                  + " to "
+                  + to
+                  + " (source now "
+                  + describe(client.getSlot(from, screen))
+                  + ", destination now "
+                  + describe(client.getSlot(to, screen))
+                  + ", restored="
+                  + restored
+                  + ", screen "
+                  + screen
+                  + ")");
         }
         return LuaValue.valueOf(restored && placedCount == want);
       } catch (LuaError e) {
@@ -1682,6 +1739,11 @@ public final class LuaMinecheck {
         throw wrap("moveItem", e);
       }
     }
+  }
+
+  /** A slot's contents for a log line: the stack and its size, or {@code nothing}. */
+  private static String describe(net.minecheck.platform.api.SlotInfo slot) {
+    return slot.empty() ? "nothing" : slot.count() + "x " + slot.id();
   }
 
   /**
@@ -1917,6 +1979,18 @@ public final class LuaMinecheck {
    * elapses (false). The script engine drives the coroutine from tick events, so the condition is
    * re-evaluated once per tick.
    */
+  /**
+   * Lets the client tick for {@code millis}. A client applies a container click optimistically, and
+   * the server reverts a click it rejects a moment later with a slot resync — so a count read right
+   * after a click is not yet the server's answer, and a move that trusted it lost items.
+   */
+  private void settle(long millis) {
+    long deadline = clock.getAsLong() + millis;
+    while (clock.getAsLong() < deadline) {
+      globals.yield(LuaValue.NIL);
+    }
+  }
+
   private boolean await(java.util.function.BooleanSupplier condition, long timeoutMs) {
     long deadline = clock.getAsLong() + timeoutMs;
     while (true) {

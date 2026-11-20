@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -59,7 +59,14 @@ public class JsonConfigManager implements ConfigManager {
     }
     String json = Files.readString(file);
     try {
-      JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+      // Gson 2.2.4, the copy inside the game on this line, has no `JsonParser.parseString`;
+      // `fromJson` is the one call every version has, and the check restores the object-only
+      // contract `parseString(...).getAsJsonObject()` gave.
+      JsonElement parsed = GSON.fromJson(json, JsonElement.class);
+      if (parsed == null || !parsed.isJsonObject()) {
+        throw new JsonSyntaxException("the configuration is not a JSON object");
+      }
+      JsonObject obj = parsed.getAsJsonObject();
       // The mode is read first: two field defaults depend on it, and a file that names a mode but
       // leaves those fields out must get that mode's defaults rather than the off-mode ones.
       CameraMode cameraMode =

@@ -1,8 +1,10 @@
 package net.minecheck.loader.forge;
 
+import cpw.mods.fml.common.FMLCommonHandler;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,7 +14,6 @@ import java.util.logging.Logger;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.NetworkManager;
 import net.minecraft.server.MinecraftServer;
-import net.minecraftforge.fml.common.FMLCommonHandler;
 
 /**
  * Dedicated-server <em>low-level frame tap</em>: the Forge-only way to observe another mod's
@@ -26,7 +27,7 @@ import net.minecraftforge.fml.common.FMLCommonHandler;
  * <p>Direction: serverbound only — the script is watching what <em>clients</em> send. Connections
  * are per player, so the tap is installed on every player connection that exists when a channel is
  * first watched and on every connection that appears afterwards ({@code ForgeEntrypoint} installs
- * it from {@code PlayerLoggedInEvent}).
+ * it from the login event).
  *
  * <p>{@code @Sharable} because the tap holds no per-connection state — its only state is the static
  * observer map — and one instance is installed on <em>every</em> player connection. Netty rejects
@@ -56,13 +57,13 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
    */
   static boolean observe(String channel, Consumer<byte[]> observer) {
     // Replaced, not appended: one engine owns a channel at a time.
-    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(List.of(observer)));
+    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(Collections.singletonList(observer)));
     MinecraftServer server = server();
     if (server == null) {
       return false;
     }
-    for (EntityPlayerMP player : server.getPlayerList().getPlayers()) {
-      install(player);
+    for (Object candidate : server.getConfigurationManager().playerEntityList) {
+      install((EntityPlayerMP) candidate);
     }
     return true;
   }
@@ -80,7 +81,9 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
       return false;
     }
     NetworkManager manager =
-        player.connection == null ? null : player.connection.getNetworkManager();
+        player.playerNetServerHandler == null
+            ? null
+            : player.playerNetServerHandler.getNetworkManager();
     return ForgeChannelTaps.install(manager, INSTANCE, "server");
   }
 
@@ -105,13 +108,9 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (observers == null || observers.isEmpty() || payload == null) {
       return;
     }
-    MinecraftServer server = server();
-    if (server == null) {
-      return;
-    }
     for (Consumer<byte[]> observer : observers) {
-      // Netty event loop -> server thread, where the script engine ticks.
-      server.addScheduledTask(() -> observer.accept(payload));
+      // Netty event loop -> server thread, through the tick queue this line's transport drains.
+      ForgeNetworkPlatform.queueForServerThread(() -> observer.accept(payload));
     }
   }
 }

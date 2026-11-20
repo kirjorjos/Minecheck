@@ -23,6 +23,11 @@
 -- cannot miss one of these.
 local function phase(name)
   minecheck.log("phase: " .. name)
+  -- The server half runs the matching setup in its own process — `op`, the gives, survival, the
+  -- sword in hand, the spawned target — and cues when it is done. Assert nothing before that cue:
+  -- gating only the server lets this half read a hotbar the server has not filled yet.
+  local ready = minecheck.waitForPacket("server-ready:" .. name, 600)
+  minecheck.expect(ready ~= false, "the server finished its setup for " .. name)
   minecheck.runScript(name)
   minecheck.expect(minecheck.sendPacket("client-done:" .. name), "told the server that " .. name .. " is done")
 end

@@ -1,15 +1,20 @@
 package net.minecheck.loader.legacyfabric;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.EntityInfo;
 import net.minecheck.platform.api.ServerPlatform;
 import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
@@ -17,11 +22,9 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtList;
 import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
 /**
@@ -30,15 +33,44 @@ import net.minecraft.util.math.BlockPos;
  * <p>Every action is executed on the server thread: the script engine is driven from the server
  * tick, but a client's integrated server is queried from the client thread, so the marshaling here
  * is what makes one implementation serve both.
+ *
+ * <p>This line has no {@code submit} and no {@code isOnThread}, so the marshaling is its own: calls
+ * made off the server thread are queued and run from {@link #setServer}, which the tick hook calls
+ * on the server thread once per tick. That is one tick of latency for a cross-thread call, which is
+ * what a caller waiting on the answer pays; it is bounded by {@link #WAIT_SECONDS} so a stopped
+ * server reports an error instead of hanging the caller for ever.
  */
 public class LegacyFabricServerPlatform implements ServerPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
+  /** How long a caller waits for its queued server-thread action to run. */
+  private static final long WAIT_SECONDS = 10;
+
   private volatile MinecraftServer server;
+
+  /** The thread the server ticks on, learned from the first tick the hook reports. */
+  private volatile Thread serverThread;
+
+  /** Calls made off the server thread, drained at the end of the next server tick. */
+  private final ConcurrentLinkedQueue<Runnable> pending = new ConcurrentLinkedQueue<>();
 
   public void setServer(MinecraftServer server) {
     this.server = server;
+    if (server == null) {
+      return;
+    }
+    serverThread = Thread.currentThread();
+    Runnable task;
+    while ((task = pending.poll()) != null) {
+      try {
+        task.run();
+      } catch (RuntimeException e) {
+        // The caller has already been failed through its future; one bad action must not stop the
+        // rest of the queue from running.
+        LOG.warning("Minecheck: queued server action failed: " + e);
+      }
+    }
   }
 
   private MinecraftServer requireServer() {
@@ -50,12 +82,15 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   }
 
   private <T> T onServerThread(Supplier<T> action) {
-    MinecraftServer s = requireServer();
-    if (s.isOnThread()) {
+    requireServer();
+    Thread thread = serverThread;
+    // Before the first tick there is no server thread to hand work to, and nothing else is running
+    // on the world either, so the call runs where it is.
+    if (thread == null || thread == Thread.currentThread()) {
       return action.get();
     }
-    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
-    s.submit(
+    CompletableFuture<T> done = new CompletableFuture<>();
+    pending.add(
         () -> {
           try {
             done.complete(action.get());
@@ -63,7 +98,23 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
             done.completeExceptionally(t);
           }
         });
-    return done.join();
+    try {
+      return done.get(WAIT_SECONDS, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      throw new IllegalStateException("the server did not reach the action in time", e);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while waiting for the server", e);
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof RuntimeException) {
+        throw (RuntimeException) cause;
+      }
+      if (cause instanceof Error) {
+        throw (Error) cause;
+      }
+      throw new IllegalStateException(cause);
+    }
   }
 
   private ServerWorld overworld() {
@@ -77,16 +128,19 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * A registry id as this line reads it: trimmed and lower-cased, so {@code minecraft:Gold_Block}
    * is a name error and not a crash in the parser.
+   *
+   * <p>A plain string, not an identifier: on this line {@code Identifier} is a client class and the
+   * dedicated server cannot load it at all.
    */
-  private static Identifier parseId(String id, String what) {
+  private static String parseId(String id, String what) {
     if (id == null) {
       throw new IllegalArgumentException("invalid " + what + " id: null");
     }
-    try {
-      return new Identifier(id.trim().toLowerCase(java.util.Locale.ROOT));
-    } catch (RuntimeException e) {
-      throw new IllegalArgumentException("invalid " + what + " id: " + id, e);
+    String trimmed = id.trim().toLowerCase(java.util.Locale.ROOT);
+    if (!trimmed.matches("([a-z0-9_.\\-]+:)?[a-z0-9_./\\-]+")) {
+      throw new IllegalArgumentException("invalid " + what + " id: " + id);
     }
+    return trimmed;
   }
 
   private static NbtCompound parseTag(String nbt) {
@@ -94,7 +148,9 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
       return new NbtCompound();
     }
     try {
-      return StringNbtReader.parse(nbt);
+      // This line's reader keeps its entry point under an unmapped name; it answers the same
+      // element the newer lines' `parse` does.
+      return (NbtCompound) StringNbtReader.method_7377(nbt);
     } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
@@ -146,12 +202,20 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     onServerThread(
         () -> {
           ServerWorld level = overworld();
-          // 1.12.2 has no insomnia rule; it arrives in 1.15, and mob spawning is off anyway.
-          level.getGameRules().setGameRule("doMobSpawning", "false");
-          level.getGameRules().setGameRule("doDaylightCycle", "false");
-          level.getGameRules().setGameRule("doWeatherCycle", "false");
+          // doWeatherCycle arrives in 1.11 and doInsomnia in 1.15; this line knows neither rule and
+          // its manager rejects an unknown name, so each is set only when it exists. Weather is
+          // pinned by the run's own clock instead.
+          setRule(level, "doMobSpawning");
+          setRule(level, "doDaylightCycle");
+          setRule(level, "doWeatherCycle");
           return null;
         });
+  }
+
+  private static void setRule(ServerWorld level, String rule) {
+    if (level.getGameRules().contains(rule)) {
+      level.getGameRules().setGameRule(rule, "false");
+    }
   }
 
   @Override
@@ -160,16 +224,19 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   }
 
   private List<EntityInfo> findEntitiesOnServerThread(String type, String tag) {
-    Identifier typeId = type == null ? null : parseId(type, "entity type");
+    String typeId = type == null ? null : parseId(type, "entity type");
     ServerWorld level = overworld();
     List<EntityInfo> out = new ArrayList<>();
-    // Players keep their own list on 1.12.2: the first thing a script asks for is the player that
+    // Players keep their own list on this line: the first thing a script asks for is the player
+    // that
     // just joined, which is not in the loaded-entity list until the world ticks it.
     Map<Integer, Entity> entities = new LinkedHashMap<>();
-    for (Entity entity : level.loadedEntities) {
+    for (Object o : level.loadedEntities) {
+      Entity entity = (Entity) o;
       entities.put(entity.getEntityId(), entity);
     }
-    for (Entity entity : level.playerEntities) {
+    for (Object o : level.playerEntities) {
+      Entity entity = (Entity) o;
       entities.put(entity.getEntityId(), entity);
     }
     for (Entity entity : entities.values()) {
@@ -177,28 +244,41 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
       if (entity.removed) {
         continue;
       }
-      Identifier actual = EntityType.getId(entity);
-      if (actual == null && entity instanceof net.minecraft.entity.player.PlayerEntity) {
-        // 1.12.2 has no registry entry for the player class, so the entity that joined first is the
-        // one a script cannot otherwise name.
-        actual = new Identifier("minecraft", "player");
-      }
+      String actual = entityId(entity);
       if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
-      if (tag != null && !entity.getScoreboardTags().contains(tag)) {
+      java.util.Set<String> tags = LegacyCommandShim.tagsOf(entity);
+      if (tag != null && !tags.contains(tag)) {
         continue;
       }
       out.add(
           new EntityInfo(
               entity.getEntityId(),
-              actual == null ? "" : actual.toString(),
+              actual.toString(),
               entity.x,
-              entity.y,
+              LegacyEntitySpace.feetY(entity),
               entity.z,
-              new java.util.HashSet<>(entity.getScoreboardTags())));
+              tags));
     }
-    return List.copyOf(out);
+    return Collections.unmodifiableList(out);
+  }
+
+  /**
+   * The 1.13-style id of an entity.
+   *
+   * <p>1.7.10 names its entity types in CamelCase and without a namespace ({@code Zombie}), and it
+   * has no id for the player class, so both are translated here rather than leaking this line's
+   * spelling into a script.
+   */
+  private static String entityId(Entity entity) {
+    String legacy = EntityType.getEntityName(entity);
+    if (legacy == null) {
+      // The player is the one entity this line registers no type for; the newer lines answer
+      // `minecraft:player` for it.
+      return "minecraft:player";
+    }
+    return LegacyFabricNbt.modernEntityId(legacy);
   }
 
   @Override
@@ -213,10 +293,10 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           if (level == null) {
             return false;
           }
-          // The chunk the level spawned in, not chunk 0,0: a 1.12.2 world spawns its player away
+          // The chunk the level spawned in, not chunk 0,0: this line's world spawns its player away
           // from the origin, so 0,0 is generated but unloaded until something forces it.
-          BlockPos spawn = level.getSpawnPos();
-          return level.getChunkProvider().isChunkGenerated(spawn.getX() >> 4, spawn.getZ() >> 4);
+          BlockPos spawn = level.getWorldSpawnPos();
+          return level.getChunkProvider().chunkExists(spawn.x >> 4, spawn.z >> 4);
         });
   }
 
@@ -225,15 +305,25 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           ServerWorld level = overworld();
-          if (!level.getChunkProvider().isChunkGenerated(x >> 4, z >> 4)) {
+          if (!level.getChunkProvider().chunkExists(x >> 4, z >> 4)) {
             return null;
           }
-          // 1.12.2's top position of a column is already the first air block above the surface —
-          // the height a player standing there stands at — so it is returned as it is. Adding one
-          // put every script's surface one block high, and every marker it placed one block above
-          // where the world put the block.
-          return level.getTopPosition(new BlockPos(x, 0, z)).getY();
+          // This line has no column-top query, so the column is scanned from the build limit down
+          // and the first block that is not air is the surface. The answer is one above it — the
+          // height a player standing there stands at — which is what the newer lines' top position
+          // is.
+          for (int y = level.getEffectiveHeight() - 1; y >= 0; y--) {
+            if (!level.isAir(x, y, z)) {
+              return y + 1;
+            }
+          }
+          return 0;
         });
+  }
+
+  /** The chunk a world coordinate falls in, for a load-before-use call. */
+  private static int floorChunk(double coordinate) {
+    return (int) Math.floor(coordinate) >> 4;
   }
 
   @Override
@@ -242,7 +332,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> overworld().getChunkProvider().isChunkGenerated(chunkX, chunkZ));
+    return onServerThread(() -> overworld().getChunkProvider().chunkExists(chunkX, chunkZ));
   }
 
   @Override
@@ -253,8 +343,8 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           // Reading the chunk through makes the load synchronous rather than a later tick. This
           // line has no forced-chunk ticket exposed in its API, so the chunk is loaded but not held
           // against unload.
-          level.getChunkProvider().getOrGenerateChunks(chunkX, chunkZ);
-          return level.getChunkProvider().isChunkGenerated(chunkX, chunkZ);
+          level.getChunkProvider().getOrGenerateChunk(chunkX, chunkZ);
+          return level.getChunkProvider().chunkExists(chunkX, chunkZ);
         });
   }
 
@@ -264,15 +354,21 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   }
 
   private int spawnEntityOnServerThread(String id, double x, double y, double z, String nbt) {
-    Identifier location = parseId(id, "entity type");
+    String location = parseId(id, "entity type");
     ServerWorld level = overworld();
     NbtCompound tag = parseTag(nbt);
-    tag.putString("id", location.toString());
+    // The template is read by this line's own type table, which keys on the CamelCase name, so the
+    // id is translated before it reaches it.
+    String legacy = LegacyFabricNbt.legacyEntityId(location);
+    tag.putString("id", legacy == null ? location.substring(location.indexOf(':') + 1) : legacy);
     Entity entity = EntityType.createInstanceFromNbt(tag, level);
     if (entity == null) {
       throw new IllegalArgumentException("unknown entity type: " + id);
     }
     entity.updatePosition(x, y, z);
+    // The chunk is read through first: this line's spawn answers false for a position in a chunk
+    // that is not loaded, and a script may name a spot far from any player.
+    level.getChunkProvider().getOrGenerateChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
@@ -286,23 +382,23 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
 
   private boolean spawnBlockOnServerThread(
       String id, int x, int y, int z, String nbt, boolean replace) {
-    Identifier location = parseId(id, "block");
-    Block block = Block.get(location.toString());
+    String location = parseId(id, "block");
+    Block block = Block.get(location);
     if (block == null) {
       throw new IllegalArgumentException("unknown block: " + id);
     }
     ServerWorld level = overworld();
-    BlockPos pos = new BlockPos(x, y, z);
-    if (!replace && !level.isAir(pos)) {
+    if (!replace && !level.isAir(x, y, z)) {
       return false;
     }
-    BlockState state = block.getDefaultState();
-    if (!level.setBlockState(pos, state, 3)) {
+    // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
+    // is placed at metadata 0, which is what the newer lines' default state resolves to.
+    if (!level.setBlock(x, y, z, block, 0, 3)) {
       return false;
     }
     NbtCompound tag = parseTag(nbt);
     if (!tag.getKeys().isEmpty()) {
-      BlockEntity blockEntity = level.getBlockEntity(pos);
+      BlockEntity blockEntity = level.getBlockEntity(x, y, z);
       if (blockEntity != null) {
         tag.putInt("x", x);
         tag.putInt("y", y);
@@ -320,110 +416,39 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
 
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
-    Identifier location = parseId(id, "item");
-    Item item = Item.REGISTRY.get(location);
-    if (item == null) {
+    String location = parseId(id, "item");
+    Object registered = Item.REGISTRY.get(location);
+    if (!(registered instanceof Item)) {
       throw new IllegalArgumentException("unknown item: " + id);
     }
     ServerWorld level = overworld();
-    ItemStack stack = new ItemStack(item, count);
+    ItemStack stack = new ItemStack((Item) registered, count, 0);
     NbtCompound tag = parseTag(nbt);
     if (!tag.getKeys().isEmpty()) {
       stack.setNbt(tag);
     }
     ItemEntity itemEntity = new ItemEntity(level, x, y, z, stack);
+    level.getChunkProvider().getOrGenerateChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
     return itemEntity.getEntityId();
   }
 
-  @Override
-  public boolean spawnStructure(String id, int x, int y, int z) {
-    return onServerThread(() -> spawnStructureOnServerThread(id, x, y, z));
-  }
-
   /**
    * Places a vanilla structure template.
    *
-   * <p>This mapping exposes no template manager, so the template is read straight out of the game
-   * jar — {@code assets/minecraft/structures/<id>.nbt} — and stamped block by block. A template
-   * carries a palette and a list of positions; each position takes the palette entry's block, and
-   * the block entity NBT it carries, if any. Block <em>states</em> are placed at the block's
-   * default state, which is what this line's templates mostly are (planks, slabs, snow); a template
-   * whose palette depends on orientation lands axis-aligned rather than rotated.
+   * <p>This line predates bundled templates: 1.7.10 has no {@code assets/minecraft/structures}, and
+   * its world generator builds villages and temples from code. There is nothing to stamp, so the
+   * name is reported as unknown rather than silently doing nothing — the same answer a name that
+   * does not exist gets on the newer lines.
    */
-  private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
-    Identifier location = parseId(id, "structure");
-    ServerWorld level = overworld();
-    NbtCompound template = null;
-    // 1.13 renamed the structure files: the group's own name left the file (`igloo/igloo_top`
-    // became `igloo/top`), so both spellings are tried before giving up.
-    for (String path : legacyStructurePaths(location.getPath())) {
-      template = loadBundledStructure(location.getNamespace(), path);
-      if (template != null) {
-        break;
-      }
-    }
-    if (template == null) {
-      throw new IllegalArgumentException("unknown structure: " + id);
-    }
-    placeTemplate(level, template, new BlockPos(x, y, z));
-    return true;
-  }
-
-  /** The names a structure can go by on 1.12.2, given the name a fixture uses. */
-  private static List<String> legacyStructurePaths(String path) {
-    List<String> out = new ArrayList<>();
-    out.add(path);
-    int slash = path.indexOf('/');
-    if (slash > 0) {
-      String group = path.substring(0, slash);
-      out.add(group + "/" + group + "_" + path.substring(slash + 1));
-    }
-    out.add(path.replace('/', '_'));
-    return out;
-  }
-
-  /** A structure file as NBT, or {@code null} when the game jar has none under that name. */
-  private static NbtCompound loadBundledStructure(String namespace, String path) {
-    String asset = "/assets/" + namespace + "/structures/" + path + ".nbt";
-    try (java.io.InputStream in = MinecraftServer.class.getResourceAsStream(asset)) {
-      if (in == null) {
-        return null;
-      }
-      return net.minecraft.nbt.NbtIo.readCompressed(in);
-    } catch (Exception e) {
-      return null;
-    }
-  }
-
-  /** Stamps one template into the world, palette entry by palette entry. */
-  private static void placeTemplate(ServerWorld level, NbtCompound template, BlockPos origin) {
-    NbtList blocks = template.getList("blocks", 10);
-    NbtList palette = template.getList("palette", 10);
-    for (int i = 0; i < blocks.size(); i++) {
-      NbtCompound entry = (NbtCompound) blocks.get(i);
-      int stateIndex = entry.getInt("state");
-      if (stateIndex < 0 || stateIndex >= palette.size()) {
-        continue;
-      }
-      NbtCompound paletteEntry = (NbtCompound) palette.get(stateIndex);
-      Block block = Block.get(paletteEntry.getString("Name"));
-      if (block == null) {
-        continue;
-      }
-      NbtList pos = entry.getList("pos", 3);
-      BlockPos at = origin.add(pos.getInt(0), pos.getInt(1), pos.getInt(2));
-      level.setBlockState(at, block.getDefaultState(), 2);
-      NbtCompound blockEntityTag =
-          entry.get("nbt") instanceof NbtCompound ? (NbtCompound) entry.get("nbt") : null;
-      if (blockEntityTag != null) {
-        BlockEntity blockEntity = level.getBlockEntity(at);
-        if (blockEntity != null) {
-          blockEntity.fromNbt(blockEntityTag);
-        }
-      }
-    }
+  @Override
+  public boolean spawnStructure(String id, int x, int y, int z) {
+    return onServerThread(
+        () -> {
+          throw new IllegalArgumentException(
+              "unknown structure: " + id + " (this line has no bundled structure templates)");
+        });
   }
 }

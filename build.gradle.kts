@@ -93,9 +93,9 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerLoaderLifecycle("testForge", "forge")
-
 registerLoaderLifecycle("testLegacyfabric", "legacyfabric")
+
+registerLoaderLifecycle("testForge", "forge")
 
 fun registerFailPathLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -143,9 +143,9 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerFailPathLifecycle("testForgeFail", "forge")
-
 registerFailPathLifecycle("testLegacyfabricFail", "legacyfabric")
+
+registerFailPathLifecycle("testForgeFail", "forge")
 
 fun registerSpawnLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -190,9 +190,9 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerSpawnLifecycle("testForgeSpawn", "forge")
-
 registerSpawnLifecycle("testLegacyfabricSpawn", "legacyfabric")
+
+registerSpawnLifecycle("testForgeSpawn", "forge")
 
 fun registerQueryLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -237,9 +237,9 @@ fun registerQueryLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerQueryLifecycle("testForgeQuery", "forge")
-
 registerQueryLifecycle("testLegacyfabricQuery", "legacyfabric")
+
+registerQueryLifecycle("testForgeQuery", "forge")
 
 fun registerBeaconLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -284,9 +284,9 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerBeaconLifecycle("testForgeBeacon", "forge")
-
 registerBeaconLifecycle("testLegacyfabricBeacon", "legacyfabric")
+
+registerBeaconLifecycle("testForgeBeacon", "forge")
 
 fun registerInputLifecycle(taskName: String, loader: String) {
   val runRoot = "src/$loader/mod"
@@ -395,9 +395,9 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
-
 registerWorldHandoffLifecycle("testLegacyfabricWorldHandoff", "legacyfabric")
+
+registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
 
 fun registerPacketLifecycle(
   taskName: String,
@@ -448,21 +448,9 @@ fun registerPacketLifecycle(
   }
 }
 
-registerPacketLifecycle("testForgePacket", "forge")
-
-registerPacketLifecycle(
-  "testForgePacketTap",
-  "forge",
-  "packet-tap-client.lua",
-  "packet-tap-server.lua",
-  "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
-)
-
-registerInputLifecycle("testForgeInput", "forge")
-
-registerLiveLifecycle("testForgeLive", "forge")
-
 registerPacketLifecycle("testLegacyfabricPacket", "legacyfabric")
+
+registerPacketLifecycle("testForgePacket", "forge")
 
 // No frame tap on this line: Legacy Fabric ships no Forge to wrap the play connection, so a
 // foreign channel is observed at the payload handler itself, which is what `packet-tap` asserts.
@@ -474,9 +462,21 @@ registerPacketLifecycle(
   "Boots the Legacy Fabric client + dedicated server in parallel and verifies foreign-channel observation at the custom-payload handler",
 )
 
+registerPacketLifecycle(
+  "testForgePacketTap",
+  "forge",
+  "packet-tap-client.lua",
+  "packet-tap-server.lua",
+  "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation at the netty frame tap",
+)
+
 registerInputLifecycle("testLegacyfabricInput", "legacyfabric")
 
+registerInputLifecycle("testForgeInput", "forge")
+
 registerLiveLifecycle("testLegacyfabricLive", "legacyfabric")
+
+registerLiveLifecycle("testForgeLive", "forge")
 
 val ciBaselines =
   providers
@@ -581,9 +581,9 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerScreenshotsLifecycle("testForgeShots", "forge")
-
 registerScreenshotsLifecycle("testLegacyfabricShots", "legacyfabric")
+
+registerScreenshotsLifecycle("testForgeShots", "forge")
 
 /**
  * The server-backed suites, as phases of one session: one client boot and one dedicated-server boot
@@ -675,13 +675,13 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
-
-registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
-
 registerServerFeaturesLifecycle("testLegacyfabricServerFeatures", "legacyfabric")
 
+registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
+
 registerClientFeaturesLifecycle("testLegacyfabricClientFeatures", "legacyfabric")
+
+registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
 
 /**
  * Every lifecycle suite for one loader, as one task. CI runs one of these per loader in its own
@@ -697,16 +697,6 @@ fun registerLoaderAggregate(loader: String, vararg taskNames: String) {
 }
 
 registerLoaderAggregate(
-  "forge",
-  "testForge",
-  "testForgeFail",
-  "testForgeServerFeatures",
-  "testForgeClientFeatures",
-  "testForgeWorldHandoff",
-  "testForgeShots",
-)
-
-registerLoaderAggregate(
   "legacyfabric",
   "testLegacyfabric",
   "testLegacyfabricFail",
@@ -714,6 +704,16 @@ registerLoaderAggregate(
   "testLegacyfabricClientFeatures",
   "testLegacyfabricWorldHandoff",
   "testLegacyfabricShots",
+)
+
+registerLoaderAggregate(
+  "forge",
+  "testForge",
+  "testForgeFail",
+  "testForgeServerFeatures",
+  "testForgeClientFeatures",
+  "testForgeWorldHandoff",
+  "testForgeShots",
 )
 
 val metadataFile = layout.projectDirectory.file(".github/metadata.json")
@@ -769,9 +769,7 @@ val checkLoaders =
     }
   }
 
-tasks.named("test") {
-  dependsOn(checkLoaders, "testForgeAll", "testLegacyfabricAll", "spotlessCheck")
-}
+tasks.named("test") { dependsOn(checkLoaders, "testLegacyfabricAll", "spotlessCheck") }
 
 subprojects {
   apply(plugin = "java")
@@ -802,7 +800,7 @@ subprojects {
 
   if (
     downgradeTarget != null &&
-      name in setOf("common", "platform-api", "forge-mod", "legacyfabric-mod")
+      name in setOf("common", "platform-api", "legacyfabric-mod", "forge-mod")
   ) {
     apply(plugin = "xyz.wagyourtail.jvmdowngrader")
 
@@ -901,6 +899,40 @@ val styluaExe = styluaDir.map { it.file(styluaExeName).asFile }
 val styluaConfig = layout.projectDirectory.file("stylua.toml")
 val luaFiles = fileTree("tests/scripts") { include("*.lua") }
 
+/**
+ * Fetches a build tool, with the timeouts a build needs.
+ *
+ * <p>A bare `openStream()` has no connect or read timeout, so a release CDN that stops answering
+ * hangs until the socket itself gives up and the build dies with "Connection timed out" — a message
+ * that names neither the tool nor its URL, and that every job inherits because formatting is a
+ * dependency of the suites. The retry is here for the same reason: this is one archive from one
+ * host, and a transient failure of it should not fail a run that has nothing to do with it.
+ */
+fun downloadFile(url: String, dest: File) {
+  val attempts = 3
+  var last: Exception? = null
+  for (attempt in 1..attempts) {
+    try {
+      dest.parentFile.mkdirs()
+      val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
+      connection.connectTimeout = 30_000
+      connection.readTimeout = 300_000
+      connection.instanceFollowRedirects = true
+      connection.setRequestProperty("User-Agent", "minecheck-build")
+      connection.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+      return
+    } catch (e: Exception) {
+      last = e
+      dest.delete()
+      logger.warn("Minecheck: downloading $url failed (attempt $attempt/$attempts): ${e.message}")
+      if (attempt < attempts) {
+        Thread.sleep(2_000L * attempt)
+      }
+    }
+  }
+  throw GradleException("could not download $url: ${last?.message}", last)
+}
+
 val styluaDownload =
   tasks.register("styluaDownload") {
     val zip = layout.buildDirectory.file("stylua/$styluaVersion/$styluaTarget.zip")
@@ -909,10 +941,9 @@ val styluaDownload =
     doLast {
       val dest = zip.get().asFile
       if (!dest.exists()) {
-        dest.parentFile.mkdirs()
         val url =
           "https://github.com/JohnnyMorganz/StyLua/releases/download/v$styluaVersion/$styluaTarget.zip"
-        URI(url).toURL().openStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
+        downloadFile(url, dest)
       }
       val exe = styluaExe.get()
       if (!exe.exists()) {
@@ -972,14 +1003,16 @@ subprojects {
   }
 }
 
-val loaderModules = listOf("forge-mod")
+// Both loaders this line's metadata names: one that is listed there but missing here is promised to
+// a release and absent from it.
+val loaderModules = listOf("forge-mod", "legacyfabric-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description = "Builds this line's distributable jar (:forge-mod:productionJar)"
+  description = "Builds this line's distributable jars, one productionJar per loader"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1053,8 +1086,8 @@ tasks.register<Copy>("collectArtifacts") {
 // Resolved on the project: inside the task block `property` would look for a task property.
 val bootMinecraftVersion = property("minecraft_version").toString()
 
-// Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and
-// Forge's ModLauncher only starts on the JDK the line pins. The Fabric jar keeps class file 61 and
+// Only `common`, `platform-api` and `legacyfabric-mod` are downgraded (see the module loop above),
+// and the pinned JDK is the one the line's loader starts on. The Fabric jar keeps class file 61 and
 // a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM cannot
 // load it.
 val pinnedForgeJava: String =
@@ -1111,7 +1144,13 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
 // them, use `func_12345_a` / `field_12345_a`. Both spellings are SRG, so both count.
 val forgeProductionNames = Regex("(?:[mf]_[0-9]+_|(?:func|field)_[0-9]+_[a-zA-Z])")
 
-val productionNamespaces = mapOf("forge" to forgeProductionNames)
+// Legacy Fabric's production namespace is intermediary, whose members are `method_1234_a` and
+// `field_5678_b` — the same shape upstream Fabric uses, which is why the pattern is
+// version-neutral.
+val intermediaryProductionNames = Regex("(?:method|field)_[0-9]+")
+
+val productionNamespaces =
+  mapOf("forge" to forgeProductionNames, "legacyfabric" to intermediaryProductionNames)
 
 val checkProductionJars =
   tasks.register("checkProductionJars") {
@@ -1120,7 +1159,7 @@ val checkProductionJars =
       "Asserts each distributable loader jar is remapped into its production namespace (issue #23)"
     dependsOn(loaderModules.map { ":$it:productionJar" })
     doLast {
-      val loaders = mapOf("forge-mod" to "forge")
+      val loaders = mapOf("legacyfabric-mod" to "legacyfabric")
       loaders.forEach { (module, loader) ->
         // The task's own output, not a directory scan: `build/libs` also holds jars from earlier
         // versions of the same loader, and "the newest file there" is exactly the guess that lets a
@@ -1169,7 +1208,7 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 
 val mcVersion: String = property("minecraft_version") as String
 
-val loaderArtifactNames = mapOf("forge-mod" to "forge")
+val loaderArtifactNames = mapOf("forge-mod" to "forge", "legacyfabric-mod" to "legacyfabric")
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects

@@ -1,11 +1,13 @@
 package net.minecheck.loader.legacyfabric;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.block.Block;
@@ -14,18 +16,17 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtElement;
 import net.minecraft.nbt.NbtList;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
 /**
- * Answers the parts of the newer command syntax 1.12.2 cannot execute.
+ * Answers the parts of the newer command syntax 1.7.10 cannot execute.
  *
- * <p>This is the same shim the Forge line carries, ported onto this line's names: {@code /execute
- * if block} and {@code /execute if entity} are 1.13 syntax that 1.12.2 parses as {@code execute}
- * with an entity named {@code if}, which answers zero — a zero that reads as a failed condition
- * rather than an unsupported command. {@code /data get entity}, {@code /tag} and a bare {@code
- * /gamerule <name>} query are missing here for the same reason.
+ * <p>This is the same shim the newer lines carry, ported onto this line's names: {@code /execute if
+ * block} and {@code /execute if entity} are 1.13 syntax that 1.7.10 parses as {@code execute} with
+ * an entity named {@code if}, which answers zero — a zero that reads as a failed condition rather
+ * than an unsupported command. {@code /data get entity} and a bare {@code /gamerule <name>} query
+ * are missing here for the same reason, and {@code /tag} goes further: this line has no scoreboard
+ * tags at all, so the tags a script writes are kept here and read back from here.
  *
  * <p>Selectors are resolved here rather than by the command manager, because the manager's own
  * parser rejects the 1.13 arguments ({@code tag=}, {@code nbt=}, {@code limit=}) outright. Only the
@@ -33,6 +34,13 @@ import net.minecraft.world.World;
  * player name, with {@code name=}, {@code type=} and {@code tag=} filters.
  */
 final class LegacyCommandShim {
+
+  /**
+   * The scoreboard tags a script has set, keyed by entity id, because 1.7.10 has no scoreboard tags
+   * of its own: the {@code /tag} command arrives in 1.13, and the tag list it drives arrives with
+   * it. A tag lives as long as the entity id does; ids are not reused within a run.
+   */
+  private static final Map<Integer, Set<String>> TAGS = new ConcurrentHashMap<>();
 
   private static final Pattern EXECUTE_IF_BLOCK =
       Pattern.compile(
@@ -53,22 +61,50 @@ final class LegacyCommandShim {
 
   private static final Pattern SELECTOR_ARG = Pattern.compile("([a-zA-Z]+)=([^,\\]]+)");
 
+  private static final Pattern FILL =
+      Pattern.compile(
+          "^fill\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+"
+              + "([A-Za-z0-9_.:\\-]+)(?:\\s.*)?$");
+
   private LegacyCommandShim() {}
 
-  /** Every rewrite this line needs before a command reaches 1.12.2's parser. */
+  /** The tags a script has set on an entity, as it would read them back. */
+  static Set<String> tagsOf(Entity entity) {
+    Set<String> tags = TAGS.get(entity.getEntityId());
+    if (tags == null) {
+      return Collections.emptySet();
+    }
+    synchronized (tags) {
+      return Collections.unmodifiableSet(new HashSet<>(tags));
+    }
+  }
+
+  private static boolean addTag(Entity entity, String tag) {
+    Set<String> tags =
+        TAGS.computeIfAbsent(entity.getEntityId(), id -> ConcurrentHashMap.newKeySet());
+    return tags.add(tag);
+  }
+
+  private static boolean removeTag(Entity entity, String tag) {
+    Set<String> tags = TAGS.get(entity.getEntityId());
+    return tags != null && tags.remove(tag);
+  }
+
+  /** Every rewrite this line needs before a command reaches 1.7.10's parser. */
   static String translate(String command) {
     String out = rewriteGive(command);
-    // Selectors spell the game mode `m=` on 1.12.2 and `gamemode=` from 1.13, and cap the match
+    // Selectors spell the game mode `m=` on this line and `gamemode=` from 1.13, and cap the match
     // with `c=` where 1.13 says `limit=`. An unknown argument is rejected outright, so a selector
     // carrying one matched nothing at all.
     out = out.replace("gamemode=", "m=");
     out = out.replaceAll("limit=(\\d+)", "c=$1");
     if (out.startsWith("replaceitem ")) {
-      // 1.12.2 prefixes a container slot with `slot.` (`slot.hotbar.0`), which 1.13 dropped.
+      // 1.12.2 prefixes a container slot with `slot.` (`slot.hotbar.0`), which 1.13 dropped; this
+      // line has no `/replaceitem` at all, so the rewrite only keeps the command's shape.
       out = out.replaceAll(" (hotbar|inventory|weapon|armor|enderchest|horse)\\.", " slot.$1.");
     }
     // The aliases are replaced inside the command, not applied to the whole string: a `setblock`
-    // naming a 1.13 id is the command 1.12.2 rejects ("There is no such block with name
+    // naming a 1.13 id is the command 1.7.10 rejects ("There is no such block with name
     // minecraft:oak_sign"), and it is only that one argument that needs the old name.
     for (Map.Entry<String, String> alias : LegacyFabricNbt.legacyAliases().entrySet()) {
       out = out.replace(alias.getKey(), alias.getValue());
@@ -77,7 +113,69 @@ final class LegacyCommandShim {
   }
 
   /**
-   * Rewrites the 1.13 inline-tag {@code /give} into the form 1.12.2 parses, or returns the command
+   * A command rewritten into the commands this line can run, which can be more than one.
+   *
+   * <p>Two things the newer lines' parser accepts do not exist here: the {@code @s} selector (1.8)
+   * and {@code /fill} (1.8). A command naming {@code @s} is rewritten to name the player running
+   * it, and a {@code /fill} becomes one {@code /setblock} per block — the shape the newer lines'
+   * {@code /fill} is a shorthand for anyway. Coordinates are resolved against the runner's feet, so
+   * the relative form means the same thing it does on the newer lines.
+   */
+  private static final Pattern TELEPORT =
+      Pattern.compile("^tp\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+\\S+\\s+\\S+$");
+
+  static List<String> expandForLegacy(
+      String command, String playerName, double feetX, double feetY, double feetZ) {
+    String rewritten = command.replace("@s", playerName);
+    // `tp <target> x y z yaw pitch`: this line's teleport takes the position only, and the six
+    // argument form is rejected outright, which leaves the runner where it stood. The angles are
+    // dropped rather than faked — a script that needs to face a direction calls look/lookAt.
+    Matcher teleport = TELEPORT.matcher(rewritten.trim());
+    if (teleport.matches()) {
+      rewritten =
+          "tp "
+              + teleport.group(1)
+              + " "
+              + teleport.group(2)
+              + " "
+              + teleport.group(3)
+              + " "
+              + teleport.group(4);
+    }
+    Matcher fill = FILL.matcher(rewritten.trim());
+    if (!fill.matches()) {
+      return Collections.singletonList(rewritten);
+    }
+    int fromX = coordinate(fill.group(1), feetX);
+    int fromY = coordinate(fill.group(2), feetY);
+    int fromZ = coordinate(fill.group(3), feetZ);
+    int toX = coordinate(fill.group(4), feetX);
+    int toY = coordinate(fill.group(5), feetY);
+    int toZ = coordinate(fill.group(6), feetZ);
+    String block = LegacyFabricNbt.legacyId(fill.group(7));
+    List<String> out = new ArrayList<>();
+    for (int x = Math.min(fromX, toX); x <= Math.max(fromX, toX); x++) {
+      for (int y = Math.min(fromY, toY); y <= Math.max(fromY, toY); y++) {
+        for (int z = Math.min(fromZ, toZ); z <= Math.max(fromZ, toZ); z++) {
+          out.add("setblock " + x + " " + y + " " + z + " " + block);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** A fill coordinate: absolute, or {@code ~} relative to the runner's feet. */
+  private static int coordinate(String token, double origin) {
+    if (!token.startsWith("~")) {
+      return (int) Math.floor(Double.parseDouble(token));
+    }
+    String offset = token.substring(1);
+    double relative = offset.isEmpty() ? 0.0 : Double.parseDouble(offset);
+    return (int) Math.floor(origin + relative);
+  }
+
+  /**
+   * Rewrites the 1.13 inline-tag {@code /give} into the form 1.7.10 parses, or returns the command
    * unchanged when it is anything else.
    */
   static String rewriteGive(String command) {
@@ -104,13 +202,14 @@ final class LegacyCommandShim {
       count = "1";
     }
     // <player> <item> [amount] [data] [dataTag]: the tag is the last argument here, not part of the
-    // item a 1.12.2 lookup would try to resolve.
+    // item a 1.7.10 lookup would try to resolve.
     return "give " + parts[0] + " " + parts[1] + " " + count + " 0 " + tag;
   }
 
   /**
-   * 1.12.2's NBT reader only knows double-quoted strings, and the newer fixtures write a JSON text
-   * inside single quotes; left as written, the reader reports "Expected value" at the first value.
+   * This line's NBT reader only knows double-quoted strings, and the newer fixtures write a JSON
+   * text inside single quotes; left as written, the reader reports "Expected value" at the first
+   * value.
    */
   private static String normalizeQuotes(String tag) {
     StringBuilder out = new StringBuilder(tag.length() + 8);
@@ -157,7 +256,7 @@ final class LegacyCommandShim {
   }
 
   /**
-   * The value of {@code gamerule <name>}, which 1.13 made the command's result; 1.12.2 answers 1
+   * The value of {@code gamerule <name>}, which 1.13 made the command's result; this line answers 1
    * for any query, so a fixture asking "is this rule off" read every rule as on.
    */
   static Integer gameruleValue(World world, String command) {
@@ -165,9 +264,13 @@ final class LegacyCommandShim {
     if (!match.matches() || world == null) {
       return null;
     }
-    String value = world.getGameRules().getString(match.group(1));
-    // A rule this line does not have reads as "off": 1.12.2 predates doInsomnia, and the suite's
-    // question is only ever "is it disabled".
+    String name = match.group(1);
+    // A rule this line does not have reads as "off": 1.7.10 predates doInsomnia and doWeatherCycle,
+    // and the suite's question is only ever "is it disabled".
+    if (!world.getGameRules().contains(name)) {
+      return 0;
+    }
+    String value = world.getGameRules().getString(name);
     if (value == null || value.isEmpty() || value.equalsIgnoreCase("false") || value.equals("0")) {
       return 0;
     }
@@ -184,9 +287,9 @@ final class LegacyCommandShim {
   }
 
   /**
-   * {@code tag <selector> add|remove <name>}: the root arrives in 1.13, while scoreboard tags are
-   * already there on 1.12.2 — the command that drives them is what is missing, and the suites use
-   * it to mark the entity they spawned.
+   * {@code tag <selector> add|remove <name>}: the root arrives in 1.13 along with the tags it
+   * writes, while this line has neither — so the tag list is the one kept in this class and read
+   * back by {@link #tagsOf}.
    */
   static Integer tagCommand(World world, String command) {
     Matcher match = TAG_COMMAND.matcher(command.trim());
@@ -197,12 +300,12 @@ final class LegacyCommandShim {
     String tag = match.group(3);
     int changed = 0;
     for (Entity entity : matchingEntities(world, match.group(1))) {
-      boolean has = entity.getScoreboardTags().contains(tag);
+      boolean has = tagsOf(entity).contains(tag);
       if (add && !has) {
-        entity.addScoreboardTag(tag);
+        addTag(entity, tag);
         changed++;
       } else if (!add && has) {
-        entity.removeScoreboardTag(tag);
+        removeTag(entity, tag);
         changed++;
       }
     }
@@ -210,8 +313,8 @@ final class LegacyCommandShim {
   }
 
   /**
-   * {@code data get entity <selector> <path>}: 1.12.2 has no {@code /data} root at all, so the read
-   * is answered from the entity's own NBT.
+   * {@code data get entity <selector> <path>}: this line has no {@code /data} root at all, so the
+   * read is answered from the entity's own NBT.
    */
   static Integer dataGetEntity(World world, String command) {
     Matcher match = DATA_GET_ENTITY.matcher(command.trim());
@@ -222,7 +325,11 @@ final class LegacyCommandShim {
     if (found.isEmpty()) {
       return 0;
     }
-    NbtElement node = found.get(0).toNbt(new NbtCompound());
+    // This line writes an entity's NBT into a compound and answers whether it wrote anything, so
+    // the compound is the value and the boolean is discarded.
+    NbtCompound entityTag = new NbtCompound();
+    found.get(0).saveToNbt(entityTag);
+    NbtElement node = entityTag;
     for (String step : match.group(2).split("\\.")) {
       node = child(node, step);
       if (node == null) {
@@ -247,7 +354,16 @@ final class LegacyCommandShim {
     }
     if (value != null && index >= 0 && value instanceof NbtList) {
       NbtList list = (NbtList) value;
-      value = index < list.size() ? list.get(index) : null;
+      if (index >= list.size()) {
+        return null;
+      }
+      // This line's list exposes no element at an index: it answers by type, so a list of compounds
+      // — the only list a path continues into — is read through the compound accessor.
+      try {
+        value = list.getCompound(index);
+      } catch (RuntimeException e) {
+        return null;
+      }
     }
     return value;
   }
@@ -261,27 +377,26 @@ final class LegacyCommandShim {
     if (world == null) {
       return 0;
     }
-    BlockPos pos =
-        new BlockPos(
-            Integer.parseInt(match.group(1)),
-            Integer.parseInt(match.group(2)),
-            Integer.parseInt(match.group(3)));
+    int x = Integer.parseInt(match.group(1));
+    int y = Integer.parseInt(match.group(2));
+    int z = Integer.parseInt(match.group(3));
     Block expected = Block.get(LegacyFabricNbt.legacyId(match.group(4)));
     if (expected == null) {
       return 0;
     }
     // An unloaded chunk has no blocks to test: report no match rather than loading it here, which
     // is the same answer the conditional command gives on the lines that support it.
-    if (!world.getChunkProvider().isChunkGenerated(pos.getX() >> 4, pos.getZ() >> 4)) {
+    if (!world.getChunkProvider().chunkExists(x >> 4, z >> 4)) {
       return 0;
     }
-    return world.getBlockState(pos).getBlock() == expected ? 1 : 0;
+    // This line has no block states, so the block is what a state comparison resolves to.
+    return world.getBlock(x, y, z) == expected ? 1 : 0;
   }
 
   /** The entities a selector names, with the 1.13 arguments this line has no parser for. */
   private static List<Entity> matchingEntities(World world, String selector) {
     if (world == null) {
-      return List.of();
+      return Collections.emptyList();
     }
     String base = selector.trim();
     String arguments = "";
@@ -304,16 +419,21 @@ final class LegacyCommandShim {
         break;
       default:
         // A player name: the only selector form that names one entity directly.
-        for (Entity player : world.playerEntities) {
+        for (Object o : world.playerEntities) {
+          Entity player = (Entity) o;
           if (playerName(player).equals(base)) {
-            return List.of(player);
+            return Collections.singletonList(player);
           }
         }
-        return List.of();
+        return Collections.emptyList();
     }
-    candidates.addAll(world.playerEntities);
+    for (Object o : world.playerEntities) {
+      candidates.add((Entity) o);
+    }
     if (!playersOnly) {
-      candidates.addAll(world.loadedEntities);
+      for (Object o : world.loadedEntities) {
+        candidates.add((Entity) o);
+      }
     }
     Set<String> names = new HashSet<>();
     Set<String> types = new HashSet<>();
@@ -342,12 +462,12 @@ final class LegacyCommandShim {
         continue;
       }
       if (!types.isEmpty()) {
-        Identifier id = EntityType.getId(entity);
-        if (id == null || !types.contains(id.toString())) {
+        String name = EntityType.getEntityName(entity);
+        if (name == null || !types.contains(LegacyFabricNbt.modernEntityId(name))) {
           continue;
         }
       }
-      if (!tags.isEmpty() && !entity.getScoreboardTags().containsAll(tags)) {
+      if (!tags.isEmpty() && !tagsOf(entity).containsAll(tags)) {
         continue;
       }
       out.add(entity);
