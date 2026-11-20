@@ -972,14 +972,14 @@ subprojects {
   }
 }
 
-val loaderModules = listOf("forge-mod")
+val loaderModules = listOf("forge-mod", "legacyfabric-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description = "Builds this line's distributable jar (:forge-mod:productionJar)"
+  description = "Builds this line's distributable jars (every loader module's productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
