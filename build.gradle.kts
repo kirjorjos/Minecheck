@@ -1169,7 +1169,7 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 
 val mcVersion: String = property("minecraft_version") as String
 
-val loaderArtifactNames = mapOf("forge-mod" to "forge")
+val loaderArtifactNames = mapOf("forge-mod" to "forge", "legacyfabric-mod" to "legacyfabric")
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects
