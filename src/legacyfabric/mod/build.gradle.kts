@@ -241,6 +241,16 @@ tasks.shadowJar {
       if (downgradeTo == null) project.configurations.runtimeClasspath.get()
       else downgradedRuntimeInput
     )
+  // The downgraded directories are task outputs rather than versioned files, so the jar that packs
+  // them has to declare the wait explicitly: Gradle rejects a task consuming another task's output
+  // without a dependency, and the dev runs only escaped it because they already asked for it.
+  if (downgradeTo != null) {
+    dependsOn(
+      ":common:downgradedRuntime",
+      ":platform-api:downgradedRuntime",
+      ":legacyfabric-mod:downgradedRuntime",
+    )
+  }
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces and
   // writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
