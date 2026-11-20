@@ -16,3 +16,7 @@ Suggested shape, delete what you do not use:
 ## Changed
 -
 -->
+
+## Changed
+- Publishing: the release workflow installs the Java 8 JDK it needs up front instead of downloading
+  one mid-build, so a release can no longer fail after its promotion has merged
