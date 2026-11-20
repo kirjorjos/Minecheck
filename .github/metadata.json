@@ -1,6 +1,7 @@
 {
   "loaders": [
-    "forge"
+    "forge",
+    "legacyfabric"
   ],
   "release": {
     "prefix": "MineCheck-",
