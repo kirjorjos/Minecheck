@@ -173,6 +173,9 @@ public class ForgeEntrypoint {
         // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
         // queues a client task and waits for it, which cannot happen while that queue is draining.
         client.applyPendingLeave();
+        // A world start the script asked for while the last server was still stopping runs here,
+        // on the first tick after FML finished it.
+        client.applyPendingWorldStart();
         // The camera runs before the player does: it holds the body's rotation at the value the
         // server last saw, and doing that after the player ticked would be after the packet that
         // carries the change.

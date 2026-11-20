@@ -1,7 +1,14 @@
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
+import java.util.jar.Attributes
+import java.util.jar.Manifest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 import net.minecheck.gradle.LaunchDescriptor
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.withGroovyBuilder
@@ -26,18 +33,27 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.12.2 is mapped by MCP, and stable_39 is the last stable
-  // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
-  // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
+  // No Mojang mappings this far back: 1.12 is mapped by MCP, and stable_39 is the last stable
+  // release for it (the 1.12 artifact, which FG 2.x asks for with the game version suffixed).
+  // Forge resolves its production members by SRG name, so the remapped jar is still checked by
+  // `checkProductionJars`.
   mappings { mcp("stable", "39-1.12") }
-  // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
-  minecraftForge { loader("14.23.5.2860") }
+  // 14.21.1.2443 is the last 1.12 Forge build, and the one a user on this version installs.
+  minecraftForge {
+    loader("14.21.1.2443")
+    // FML 1.12 installs its security manager in the tweaker's constructor and rejects any later
+    // `System.setSecurityManager`. The merged jar's manifest names the client tweaker too, so a
+    // server launch builds one twice and dies before the game starts ("Cannot replace the FML
+    // security manager"). 1.12.2's FML dedupes them, so the sibling line never needed this;
+    // unimined's FG3 path ships juuxel's unprotect agent for the same reason, its FG2 path does
+    // not, and this line asks for it explicitly.
+    unprotectRuntime = true
+  }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.12.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.12 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -51,7 +67,7 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
-// 1.12.2 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
+// 1.12 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
 // client died with "no lwjgl64 in java.library.path" before it could open a window. Extract them
 // from the published natives artefact and point the client's library path at the directory.
 val lwjgl2Natives by configurations.creating
@@ -411,6 +427,54 @@ fun writeDescriptor(task: JavaExec, out: File) {
   out.writeText(sb.toString())
 }
 
+// --- the server's copy of the dev game jar ------------------------------------------------------
+// The 1.12 dev runs use unimined's FG2 merge of the Forge server jar and Minecraft, and it inherits
+// that jar's `TweakClass: FMLTweaker`. FML 1.12's CoreModManager scans `java.class.path` for tweak
+// classes and launches every one it finds, so the dedicated server builds FMLTweaker (from the
+// merged jar) beside the FMLServerTweaker the launch asks for, and the second constructor dies with
+// "Cannot replace the FML security manager". The client wants FMLTweaker and is unaffected; the
+// server runs against a copy of the jar with just that attribute dropped.
+val serverGameDir = layout.buildDirectory.dir("minecheck/server-games")
+
+/** Whether [jar]'s manifest declares a tweak class, i.e. FML would launch it from the classpath. */
+fun declaresTweakClass(jar: File): Boolean {
+  if (!jar.isFile || !jar.name.endsWith(".jar")) return false
+  return try {
+    ZipFile(jar).use { zip ->
+      val entry = zip.getEntry("META-INF/MANIFEST.MF") ?: return@use false
+      Manifest(zip.getInputStream(entry)).mainAttributes.getValue("TweakClass") != null
+    }
+  } catch (e: IOException) {
+    false
+  }
+}
+
+fun copyWithoutTweakClass(source: File, target: File) {
+  ZipFile(source).use { zip ->
+    ZipOutputStream(target.outputStream().buffered()).use { out ->
+      for (entry in zip.entries()) {
+        val data: ByteArray
+        if (entry.name == "META-INF/MANIFEST.MF") {
+          val manifest = Manifest(zip.getInputStream(entry))
+          manifest.mainAttributes.remove(Attributes.Name("TweakClass"))
+          val buffer = ByteArrayOutputStream()
+          manifest.write(buffer)
+          data = buffer.toByteArray()
+        } else {
+          data = zip.getInputStream(entry).use { stream -> stream.readBytes() }
+        }
+        out.putNextEntry(ZipEntry(entry.name))
+        out.write(data)
+        out.closeEntry()
+      }
+    }
+  }
+}
+
+/** The server's stand-in for [entry] when the game jar declares a tweak class. */
+fun serverGameJarFor(entry: File): File =
+  if (declaresTweakClass(entry)) File(serverGameDir.get().asFile, entry.name) else entry
+
 /**
  * The classpath file Forge's game module layer is built from.
  *
@@ -728,4 +792,32 @@ gradle.projectsEvaluated {
         doFirst { setExecutable(pinnedJdkJavaFile.absolutePath) }
       }
     }
+}
+
+// Runs after the downgrade mapping above, so it only ever swaps the game jar itself. The jar list
+// is captured here rather than read inside the task: unimined's classpath is what both the
+// descriptor and the run use, and after the swap it names the patched copies.
+gradle.projectsEvaluated {
+  val server = tasks.named("runServer").get() as JavaExec
+  val entries = server.classpath.files.toList()
+  val mapped = entries.map { serverGameJarFor(it) }
+  val sources = entries.filterIndexed { index, entry -> mapped[index] != entry }
+  server.classpath = files(mapped)
+  if (sources.isEmpty()) return@projectsEvaluated
+  val prepare =
+    tasks.register("prepareServerGameJars") {
+      group = "minecheck"
+      description = "Copies the dev game jars the server must not read a tweak class from"
+      inputs.files(sources)
+      outputs.dir(serverGameDir)
+      doLast {
+        val out = serverGameDir.get().asFile
+        out.mkdirs()
+        for (jar in sources) {
+          copyWithoutTweakClass(jar, File(out, jar.name))
+        }
+      }
+    }
+  server.dependsOn(prepare)
+  tasks.named("devHelperServerLaunch") { dependsOn(prepare) }
 }

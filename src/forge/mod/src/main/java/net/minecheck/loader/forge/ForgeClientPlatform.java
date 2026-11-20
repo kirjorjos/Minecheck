@@ -64,6 +64,7 @@ import net.minecraft.world.WorldServer;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
 import net.minecraftforge.fml.common.Loader;
+import net.minecraftforge.fml.common.LoaderState;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
@@ -716,7 +717,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (!save.isFile()) {
       throw new IllegalArgumentException("World not found: " + worldName);
     }
-    onClientThread(
+    startWorldWhenSettled(
         () ->
             mc.launchIntegratedServer(
                 worldName,
@@ -781,13 +782,14 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     pendingWorldOptions = options;
     Minecraft mc = mc();
-    onClientThread(() -> mc.launchIntegratedServer(options.name(), options.name(), settings));
+    startWorldWhenSettled(
+        () -> mc.launchIntegratedServer(options.name(), options.name(), settings));
   }
 
   @Override
   public void joinServer(String address) {
     ServerAddress serverAddress = ServerAddress.fromString(address);
-    onClientThread(
+    startWorldWhenSettled(
         () -> {
           try {
             Minecraft mc = mc();
@@ -834,6 +836,51 @@ public class ForgeClientPlatform implements ClientPlatform {
     // makes isOnTitleScreen() true after leaving.
     mc.loadWorld(null);
     mc.displayGuiScreen(new GuiMainMenu());
+  }
+
+  /** A world or server start a script asked for while the previous one was still winding down. */
+  private volatile Runnable pendingWorldStart;
+
+  /**
+   * False while a server lifecycle transition is in flight — stopping, about to start, starting or
+   * running.
+   *
+   * <p>Starting the next world in that window makes FML log "Fatal errors were detected during the
+   * transition from SERVER_STOPPING …" and refuse the new instance, leaving the title screen up
+   * until the phase deadline runs out. {@code disconnect} returns as soon as the player is gone,
+   * while the integrated server it left is still on its way through that transition, so the next
+   * phase can arrive well inside it.
+   */
+  private boolean worldTransitionSettled() {
+    LoaderState state = Loader.instance().getLoaderState();
+    return state != LoaderState.SERVER_ABOUT_TO_START
+        && state != LoaderState.SERVER_STARTING
+        && state != LoaderState.SERVER_STARTED
+        && state != LoaderState.SERVER_STOPPING;
+  }
+
+  /** Runs {@code start} on the client thread once FML is between server lifecycles. */
+  private void startWorldWhenSettled(Runnable start) {
+    onClientThread(
+        () -> {
+          if (worldTransitionSettled()) {
+            start.run();
+            return;
+          }
+          // The client tick applies it: re-queueing it on the scheduled-task queue from inside that
+          // queue would keep the queue draining until the transition finished.
+          pendingWorldStart = start;
+        });
+  }
+
+  /** Applies a pending {@link #startWorldWhenSettled} from the client tick. */
+  void applyPendingWorldStart() {
+    Runnable start = pendingWorldStart;
+    if (start == null || !mc().isCallingFromMinecraftThread() || !worldTransitionSettled()) {
+      return;
+    }
+    pendingWorldStart = null;
+    start.run();
   }
 
   @Override
