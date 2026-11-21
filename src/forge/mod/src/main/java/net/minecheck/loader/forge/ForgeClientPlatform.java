@@ -1579,6 +1579,11 @@ public final class ForgeClientPlatform implements ClientPlatform {
       // Remote server: no authoritative value in this process.
       return;
     }
+    if (server.worldServers == null || server.worldServers.length == 0) {
+      // The integrated server exists before it has prepared a world — the handoff client ticks in
+      // that window — so there is no time of day to re-assert yet.
+      return;
+    }
     net.minecraft.world.WorldServer overworld = server.worldServerForDimension(0);
     if (overworld == null) {
       return;
@@ -1595,6 +1600,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     IntegratedServer server = client.getIntegratedServer();
     if (server == null) {
+      return;
+    }
+    if (server.worldServers == null || server.worldServers.length == 0) {
+      // Keep the request pending: the world these rules belong to has not been prepared yet.
       return;
     }
     pendingWorldOptions = null;

@@ -1329,6 +1329,11 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       // Remote server: no authoritative value in this process.
       return;
     }
+    if (server.worlds == null || server.worlds.length == 0) {
+      // The integrated server exists before it has prepared a world — the handoff client ticks in
+      // that window — and `getWorld` throws on the null array. There is nothing to re-assert yet.
+      return;
+    }
     net.minecraft.server.world.ServerWorld overworld = server.getWorld(0);
     if (overworld == null) {
       return;
@@ -1345,6 +1350,12 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     IntegratedServer server = client.getServer();
     if (server == null) {
+      return;
+    }
+    if (server.worlds == null || server.worlds.length == 0) {
+      // Keep the request pending: the world these rules belong to has not been prepared yet, and
+      // asking the server for it in this window is what threw the handoff client's start-up
+      // exception.
       return;
     }
     pendingWorldOptions = null;
