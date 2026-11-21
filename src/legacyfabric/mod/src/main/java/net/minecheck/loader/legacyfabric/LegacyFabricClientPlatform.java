@@ -56,11 +56,9 @@ import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResultType;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.GameMode;
 import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
 import org.lwjgl.input.Keyboard;
@@ -253,7 +251,11 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                     worldName,
                     worldName,
                     new LevelInfo(
-                        0L, GameMode.SURVIVAL, false, false, LevelGeneratorType.DEFAULT)));
+                        0L,
+                        LevelInfo.GameMode.SURVIVAL,
+                        false,
+                        false,
+                        LevelGeneratorType.DEFAULT)));
   }
 
   @Override
@@ -732,7 +734,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     Vec3d direction = directionOf(player);
     Vec3d end = start.add(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
     BlockHitResult hit = client.world.rayTrace(start, end);
-    if (hit == null || hit.hitResult != HitResultType.BLOCK) {
+    if (hit == null || hit.type != BlockHitResult.Type.BLOCK) {
       return null;
     }
     return new BlockPosition(
@@ -861,7 +863,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     Vec3d direction = directionOf(player);
     Vec3d end = start.add(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
     BlockHitResult hit = client.world.rayTrace(start, end);
-    if (hit == null || hit.hitResult != HitResultType.BLOCK) {
+    if (hit == null || hit.type != BlockHitResult.Type.BLOCK) {
       return;
     }
     client.interactionManager.onRightClick(
@@ -1375,18 +1377,18 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     server.setDifficulty(difficulty(options.difficulty()));
   }
 
-  private static GameMode gameMode(String name) {
+  private static LevelInfo.GameMode gameMode(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "survival":
-        return GameMode.SURVIVAL;
+        return LevelInfo.GameMode.SURVIVAL;
       case "adventure":
-        return GameMode.ADVENTURE;
+        return LevelInfo.GameMode.ADVENTURE;
       case "spectator":
         // 1.7.10 predates spectator mode; adventure is the closest mode it has — no flight and no
         // ability to place blocks, which is what a spectator fixture relies on.
-        return GameMode.ADVENTURE;
+        return LevelInfo.GameMode.ADVENTURE;
       default:
-        return GameMode.CREATIVE;
+        return LevelInfo.GameMode.CREATIVE;
     }
   }
 
@@ -1608,7 +1610,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return;
     }
 
-    int guiScale = new Window(client, Display.getWidth(), Display.getHeight()).getScaleFactor();
+    int guiScale = new Window(client).getScaleFactor();
     int x = 0;
     int y = 0;
     int cropWidth = frameWidth;

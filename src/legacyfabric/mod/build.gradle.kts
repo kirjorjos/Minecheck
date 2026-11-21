@@ -22,7 +22,7 @@ unimined.minecraft {
   // cover this line: upstream intermediary starts at 1.14.
   mappings {
     legacyIntermediary()
-    // 604 is the newest legacy yarn build for 1.8 (meta.legacyfabric.net/v2/versions/yarn).
+    // 604 is the newest legacy yarn build for 1.8.8 (meta.legacyfabric.net/v2/versions/yarn).
     legacyYarn(604)
   }
   // 0.20.1 is the newest loader release that still supports 1.12.2.

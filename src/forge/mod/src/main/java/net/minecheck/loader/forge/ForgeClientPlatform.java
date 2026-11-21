@@ -568,7 +568,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
                                     text.substring(1),
-                                    player.getCommandSenderName(),
+                                    player.getName(),
                                     player.posX,
                                     feetY(player),
                                     player.posZ)
@@ -830,11 +830,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // The feet, from the bounding box: on this line {@code posY} is the eye position, a full eye
     // height above the feet.
     return new PlayerInfo(
-        player.getCommandSenderName(),
-        player.posX,
-        feetY(player),
-        player.posZ,
-        dimensionName(player));
+        player.getName(), player.posX, feetY(player), player.posZ, dimensionName(player));
   }
 
   /**
@@ -916,7 +912,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // every script (the crosshair test's whole first expectation).
     if (client.thePlayer == null
         || client.theWorld == null
-        || !client.thePlayer.getCommandSenderName().equals(entityName)) {
+        || !client.thePlayer.getName().equals(entityName)) {
       return null;
     }
     return getCrosshairBlock();
@@ -1015,7 +1011,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     List<String> lines =
         LegacyCommandShim.expandForLegacy(
             LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command),
-            player.getCommandSenderName(),
+            player.getName(),
             player.posX,
             feetY(player),
             player.posZ);
@@ -1023,7 +1019,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     EntityPlayerMP self =
         server == null
             ? null
-            : server.getConfigurationManager().getPlayerByUsername(player.getCommandSenderName());
+            : server.getConfigurationManager().getPlayerByUsername(player.getName());
     if (self == null) {
       for (String line : lines) {
         client.getNetHandler().addToSendQueue(new C01PacketChatMessage("/" + line));
@@ -1856,10 +1852,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return;
     }
 
-    int guiScale =
-        new net.minecraft.client.gui.ScaledResolution(
-                client, Display.getWidth(), Display.getHeight())
-            .getScaleFactor();
+    int guiScale = new net.minecraft.client.gui.ScaledResolution(client).getScaleFactor();
     int x = 0;
     int y = 0;
     int cropWidth = frameWidth;

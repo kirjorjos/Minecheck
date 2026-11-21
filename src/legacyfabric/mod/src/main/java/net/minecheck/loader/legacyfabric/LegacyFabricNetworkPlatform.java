@@ -63,8 +63,8 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
         if (server == null || server.getPlayerManager().getCurrentPlayerCount() == 0) {
           return false;
         }
-        // This line keeps the players in a raw public list rather than behind an accessor.
-        for (Object candidate : server.getPlayerManager().players) {
+        // 1.8.8's mappings put the list behind an accessor instead of the public field.
+        for (Object candidate : server.getPlayerManager().getPlayers()) {
           net.minecraft.entity.player.ServerPlayerEntity player =
               (net.minecraft.entity.player.ServerPlayerEntity) candidate;
           player.networkHandler.sendPacket(LegacyPayloads.toClient(payload));
