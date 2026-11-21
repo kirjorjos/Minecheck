@@ -93,8 +93,6 @@ fun registerLoaderLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerLoaderLifecycle("testLegacyfabric", "legacyfabric")
-
 registerLoaderLifecycle("testForge", "forge")
 
 fun registerFailPathLifecycle(taskName: String, loader: String) {
@@ -143,8 +141,6 @@ fun registerFailPathLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerFailPathLifecycle("testLegacyfabricFail", "legacyfabric")
-
 registerFailPathLifecycle("testForgeFail", "forge")
 
 fun registerSpawnLifecycle(taskName: String, loader: String) {
@@ -189,8 +185,6 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
-registerSpawnLifecycle("testLegacyfabricSpawn", "legacyfabric")
 
 registerSpawnLifecycle("testForgeSpawn", "forge")
 
@@ -237,8 +231,6 @@ fun registerQueryLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerQueryLifecycle("testLegacyfabricQuery", "legacyfabric")
-
 registerQueryLifecycle("testForgeQuery", "forge")
 
 fun registerBeaconLifecycle(taskName: String, loader: String) {
@@ -283,8 +275,6 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
     )
   }
 }
-
-registerBeaconLifecycle("testLegacyfabricBeacon", "legacyfabric")
 
 registerBeaconLifecycle("testForgeBeacon", "forge")
 
@@ -395,8 +385,6 @@ fun registerWorldHandoffLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerWorldHandoffLifecycle("testLegacyfabricWorldHandoff", "legacyfabric")
-
 registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
 
 fun registerPacketLifecycle(
@@ -448,15 +436,10 @@ fun registerPacketLifecycle(
   }
 }
 
-registerPacketLifecycle("testLegacyfabricPacket", "legacyfabric")
-
 registerPacketLifecycle("testForgePacket", "forge")
 
-// Only Forge has a tap to test: its netty tap sits below the channel, so a script can observe a
-// channel the transport already receives. Legacy Fabric has no second path — this line hands every
-// custom payload to the play handler, the payload mixins see it at HEAD, and that handler is the
-// observation point itself — so `watchPacketChannel("minecheck:main")` is refused there, and the
-// per-loader answer is asserted by `packet-client.lua` in the packet suite instead.
+// This line's Forge tap sits below the channel, so a script can observe a channel the transport
+// already receives.
 registerPacketLifecycle(
   "testForgePacketTap",
   "forge",
@@ -465,11 +448,7 @@ registerPacketLifecycle(
   "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation at the netty frame tap",
 )
 
-registerInputLifecycle("testLegacyfabricInput", "legacyfabric")
-
 registerInputLifecycle("testForgeInput", "forge")
-
-registerLiveLifecycle("testLegacyfabricLive", "legacyfabric")
 
 registerLiveLifecycle("testForgeLive", "forge")
 
@@ -576,8 +555,6 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerScreenshotsLifecycle("testLegacyfabricShots", "legacyfabric")
-
 registerScreenshotsLifecycle("testForgeShots", "forge")
 
 /**
@@ -670,11 +647,7 @@ fun registerClientFeaturesLifecycle(taskName: String, loader: String) {
   }
 }
 
-registerServerFeaturesLifecycle("testLegacyfabricServerFeatures", "legacyfabric")
-
 registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
-
-registerClientFeaturesLifecycle("testLegacyfabricClientFeatures", "legacyfabric")
 
 registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
 
@@ -690,16 +663,6 @@ fun registerLoaderAggregate(loader: String, vararg taskNames: String) {
     dependsOn(*taskNames)
   }
 }
-
-registerLoaderAggregate(
-  "legacyfabric",
-  "testLegacyfabric",
-  "testLegacyfabricFail",
-  "testLegacyfabricServerFeatures",
-  "testLegacyfabricClientFeatures",
-  "testLegacyfabricWorldHandoff",
-  "testLegacyfabricShots",
-)
 
 registerLoaderAggregate(
   "forge",
@@ -764,7 +727,7 @@ val checkLoaders =
     }
   }
 
-tasks.named("test") { dependsOn(checkLoaders, "testLegacyfabricAll", "spotlessCheck") }
+tasks.named("test") { dependsOn(checkLoaders, "testForgeAll", "spotlessCheck") }
 
 subprojects {
   apply(plugin = "java")
@@ -793,10 +756,7 @@ subprojects {
       .map { JavaVersion.toVersion(it.trim()) }
       .orNull
 
-  if (
-    downgradeTarget != null &&
-      name in setOf("common", "platform-api", "legacyfabric-mod", "forge-mod")
-  ) {
+  if (downgradeTarget != null && name in setOf("common", "platform-api", "forge-mod")) {
     apply(plugin = "xyz.wagyourtail.jvmdowngrader")
 
     val target = downgradeTarget
@@ -998,16 +958,16 @@ subprojects {
   }
 }
 
-// Both loaders this line's metadata names: one that is listed there but missing here is promised to
+// Every loader this line's metadata names: one that is listed there but missing here is promised to
 // a release and absent from it.
-val loaderModules = listOf("forge-mod", "legacyfabric-mod")
+val loaderModules = listOf("forge-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
 
 tasks.register("buildAll") {
   group = "minecheck"
-  description = "Builds this line's distributable jars, one productionJar per loader"
+  description = "Builds this line's distributable jar (:forge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1081,10 +1041,8 @@ tasks.register<Copy>("collectArtifacts") {
 // Resolved on the project: inside the task block `property` would look for a task property.
 val bootMinecraftVersion = property("minecraft_version").toString()
 
-// Only `common`, `platform-api` and `legacyfabric-mod` are downgraded (see the module loop above),
-// and the pinned JDK is the one the line's loader starts on. The Fabric jar keeps class file 61 and
-// a JAVA_17 mixin config, so handing it the Java 8 runtime would only prove the wrong JVM cannot
-// load it.
+// Only `common`, `platform-api` and `forge-mod` are downgraded (see the module loop above), and the
+// pinned JDK is the one the line's loader starts on.
 val pinnedForgeJava: String =
   if (providers.gradleProperty("minecheck.downgradeTo").isPresent) {
     project(":forge-mod")
@@ -1139,13 +1097,7 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
 // them, use `func_12345_a` / `field_12345_a`. Both spellings are SRG, so both count.
 val forgeProductionNames = Regex("(?:[mf]_[0-9]+_|(?:func|field)_[0-9]+_[a-zA-Z])")
 
-// Legacy Fabric's production namespace is intermediary, whose members are `method_1234_a` and
-// `field_5678_b` — the same shape upstream Fabric uses, which is why the pattern is
-// version-neutral.
-val intermediaryProductionNames = Regex("(?:method|field)_[0-9]+")
-
-val productionNamespaces =
-  mapOf("forge" to forgeProductionNames, "legacyfabric" to intermediaryProductionNames)
+val productionNamespaces = mapOf("forge" to forgeProductionNames)
 
 val checkProductionJars =
   tasks.register("checkProductionJars") {
@@ -1154,7 +1106,7 @@ val checkProductionJars =
       "Asserts each distributable loader jar is remapped into its production namespace (issue #23)"
     dependsOn(loaderModules.map { ":$it:productionJar" })
     doLast {
-      val loaders = mapOf("legacyfabric-mod" to "legacyfabric")
+      val loaders = mapOf("forge-mod" to "forge")
       loaders.forEach { (module, loader) ->
         // The task's own output, not a directory scan: `build/libs` also holds jars from earlier
         // versions of the same loader, and "the newest file there" is exactly the guess that lets a
@@ -1203,7 +1155,7 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 
 val mcVersion: String = property("minecraft_version") as String
 
-val loaderArtifactNames = mapOf("forge-mod" to "forge", "legacyfabric-mod" to "legacyfabric")
+val loaderArtifactNames = mapOf("forge-mod" to "forge")
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects

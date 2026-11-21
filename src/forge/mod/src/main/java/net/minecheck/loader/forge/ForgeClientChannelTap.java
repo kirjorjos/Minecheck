@@ -61,7 +61,7 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
   }
 
   private static NetworkManager connection() {
-    NetHandlerPlayClient listener = Minecraft.getMinecraft().getNetHandler();
+    NetHandlerPlayClient listener = Minecraft.getMinecraft().getConnection();
     return listener == null ? null : listener.getNetworkManager();
   }
 

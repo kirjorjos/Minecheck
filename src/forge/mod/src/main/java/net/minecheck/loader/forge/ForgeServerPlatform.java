@@ -26,6 +26,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.gen.ChunkProviderServer;
+import net.minecraft.world.gen.structure.template.PlacementSettings;
+import net.minecraft.world.gen.structure.template.Template;
+import net.minecraft.world.gen.structure.template.TemplateManager;
 
 /**
  * The server-side half of the Forge platform.
@@ -186,7 +189,18 @@ public class ForgeServerPlatform implements ServerPlatform {
           if (conditional != null) {
             return conditional;
           }
-          return s.getCommandManager().executeCommand(s, line);
+          // This line's parser knows `@s`, but the command manager runs as the server console,
+          // which is not an entity: `tp @s ...` answers "The entity UUID provided is in an invalid
+          // format" and the player never moves. The sender stays the console so a command keeps
+          // the run's permissions; only the selector is resolved.
+          int result =
+              s.getCommandManager()
+                  .executeCommand(
+                      s, LegacyCommandShim.substituteSelf(line, LegacyCommandShim.selfName(world)));
+          // Every 1.9 command root returns void, so the handler answers 0 for a command that
+          // succeeded; the 1.8 line answered 1, and a fixture reads that count back. An executed
+          // command therefore reports at least one.
+          return Math.max(1, result);
         });
   }
 
@@ -196,7 +210,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> s.getConfigurationManager().getPlayerByUsername(name) != null);
+    return onServerThread(() -> s.getPlayerList().getPlayerByUsername(name) != null);
   }
 
   @Override
@@ -285,7 +299,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           }
           // The chunk the level spawned in, not chunk 0,0: this line's world spawns its player away
           // from the origin, so 0,0 is generated but unloaded until something forces it.
-          net.minecraft.util.BlockPos spawn = level.getSpawnPoint();
+          net.minecraft.util.math.BlockPos spawn = level.getSpawnPoint();
           return chunks(level).chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
         });
   }
@@ -303,7 +317,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           // height a player standing there stands at — which is what the newer lines' top position
           // is.
           for (int y = level.getHeight() - 1; y >= 0; y--) {
-            if (!level.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
+            if (!level.isAirBlock(new net.minecraft.util.math.BlockPos(x, y, z))) {
               return y + 1;
             }
           }
@@ -378,18 +392,18 @@ public class ForgeServerPlatform implements ServerPlatform {
       throw new IllegalArgumentException("unknown block: " + id);
     }
     WorldServer level = overworld();
-    if (!replace && !level.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
+    if (!replace && !level.isAirBlock(new net.minecraft.util.math.BlockPos(x, y, z))) {
       return false;
     }
     // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
     // is placed at metadata 0, which is what the newer lines' default state resolves to.
     if (!level.setBlockState(
-        new net.minecraft.util.BlockPos(x, y, z), block.getDefaultState(), 3)) {
+        new net.minecraft.util.math.BlockPos(x, y, z), block.getDefaultState(), 3)) {
       return false;
     }
     NBTTagCompound tag = parseTag(nbt);
     if (!tag.getKeySet().isEmpty()) {
-      TileEntity blockEntity = level.getTileEntity(new net.minecraft.util.BlockPos(x, y, z));
+      TileEntity blockEntity = level.getTileEntity(new net.minecraft.util.math.BlockPos(x, y, z));
       if (blockEntity != null) {
         tag.setInteger("x", x);
         tag.setInteger("y", y);
@@ -410,7 +424,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     String location = parseId(id, "item");
     // 1.8.9's mappings type this registry by ResourceLocation, not by the raw key 1.8 accepted.
     Object registered =
-        Item.itemRegistry.getObject(
+        Item.REGISTRY.getObject(
             new net.minecraft.util.ResourceLocation(MinecheckNames.legacyId(location)));
     if (!(registered instanceof Item)) {
       throw new IllegalArgumentException("unknown item: " + id);
@@ -429,20 +443,62 @@ public class ForgeServerPlatform implements ServerPlatform {
     return itemEntity.getEntityId();
   }
 
-  /**
-   * Places a vanilla structure template.
-   *
-   * <p>This line ships no bundled templates: it has no {@code assets/minecraft/structures}, and its
-   * world generator builds villages and temples from code. There is nothing to stamp, so the name
-   * is reported as unknown rather than silently doing nothing — the same answer a name that does
-   * not exist gets on the newer lines.
-   */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {
-    return onServerThread(
-        () -> {
-          throw new IllegalArgumentException(
-              "unknown structure: " + id + " (this line has no bundled structure templates)");
-        });
+    return onServerThread(() -> spawnStructureOnServerThread(id, x, y, z));
+  }
+
+  private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
+    String identifier = parseId(id, "structure");
+    int colon = identifier.indexOf(':');
+    String namespace = colon < 0 ? "minecraft" : identifier.substring(0, colon);
+    String path = colon < 0 ? identifier : identifier.substring(colon + 1);
+    WorldServer level = overworld();
+    TemplateManager manager = level.getStructureTemplateManager();
+    MinecraftServer server = level.getMinecraftServer();
+    Template template = null;
+    for (String candidate : legacyTemplatePaths(path)) {
+      template =
+          loadTemplate(
+              manager, server, new net.minecraft.util.ResourceLocation(namespace, candidate));
+      if (template != null) {
+        break;
+      }
+    }
+    if (template == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
+    // Templates can carry entities; the API places blocks only, as the newer lines do.
+    template.addBlocksToWorld(
+        level,
+        new net.minecraft.util.math.BlockPos(x, y, z),
+        new PlacementSettings().setIgnoreEntities(true));
+    return true;
+  }
+
+  /**
+   * The names a structure can go by on this line, given the 1.13 name a fixture uses: the group's
+   * own name left the file in 1.13 ({@code igloo/igloo_top} became {@code igloo/top}).
+   */
+  private static List<String> legacyTemplatePaths(String path) {
+    List<String> out = new ArrayList<>();
+    out.add(path);
+    int slash = path.indexOf('/');
+    if (slash > 0) {
+      String group = path.substring(0, slash);
+      out.add(group + "/" + group + "_" + path.substring(slash + 1));
+    }
+    out.add(path.replace('/', '_'));
+    return out;
+  }
+
+  /** A template, or {@code null} when this line has none under that name. */
+  private static Template loadTemplate(
+      TemplateManager manager, MinecraftServer server, net.minecraft.util.ResourceLocation id) {
+    try {
+      return manager.getTemplate(server, id);
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 }

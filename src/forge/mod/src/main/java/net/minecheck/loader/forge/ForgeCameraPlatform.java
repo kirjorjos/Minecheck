@@ -15,14 +15,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.util.MathHelper;
+import net.minecraft.util.math.MathHelper;
 import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 
 /**
- * The camera on the Forge 1.7.10 side.
+ * The camera on the Forge 1.9 side.
  *
  * <p>It owns the one camera entity, the key binding and the per-tick flight, and delegates every
  * decision about <em>where</em> the camera is to {@link CameraController} in {@code :common}, which
@@ -306,7 +306,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       basePitch = player.rotationPitch;
       return;
     }
-    float yawDelta = MathHelper.wrapAngleTo180_float(player.rotationYaw - (float) baseYaw);
+    float yawDelta = MathHelper.wrapDegrees(player.rotationYaw - (float) baseYaw);
     float pitchDelta = player.rotationPitch - (float) basePitch;
     player.rotationYaw = (float) baseYaw;
     player.rotationPitch = (float) basePitch;
@@ -322,7 +322,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
             pose.x(),
             pose.y(),
             pose.z(),
-            MathHelper.wrapAngleTo180_float((float) pose.yaw() + yawDelta),
+            MathHelper.wrapDegrees((float) pose.yaw() + yawDelta),
             MathHelper.clamp_float((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
     if (controller.setPose(turned)) {
       place(camera, turned);

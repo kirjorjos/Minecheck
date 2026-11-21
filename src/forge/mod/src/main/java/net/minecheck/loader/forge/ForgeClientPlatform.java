@@ -43,19 +43,21 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.inventory.ClickType;
 import net.minecraft.inventory.Slot;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.play.client.C01PacketChatMessage;
+import net.minecraft.network.play.client.CPacketChatMessage;
 import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.tileentity.TileEntitySign;
-import net.minecraft.util.IChatComponent;
-import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.util.Vec3;
+import net.minecraft.util.math.AxisAlignedBB;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.world.EnumDifficulty;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
@@ -420,7 +422,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
           // Written here rather than left to the shutdown save: that pass only takes the chunks it
           // happens to unload, and the chunk a script just wrote stays loaded, so the marker was
           // never on disk to hand over.
-          world.getChunkProvider().saveChunks(true, null);
+          world.getChunkProvider().saveChunks(true);
         }
       }
       // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
@@ -465,7 +467,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (client.thePlayer != null) {
       return false;
     }
-    NetHandlerPlayClient handler = client.getNetHandler();
+    NetHandlerPlayClient handler = client.getConnection();
     if (handler == null) {
       return false;
     }
@@ -517,7 +519,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    net.minecraft.util.BlockPos spawn = overworld.getSpawnPoint();
+    net.minecraft.util.math.BlockPos spawn = overworld.getSpawnPoint();
     return ((net.minecraft.world.gen.ChunkProviderServer) overworld.getChunkProvider())
         .chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
   }
@@ -560,22 +562,17 @@ public final class ForgeClientPlatform implements ClientPlatform {
                       String text = field == null ? "" : field.getText();
                       if (!text.isEmpty()
                           && mc().thePlayer != null
-                          && mc().getNetHandler() != null) {
-                        // A typed command goes through the same rewrite as a scripted one: `@s` and
-                        // `/fill` are not syntax this line has, wherever the command came from.
+                          && mc().getConnection() != null) {
+                        // A typed command goes through the same rewrite as a scripted one.
                         EntityPlayer player = mc().thePlayer;
                         for (String line :
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
-                                    text.substring(1),
-                                    player.getName(),
-                                    player.posX,
-                                    feetY(player),
-                                    player.posZ)
+                                    text.substring(1), player.getName())
                                 : java.util.Collections.singletonList(text)) {
-                          mc().getNetHandler()
-                              .addToSendQueue(
-                                  new C01PacketChatMessage(line.equals(text) ? line : "/" + line));
+                          mc().getConnection()
+                              .sendPacket(
+                                  new CPacketChatMessage(line.equals(text) ? line : "/" + line));
                         }
                       }
                       mc().displayGuiScreen(null);
@@ -599,7 +596,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
                       code == keyCodeNamed("key.attack") ? pickedEntity(4.5) : null;
                   if (swingTarget != null) {
                     mc().playerController.attackEntity(mc().thePlayer, swingTarget);
-                    mc().thePlayer.swingItem();
+                    mc().thePlayer.swingArm(net.minecraft.util.EnumHand.MAIN_HAND);
                     return;
                   }
                   pressKeyCode(code, true);
@@ -676,12 +673,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (player == null || client.theWorld == null) {
       return null;
     }
-    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
-    Vec3 direction = directionOf(player);
-    Vec3 end =
+    Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
+    Vec3d direction = directionOf(player);
+    Vec3d end =
         start.addVector(
             direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach);
-    net.minecraft.util.AxisAlignedBB area =
+    AxisAlignedBB area =
         player
             .getEntityBoundingBox()
             .addCoord(direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach)
@@ -693,7 +690,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       if (!entity.canBeCollidedWith()) {
         continue;
       }
-      MovingObjectPosition hit =
+      RayTraceResult hit =
           entity.getEntityBoundingBox().expand(0.3, 0.3, 0.3).calculateIntercept(start, end);
       if (hit == null) {
         continue;
@@ -929,12 +926,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // player has now, at the reach vanilla gives the crosshair.
     EntityPlayer player = client.thePlayer;
     // The crosshair starts at the eyes, which this line reports separately from `posY` (the feet).
-    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
-    Vec3 direction = directionOf(player);
-    Vec3 end =
+    Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
+    Vec3d direction = directionOf(player);
+    Vec3d end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
-    MovingObjectPosition hit = client.theWorld.rayTraceBlocks(start, end);
-    if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
+    RayTraceResult hit = client.theWorld.rayTraceBlocks(start, end);
+    if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return null;
     }
     return new BlockPosition(
@@ -947,10 +944,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
   }
 
   /** The unit vector a player is looking along; this line has no accessor for it. */
-  private static Vec3 directionOf(EntityPlayer player) {
+  private static Vec3d directionOf(EntityPlayer player) {
     float pitch = (float) Math.toRadians(player.rotationPitch);
     float yaw = (float) Math.toRadians(player.rotationYaw);
-    return new Vec3(
+    return new Vec3d(
         -Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
 
@@ -1003,26 +1000,20 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void runCommand(String command) {
     Minecraft client = mc();
     EntityPlayer player = client.thePlayer;
-    if (player == null || client.getNetHandler() == null) {
+    if (player == null || client.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    // `@s` and `/fill` are 1.8 syntax, so a command that uses either becomes the commands this
-    // line has — possibly more than one — before it goes anywhere.
+    // 1.13's selector and root syntax is translated before the command goes anywhere.
     List<String> lines =
         LegacyCommandShim.expandForLegacy(
             LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command),
-            player.getName(),
-            player.posX,
-            feetY(player),
-            player.posZ);
+            player.getName());
     IntegratedServer server = client.getIntegratedServer();
     EntityPlayerMP self =
-        server == null
-            ? null
-            : server.getConfigurationManager().getPlayerByUsername(player.getName());
+        server == null ? null : server.getPlayerList().getPlayerByUsername(player.getName());
     if (self == null) {
       for (String line : lines) {
-        client.getNetHandler().addToSendQueue(new C01PacketChatMessage("/" + line));
+        client.getConnection().sendPacket(new CPacketChatMessage("/" + line));
       }
       return;
     }
@@ -1069,23 +1060,24 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // whatever the previous look held and vanilla drops the attempt silently, leaving the
     // container shut.
     EntityPlayer player = client.thePlayer;
-    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
-    Vec3 direction = directionOf(player);
-    Vec3 end =
+    Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
+    Vec3d direction = directionOf(player);
+    Vec3d end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
-    MovingObjectPosition hit = client.theWorld.rayTraceBlocks(start, end);
-    if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
+    RayTraceResult hit = client.theWorld.rayTraceBlocks(start, end);
+    if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return;
     }
-    // This line has one hand and an int side: the held stack and the side the hit reports are what
-    // the item's use-on-block callback takes.
-    client.playerController.onPlayerRightClick(
+    // The held stack, the side the hit reports and the hand are what the item's use-on-block
+    // callback takes.
+    client.playerController.processRightClickBlock(
         client.thePlayer,
         client.theWorld,
-        client.thePlayer.getHeldItem(),
+        client.thePlayer.getHeldItemMainhand(),
         hit.getBlockPos(),
         hit.sideHit,
-        hit.hitVec);
+        hit.hitVec,
+        net.minecraft.util.EnumHand.MAIN_HAND);
   }
 
   @Override
@@ -1095,7 +1087,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       throw new IllegalStateException("not in a world");
     }
     TileEntity blockEntity =
-        client.theWorld.getTileEntity(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()));
+        client.theWorld.getTileEntity(
+            new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
     if (!(blockEntity instanceof TileEntitySign)) {
       return false;
     }
@@ -1211,7 +1204,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
         // This line's buttons keep their label in a plain String field (`displayString`, from
         // before `message`), while the newer lines hold a Text; both are read, and only the
         // label-looking names are trusted so an unrelated string field cannot answer as the label.
-        boolean isText = IChatComponent.class.isAssignableFrom(field.getType());
+        boolean isText = ITextComponent.class.isAssignableFrom(field.getType());
         boolean isLabelString =
             field.getType() == String.class
                 && (field.getName().equals("displayString")
@@ -1386,26 +1379,23 @@ public final class ForgeClientPlatform implements ClientPlatform {
     return true;
   }
 
-  /**
-   * The click mode as this line numbers it: 1.7.10's slot click takes the mode as an int and has no
-   * {@code ItemAction} enum, and the numbers are the wire values the protocol has always used.
-   */
-  private static int itemAction(String type) {
+  /** The click mode as this line names it: 1.9's slot click takes a {@link ClickType}. */
+  private static ClickType itemAction(String type) {
     switch (type == null ? "" : type.toLowerCase(Locale.ROOT)) {
       case "quick_move":
-        return 1;
+        return ClickType.QUICK_MOVE;
       case "swap":
-        return 2;
+        return ClickType.SWAP;
       case "clone":
-        return 3;
+        return ClickType.CLONE;
       case "throw":
-        return 4;
+        return ClickType.THROW;
       case "quick_craft":
-        return 5;
+        return ClickType.QUICK_CRAFT;
       case "pickup_all":
-        return 6;
+        return ClickType.PICKUP_ALL;
       default:
-        return 0;
+        return ClickType.PICKUP;
     }
   }
 
@@ -1481,7 +1471,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
-    Object rawItemId = Item.itemRegistry.getNameForObject(stack.getItem());
+    Object rawItemId = Item.REGISTRY.getNameForObject(stack.getItem());
     String itemId = rawItemId == null ? "" : rawItemId.toString();
     NBTTagCompound nbt = stack.getTagCompound();
     return new SlotInfo(
@@ -1507,11 +1497,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
     Block block =
         client
             .theWorld
-            .getBlockState(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()))
+            .getBlockState(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()))
             .getBlock();
     TileEntity blockEntity =
-        client.theWorld.getTileEntity(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()));
-    Object rawBlockId = Block.blockRegistry.getNameForObject(block);
+        client.theWorld.getTileEntity(
+            new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
+    Object rawBlockId = Block.REGISTRY.getNameForObject(block);
     String blockId = rawBlockId == null ? null : rawBlockId.toString();
     NBTTagCompound blockEntityTag = new NBTTagCompound();
     if (blockEntity != null) {
@@ -1538,7 +1529,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // This line has no column-top query: the column is scanned down from the build limit and the
     // first block that is not air is the surface, whose height is one above it.
     for (int y = client.theWorld.getHeight() - 1; y >= 0; y--) {
-      if (!client.theWorld.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
+      if (!client.theWorld.isAirBlock(new net.minecraft.util.math.BlockPos(x, y, z))) {
         return y + 1;
       }
     }
@@ -1549,7 +1540,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public boolean isChunkLoaded(int chunkX, int chunkZ) {
     Minecraft client = mc();
     return client.theWorld != null
-        && client.theWorld.getChunkProvider().chunkExists(chunkX, chunkZ);
+        && ((net.minecraft.client.multiplayer.ChunkProviderClient)
+                    client.theWorld.getChunkProvider())
+                .getLoadedChunk(chunkX, chunkZ)
+            != null;
   }
 
   // ------------------------------------------------------------ clock and render
