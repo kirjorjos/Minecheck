@@ -448,17 +448,60 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * Places a vanilla structure template.
    *
-   * <p>This line ships no bundled templates: it has no {@code assets/minecraft/structures}, and its
-   * world generator builds villages and temples from code. There is nothing to stamp, so the name
-   * is reported as unknown rather than silently doing nothing — the same answer a name that does
-   * not exist gets on the newer lines.
+   * <p>1.9 ships its structures as NBT under {@code assets/minecraft/structures}, and the world
+   * generator reads them through the structure manager. A 1.13 name resolves to the file this line
+   * ships under its pre-1.13 name ({@code minecraft:igloo/top} reads {@code igloo/igloo_top.nbt}),
+   * and the template is stamped without its entities.
    */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {
-    return onServerThread(
-        () -> {
-          throw new IllegalArgumentException(
-              "unknown structure: " + id + " (this line has no bundled structure templates)");
-        });
+    return onServerThread(() -> spawnStructureOnServerThread(id, x, y, z));
+  }
+
+  private boolean spawnStructureOnServerThread(String id, int x, int y, int z) {
+    String identifier = parseId(id, "structure");
+    int colon = identifier.indexOf(':');
+    String namespace = colon < 0 ? "minecraft" : identifier.substring(0, colon);
+    String path = colon < 0 ? identifier : identifier.substring(colon + 1);
+    MinecraftServer s = requireServer();
+    ServerWorld level = overworld();
+    net.minecraft.structure.class_2763 manager = level.method_12783();
+    net.minecraft.structure.Structure structure = null;
+    for (String candidate : legacyTemplatePaths(path)) {
+      try {
+        structure =
+            manager.method_11861(s, new net.minecraft.util.Identifier(namespace, candidate));
+      } catch (RuntimeException e) {
+        structure = null;
+      }
+      if (structure != null) {
+        break;
+      }
+    }
+    if (structure == null) {
+      throw new IllegalArgumentException("unknown structure: " + id);
+    }
+    // The API places blocks only, which is the first boolean's ignore-entities flag.
+    structure.method_11882(
+        level,
+        new BlockPos(x, y, z),
+        new net.minecraft.structure.StructurePlacementData().method_11870(true));
+    return true;
+  }
+
+  /**
+   * The names a structure can go by on this line, given the 1.13 name a fixture uses: the group's
+   * own name left the file in 1.13 ({@code igloo/igloo_top} became {@code igloo/top}).
+   */
+  private static List<String> legacyTemplatePaths(String path) {
+    List<String> out = new ArrayList<>();
+    out.add(path);
+    int slash = path.indexOf('/');
+    if (slash > 0) {
+      String group = path.substring(0, slash);
+      out.add(group + "/" + group + "_" + path.substring(slash + 1));
+    }
+    out.add(path.replace('/', '_'));
+    return out;
   }
 }
