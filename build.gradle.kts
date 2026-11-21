@@ -452,16 +452,11 @@ registerPacketLifecycle("testLegacyfabricPacket", "legacyfabric")
 
 registerPacketLifecycle("testForgePacket", "forge")
 
-// No frame tap on this line: Legacy Fabric ships no Forge to wrap the play connection, so a
-// foreign channel is observed at the payload handler itself, which is what `packet-tap` asserts.
-registerPacketLifecycle(
-  "testLegacyfabricPacketTap",
-  "legacyfabric",
-  "packet-tap-client.lua",
-  "packet-tap-server.lua",
-  "Boots the Legacy Fabric client + dedicated server in parallel and verifies foreign-channel observation at the custom-payload handler",
-)
-
+// Only Forge has a tap to test: its netty tap sits below the channel, so a script can observe a
+// channel the transport already receives. Legacy Fabric has no second path — this line hands every
+// custom payload to the play handler, the payload mixins see it at HEAD, and that handler is the
+// observation point itself — so `watchPacketChannel("minecheck:main")` is refused there, and the
+// per-loader answer is asserted by `packet-client.lua` in the packet suite instead.
 registerPacketLifecycle(
   "testForgePacketTap",
   "forge",
