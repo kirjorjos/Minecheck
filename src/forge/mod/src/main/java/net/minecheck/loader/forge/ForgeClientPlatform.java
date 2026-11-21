@@ -421,8 +421,15 @@ public final class ForgeClientPlatform implements ClientPlatform {
           }
           // Written here rather than left to the shutdown save: that pass only takes the chunks it
           // happens to unload, and the chunk a script just wrote stays loaded, so the marker was
-          // never on disk to hand over.
-          world.getChunkProvider().saveChunks(true);
+          // never on disk to hand over. The full pass is the one that writes a chunk modified this
+          // tick: the provider's own `saveChunks` asks each chunk whether it needs saving and
+          // dropped the one the handoff script had just written.
+          try {
+            world.saveAllChunks(true, null);
+            world.getChunkProvider().saveExtraData();
+          } catch (net.minecraft.world.MinecraftException e) {
+            throw new IllegalStateException("could not save the world before quitting", e);
+          }
         }
       }
       // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
