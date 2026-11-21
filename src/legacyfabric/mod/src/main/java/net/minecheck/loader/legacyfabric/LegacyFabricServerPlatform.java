@@ -267,8 +267,8 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * The 1.13-style id of an entity.
    *
-   * <p>1.7.10 names its entity types in CamelCase and without a namespace ({@code Zombie}), and it
-   * has no id for the player class, so both are translated here rather than leaking this line's
+   * <p>This line names its entity types in CamelCase and without a namespace ({@code Zombie}), and
+   * it has no id for the player class, so both are translated here rather than leaking this line's
    * spelling into a script.
    */
   private static String entityId(Entity entity) {
@@ -391,8 +391,8 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     if (!replace && !level.isAir(new net.minecraft.util.math.BlockPos(x, y, z))) {
       return false;
     }
-    // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
-    // is placed at metadata 0, which is what the newer lines' default state resolves to.
+    // An id names a block, not one of its states: an id with no properties is the default state,
+    // which is what the newer lines place for it too.
     if (!level.setBlockState(
         new net.minecraft.util.math.BlockPos(x, y, z), block.getDefaultState(), 3)) {
       return false;
@@ -442,10 +442,10 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * Places a vanilla structure template.
    *
-   * <p>This line predates bundled templates: 1.7.10 has no {@code assets/minecraft/structures}, and
-   * its world generator builds villages and temples from code. There is nothing to stamp, so the
-   * name is reported as unknown rather than silently doing nothing — the same answer a name that
-   * does not exist gets on the newer lines.
+   * <p>This line ships no bundled templates: it has no {@code assets/minecraft/structures}, and its
+   * world generator builds villages and temples from code. There is nothing to stamp, so the name
+   * is reported as unknown rather than silently doing nothing — the same answer a name that does
+   * not exist gets on the newer lines.
    */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {

@@ -201,7 +201,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     LOG.warning(
-        "Minecheck: hideGameWindow is on, but 1.7.10's LWJGL 2 has no hidden window — the game"
+        "Minecheck: hideGameWindow is on, but this line's LWJGL 2 has no hidden window — the game"
             + " window stays mapped (pause-on-focus-loss is still off)");
   }
 

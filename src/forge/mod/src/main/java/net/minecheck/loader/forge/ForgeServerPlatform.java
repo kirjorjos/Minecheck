@@ -429,10 +429,10 @@ public class ForgeServerPlatform implements ServerPlatform {
   /**
    * Places a vanilla structure template.
    *
-   * <p>This line predates bundled templates: 1.7.10 has no {@code assets/minecraft/structures}, and
-   * its world generator builds villages and temples from code. There is nothing to stamp, so the
-   * name is reported as unknown rather than silently doing nothing — the same answer a name that
-   * does not exist gets on the newer lines.
+   * <p>This line ships no bundled templates: it has no {@code assets/minecraft/structures}, and its
+   * world generator builds villages and temples from code. There is nothing to stamp, so the name
+   * is reported as unknown rather than silently doing nothing — the same answer a name that does
+   * not exist gets on the newer lines.
    */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {
