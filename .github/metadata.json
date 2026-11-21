@@ -1,5 +1,5 @@
 {
-  "loaders": ["forge"],
+  "loaders": ["legacyfabric", "forge"],
   "release": {
     "prefix": "MineCheck-",
     "nameFormat": "{loader}-{mc}-{version}{deobf}.jar",
