@@ -107,12 +107,46 @@ final class LegacyCommandShim {
   /**
    * A command prepared for this line, as a list so a caller can send more than one.
    *
-   * <p>1.9 parses {@code @s}, {@code /fill} and the six-argument teleport itself, so those are left
-   * exactly as written; what this line lacks are the 1.13 roots, and those are answered in {@link
-   * #translate} and by the shim's own handlers rather than rewritten into other commands.
+   * <p>1.9 parses {@code /fill} and the six-argument teleport itself, so those are left exactly as
+   * written; what this line lacks are the 1.13 roots, and those are answered in {@link #translate}
+   * and by the shim's own handlers rather than rewritten into other commands. {@code @s} is the
+   * exception: this line's selector parser stops at {@code @a}, {@code @p}, {@code @r} and {@code
+   * @e}, so an {@code @s} argument falls through to the name lookup and answers "The entity UUID
+   * provided is in an invalid format".
    */
-  static List<String> expandForLegacy(String command) {
-    return Collections.singletonList(command);
+  static List<String> expandForLegacy(String command, String playerName) {
+    return Collections.singletonList(substituteSelf(command, playerName));
+  }
+
+  /**
+   * The name of the player a script's command speaks for, or {@code null} when the world has no
+   * player yet.
+   */
+  static String selfName(World world) {
+    if (world == null) {
+      return null;
+    }
+    for (Entity entity : world.playerEntities) {
+      if (entity instanceof EntityPlayer) {
+        return ((EntityPlayer) entity).getName();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Rewrites {@code @s} to {@code playerName}.
+   *
+   * <p>This line has no {@code @s} selector: {@code tp @s 0.5 4 0.5} answers "The entity UUID
+   * provided is in an invalid format" and the player never moves. The name is substituted on both
+   * command paths, as the 1.8 line did; substituting a name for a selector is also why the server
+   * path can keep the console as its sender, so a command keeps the run's permissions.
+   */
+  static String substituteSelf(String command, String playerName) {
+    if (playerName == null || playerName.isEmpty()) {
+      return command;
+    }
+    return command.replace("@s", playerName);
   }
 
   /**

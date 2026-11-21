@@ -567,7 +567,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
                         EntityPlayer player = mc().thePlayer;
                         for (String line :
                             text.startsWith("/")
-                                ? LegacyCommandShim.expandForLegacy(text.substring(1))
+                                ? LegacyCommandShim.expandForLegacy(
+                                    text.substring(1), player.getName())
                                 : java.util.Collections.singletonList(text)) {
                           mc().getConnection()
                               .sendPacket(
@@ -1005,7 +1006,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // 1.13's selector and root syntax is translated before the command goes anywhere.
     List<String> lines =
         LegacyCommandShim.expandForLegacy(
-            LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command));
+            LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command),
+            player.getName());
     IntegratedServer server = client.getIntegratedServer();
     EntityPlayerMP self =
         server == null ? null : server.getPlayerList().getPlayerByUsername(player.getName());

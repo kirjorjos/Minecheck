@@ -189,7 +189,13 @@ public class ForgeServerPlatform implements ServerPlatform {
           if (conditional != null) {
             return conditional;
           }
-          return s.getCommandManager().executeCommand(s, line);
+          // This line's parser knows `@s`, but the command manager runs as the server console,
+          // which is not an entity: `tp @s ...` answers "The entity UUID provided is in an invalid
+          // format" and the player never moves. The sender stays the console so a command keeps
+          // the run's permissions; only the selector is resolved.
+          return s.getCommandManager()
+              .executeCommand(
+                  s, LegacyCommandShim.substituteSelf(line, LegacyCommandShim.selfName(world)));
         });
   }
 
