@@ -177,7 +177,7 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
     }
     String channel = packet.getChannel();
     // This line's clientbound payload already carries its bytes; there is no buffer to read.
-    byte[] payload = packet.getPayload();
+    byte[] payload = bytesOf(packet.getPayload());
     if (channel == null || payload == null) {
       return;
     }
@@ -204,7 +204,7 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
     }
     String channel = packet.getChannel();
     // The serverbound packet keeps its bytes behind an unmapped accessor on this line.
-    byte[] payload = packet.method_7981();
+    byte[] payload = bytesOf(packet.getPayload());
     if (channel == null || payload == null) {
       return;
     }
@@ -240,5 +240,15 @@ public class LegacyFabricNetworkPlatform implements NetworkPlatform {
       return;
     }
     observe(channel, payload);
+  }
+
+  /** This line carries payloads in a {@link net.minecraft.util.PacketByteBuf}; copy them out. */
+  private static byte[] bytesOf(net.minecraft.util.PacketByteBuf buf) {
+    if (buf == null) {
+      return null;
+    }
+    byte[] payload = new byte[buf.readableBytes()];
+    buf.getBytes(buf.readerIndex(), payload);
+    return payload;
   }
 }

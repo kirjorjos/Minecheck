@@ -152,7 +152,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     try {
       // This line's reader answers a generic tag; a command or fixture always writes a compound.
-      return (NBTTagCompound) JsonToNBT.func_150315_a(nbt);
+      return (NBTTagCompound) JsonToNBT.getTagFromJson(nbt);
     } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
@@ -285,8 +285,8 @@ public class ForgeServerPlatform implements ServerPlatform {
           }
           // The chunk the level spawned in, not chunk 0,0: this line's world spawns its player away
           // from the origin, so 0,0 is generated but unloaded until something forces it.
-          net.minecraft.util.ChunkCoordinates spawn = level.getSpawnPoint();
-          return chunks(level).chunkExists(spawn.posX >> 4, spawn.posZ >> 4);
+          net.minecraft.util.BlockPos spawn = level.getSpawnPoint();
+          return chunks(level).chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
         });
   }
 
@@ -303,7 +303,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           // height a player standing there stands at — which is what the newer lines' top position
           // is.
           for (int y = level.getHeight() - 1; y >= 0; y--) {
-            if (!level.isAirBlock(x, y, z)) {
+            if (!level.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
               return y + 1;
             }
           }
@@ -333,7 +333,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           // Reading the chunk through makes the load synchronous rather than a later tick. This
           // line has no forced-chunk ticket exposed in its API, so the chunk is loaded but not held
           // against unload.
-          level.getChunkProvider().loadChunk(chunkX, chunkZ);
+          level.getChunkProvider().provideChunk(chunkX, chunkZ);
           return chunks(level).chunkExists(chunkX, chunkZ);
         });
   }
@@ -358,7 +358,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     entity.setPosition(x, y, z);
     // The chunk is read through first: this line's spawn answers false for a position in a chunk
     // that is not loaded, and a script may name a spot far from any player.
-    level.getChunkProvider().loadChunk(floorChunk(x), floorChunk(z));
+    level.getChunkProvider().provideChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntityInWorld(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
@@ -378,17 +378,18 @@ public class ForgeServerPlatform implements ServerPlatform {
       throw new IllegalArgumentException("unknown block: " + id);
     }
     WorldServer level = overworld();
-    if (!replace && !level.isAirBlock(x, y, z)) {
+    if (!replace && !level.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
       return false;
     }
     // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
     // is placed at metadata 0, which is what the newer lines' default state resolves to.
-    if (!level.setBlock(x, y, z, block, 0, 3)) {
+    if (!level.setBlockState(
+        new net.minecraft.util.BlockPos(x, y, z), block.getDefaultState(), 3)) {
       return false;
     }
     NBTTagCompound tag = parseTag(nbt);
     if (!tag.getKeySet().isEmpty()) {
-      TileEntity blockEntity = level.getTileEntity(x, y, z);
+      TileEntity blockEntity = level.getTileEntity(new net.minecraft.util.BlockPos(x, y, z));
       if (blockEntity != null) {
         tag.setInteger("x", x);
         tag.setInteger("y", y);
@@ -418,7 +419,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       stack.setTagCompound(tag);
     }
     EntityItem itemEntity = new EntityItem(level, x, y, z, stack);
-    level.getChunkProvider().loadChunk(floorChunk(x), floorChunk(z));
+    level.getChunkProvider().provideChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntityInWorld(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }

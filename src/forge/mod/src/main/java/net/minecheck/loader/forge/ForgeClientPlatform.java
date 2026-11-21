@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.client.FMLClientHandler;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -60,6 +59,7 @@ import net.minecraft.util.Vec3;
 import net.minecraft.world.EnumDifficulty;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
+import net.minecraftforge.fml.client.FMLClientHandler;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.DisplayMode;
@@ -517,9 +517,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    net.minecraft.util.ChunkCoordinates spawn = overworld.getSpawnPoint();
+    net.minecraft.util.BlockPos spawn = overworld.getSpawnPoint();
     return ((net.minecraft.world.gen.ChunkProviderServer) overworld.getChunkProvider())
-        .chunkExists(spawn.posX >> 4, spawn.posZ >> 4);
+        .chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
   }
 
   // ------------------------------------------------------------ input
@@ -676,14 +676,14 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (player == null || client.theWorld == null) {
       return null;
     }
-    Vec3 start = Vec3.createVectorHelper(player.posX, player.posY, player.posZ);
+    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
     Vec3 direction = directionOf(player);
     Vec3 end =
         start.addVector(
             direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach);
     net.minecraft.util.AxisAlignedBB area =
         player
-            .boundingBox
+            .getEntityBoundingBox()
             .addCoord(direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach)
             .expand(1.0, 1.0, 1.0);
     net.minecraft.entity.Entity best = null;
@@ -694,7 +694,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
         continue;
       }
       MovingObjectPosition hit =
-          entity.boundingBox.expand(0.3, 0.3, 0.3).calculateIntercept(start, end);
+          entity.getEntityBoundingBox().expand(0.3, 0.3, 0.3).calculateIntercept(start, end);
       if (hit == null) {
         continue;
       }
@@ -846,7 +846,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
    * and the crosshair never landed on the block the player stood on.
    */
   private static double feetY(EntityPlayer player) {
-    return player.boundingBox.minY;
+    return player.getEntityBoundingBox().minY;
   }
 
   /**
@@ -898,8 +898,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
             return;
           }
           double dx = x - player.posX;
-          // posY is already the eye position on this line.
-          double dy = y - player.posY;
+          // The angles are the eye's: `posY` is the feet here, and aiming from them puts a
+          // same-height target on the horizon instead of on its top face.
+          double dy = y - eyeY(player);
           double dz = z - player.posZ;
           double horizontal = Math.sqrt(dx * dx + dz * dz);
           player.rotationYaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
@@ -931,8 +932,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // turned the player — before the next frame — so the pick is made here, from the look the
     // player has now, at the reach vanilla gives the crosshair.
     EntityPlayer player = client.thePlayer;
-    // posY is already the eye position on this line, which is where the crosshair starts.
-    Vec3 start = Vec3.createVectorHelper(player.posX, player.posY, player.posZ);
+    // The crosshair starts at the eyes, which this line reports separately from `posY` (the feet).
+    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
     Vec3 direction = directionOf(player);
     Vec3 end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
@@ -940,14 +941,20 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
       return null;
     }
-    return new BlockPosition(hit.blockX, hit.blockY, hit.blockZ);
+    return new BlockPosition(
+        hit.getBlockPos().getX(), hit.getBlockPos().getY(), hit.getBlockPos().getZ());
+  }
+
+  /** The eye position the crosshair starts from: this line's {@code posY} is the player's feet. */
+  private static double eyeY(EntityPlayer player) {
+    return player.posY + player.getEyeHeight();
   }
 
   /** The unit vector a player is looking along; this line has no accessor for it. */
   private static Vec3 directionOf(EntityPlayer player) {
     float pitch = (float) Math.toRadians(player.rotationPitch);
     float yaw = (float) Math.toRadians(player.rotationYaw);
-    return Vec3.createVectorHelper(
+    return new Vec3(
         -Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
 
@@ -1061,7 +1068,16 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (client.thePlayer == null || client.playerController == null || client.theWorld == null) {
       throw new IllegalStateException("not in a world");
     }
-    MovingObjectPosition hit = client.objectMouseOver;
+    // Picked from the look the player has this instant: a script aims and clicks in the same
+    // breath, and this line's own pick (`objectMouseOver`) is a frame behind — clicking it aims at
+    // whatever the previous look held and vanilla drops the attempt silently, leaving the
+    // container shut.
+    EntityPlayer player = client.thePlayer;
+    Vec3 start = new Vec3(player.posX, eyeY(player), player.posZ);
+    Vec3 direction = directionOf(player);
+    Vec3 end =
+        start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
+    MovingObjectPosition hit = client.theWorld.rayTraceBlocks(start, end);
     if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
       return;
     }
@@ -1071,9 +1087,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
         client.thePlayer,
         client.theWorld,
         client.thePlayer.getHeldItem(),
-        hit.blockX,
-        hit.blockY,
-        hit.blockZ,
+        hit.getBlockPos(),
         hit.sideHit,
         hit.hitVec);
   }
@@ -1084,7 +1098,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (client.theWorld == null) {
       throw new IllegalStateException("not in a world");
     }
-    TileEntity blockEntity = client.theWorld.getTileEntity(pos.x(), pos.y(), pos.z());
+    TileEntity blockEntity =
+        client.theWorld.getTileEntity(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()));
     if (!(blockEntity instanceof TileEntitySign)) {
       return false;
     }
@@ -1470,7 +1485,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
-    String itemId = Item.itemRegistry.getNameForObject(stack.getItem());
+    Object rawItemId = Item.itemRegistry.getNameForObject(stack.getItem());
+    String itemId = rawItemId == null ? "" : rawItemId.toString();
     NBTTagCompound nbt = stack.getTagCompound();
     return new SlotInfo(
         false,
@@ -1492,9 +1508,15 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     // No block states here: the block, placed with its metadata, is what the newer lines' state
     // resolves to, and the id a script reads is the block's own.
-    Block block = client.theWorld.getBlock(pos.x(), pos.y(), pos.z());
-    TileEntity blockEntity = client.theWorld.getTileEntity(pos.x(), pos.y(), pos.z());
-    String blockId = Block.blockRegistry.getNameForObject(block);
+    Block block =
+        client
+            .theWorld
+            .getBlockState(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()))
+            .getBlock();
+    TileEntity blockEntity =
+        client.theWorld.getTileEntity(new net.minecraft.util.BlockPos(pos.x(), pos.y(), pos.z()));
+    Object rawBlockId = Block.blockRegistry.getNameForObject(block);
+    String blockId = rawBlockId == null ? null : rawBlockId.toString();
     NBTTagCompound blockEntityTag = new NBTTagCompound();
     if (blockEntity != null) {
       // This line writes a block entity's NBT into a compound and answers nothing.
@@ -1520,7 +1542,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // This line has no column-top query: the column is scanned down from the build limit and the
     // first block that is not air is the surface, whose height is one above it.
     for (int y = client.theWorld.getHeight() - 1; y >= 0; y--) {
-      if (!client.theWorld.isAirBlock(x, y, z)) {
+      if (!client.theWorld.isAirBlock(new net.minecraft.util.BlockPos(x, y, z))) {
         return y + 1;
       }
     }

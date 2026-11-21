@@ -1761,6 +1761,27 @@ carries the same Lua API this document describes, with the differences the game 
 - `rename`-free stacks carry a `count` field, item ids are strings, and GUI screens are
   `HandledScreen`s.
 
+### 1.8 (Forge, Legacy Fabric)
+
+This line ships on both loaders and carries the same Lua API this document describes, with the
+differences the game itself imposes:
+
+- `spawnStructure` is unsupported: 1.8 ships no structure templates (its villages and temples are
+  generated in code, and `assets/minecraft/structures` arrives in 1.9), so the call fails with that
+  reason rather than placing something else.
+- Content the line predates is refused by its registry: `minecraft:vex` arrived in 1.11 and
+  `minecraft:igloo/top` in 1.9, so neither resolves here.
+- Item ids are strings while the item registry is keyed by `Identifier`: the platform wraps a
+  script's id, so `minecraft:diamond` resolves, and a numeric raw id still works.
+- Commands are rewritten before they reach this line's parser where its syntax differs: `/fill`
+  expands into one `/setblock` per block, `replaceitem` slots gain the `slot.` prefix this line
+  requires (`slot.hotbar.0`, which 1.9 dropped), 1.13's `gamemode=`/`limit=` selector arguments are
+  translated to `m=`/`c=`, and `execute if block` / `execute if entity`, `data get entity` and `tag`
+  are answered by this line's shim. `@s` itself works here as written.
+- Block states exist here, so `getBlock` reports the block with its state; entity tags live in
+  Minecheck's own store because the `/tag` root arrives in 1.13.
+- Spectator mode exists, and item stacks carry `count` and NBT the way the newer lines do.
+
 Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.

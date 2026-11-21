@@ -14,7 +14,7 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
 val mcVersion = property("minecraft_version") as String
 
 // No Fabric module here: Fabric's loader starts at 1.14. Legacy Fabric is the intermediary family
-// that covers 1.12.2, so this module is the line's Fabric-shaped loader rather than a reuse of
+// that covers 1.8, so this module is the line's Fabric-shaped loader rather than a reuse of
 // `src/fabric`, whose platform classes are written against 1.14+ API.
 unimined.minecraft {
   version(mcVersion)
@@ -22,8 +22,8 @@ unimined.minecraft {
   // cover this line: upstream intermediary starts at 1.14.
   mappings {
     legacyIntermediary()
-    // 603 is the newest legacy yarn build for 1.7.10 (meta.legacyfabric.net/v2/versions/yarn).
-    legacyYarn(603)
+    // 604 is the newest legacy yarn build for 1.8 (meta.legacyfabric.net/v2/versions/yarn).
+    legacyYarn(604)
   }
   // 0.20.1 is the newest loader release that still supports 1.12.2.
   legacyFabric { loader("0.20.1") }
@@ -38,7 +38,7 @@ repositories {
   maven("https://libraries.minecraft.net/") { content { includeGroup("org.lwjgl.lwjgl") } }
 }
 
-// 1.12.2 runs on Java 8: the repo compiles at 17 (root build.gradle.kts, `minecheck.downgradeTo`)
+// 1.8 runs on Java 8: the repo compiles at 17 (root build.gradle.kts, `minecheck.downgradeTo`)
 // and the runs use a pinned JDK 8 build rather than whichever one happens to be installed.
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
@@ -120,7 +120,7 @@ if (dhServerSetupDir != null) {
     }
 }
 
-// 1.12.2 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the
+// 1.8 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the
 // client dies with "no lwjgl64 in java.library.path" before it can open a window. Extract them from
 // the published natives artefact and point the client's library path at the directory.
 val lwjgl2Natives by configurations.creating

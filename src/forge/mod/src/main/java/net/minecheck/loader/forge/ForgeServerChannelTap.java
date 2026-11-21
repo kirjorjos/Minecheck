@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.FMLCommonHandler;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -14,6 +13,7 @@ import java.util.logging.Logger;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.NetworkManager;
 import net.minecraft.server.MinecraftServer;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 
 /**
  * Dedicated-server <em>low-level frame tap</em>: the Forge-only way to observe another mod's

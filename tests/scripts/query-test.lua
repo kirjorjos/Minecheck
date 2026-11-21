@@ -153,10 +153,11 @@ check(still, "findEntities(tag) reports the cow settled and still")
 --
 -- The test double is a mob that never spawns naturally in the overworld, so a client-side type
 -- query can only match the one we spawn. A scoreboard tag could not be the client-side handle at
--- all: vanilla never syncs entity tags to clients. A vex is the usual choice; 1.7.10 predates it,
--- and a snow golem is the same kind of handle there — it exists only when a player builds one.
+-- all: vanilla never syncs entity tags to clients. A vex is the usual choice; lines before 1.11
+-- predate it, and a snow golem is the same kind of handle there — it exists only when a player
+-- builds one.
 local MINOR = tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0
-local TARGET_TYPE = MINOR < 8 and "minecraft:snow_golem" or "minecraft:vex"
+local TARGET_TYPE = MINOR < 11 and "minecraft:snow_golem" or "minecraft:vex"
 local vx = math.floor(px)
 local vz = math.floor(pz)
 local vy = math.floor(py) + 2 -- Guaranteed air for the spawn (the player's own column above their head; a tree or ceiling there
