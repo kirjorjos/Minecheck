@@ -135,7 +135,8 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world gener
 
 -- The camera is part of the picture, so it is pinned too: a fresh world spawns the player at a
 -- random spot near the world spawn, and two runs standing a block apart see different terrain. The
--- teleport sets the position and the rotation (yaw 0, pitch 90 = straight down) in one go.
+-- teleport pins the position; the aim is set through the client (see `stand`), because a command's
+-- yaw and pitch are the server's rotation and the client keeps its own look direction.
 -- The surface height is the world's, not a constant: 1.18's flat preset tops out at -60, while
 -- 1.16.5 has no negative Y at all — its flat surface is the top of the layer list, measured here from
 -- the player the world spawned standing on it.
@@ -147,10 +148,17 @@ local function atPinnedSpot()
 end
 
 local function stand()
-  command("tp @s 0.5 " .. SURFACE_Y .. " 0.5 0 90")
+  command("tp @s 0.5 " .. SURFACE_Y .. " 0.5")
   -- The command travels to the server and back, so the move lands a tick or two later.
   minecheck.expect(minecheck.waitFor(atPinnedSpot, 5), "the player stands on the pinned spot")
+  -- Look straight down, through the client. `/tp`'s yaw and pitch are the *server's* rotation, and
+  -- this client keeps its own look direction, so giving the command a pitch left the camera on the
+  -- horizon with the sky in frame — including 1.8's star quads, whose diagonal corners are
+  -- fill-rule ties that a multi-threaded rasteriser resolves either way, which flipped one sample
+  -- of `world-night` between runs (#231). Ground under the camera carries the sky-light evidence
+  -- the night capture exists for, and cannot rasterise two ways.
   local player = minecheck.getPlayer()
+  minecheck.expect(minecheck.lookAt(player.pos.x, player.pos.y - 10, player.pos.z), "aimed the camera straight down")
   minecheck.log(
     string.format("player at %.3f %.3f %.3f in %s", player.pos.x, player.pos.y, player.pos.z, player.dimension)
   )
