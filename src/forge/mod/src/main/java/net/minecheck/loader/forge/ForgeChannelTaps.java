@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.network.internal.FMLProxyPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
@@ -11,6 +10,7 @@ import java.util.logging.Logger;
 import net.minecraft.network.NetworkManager;
 import net.minecraft.network.play.client.C17PacketCustomPayload;
 import net.minecraft.network.play.server.S3FPacketCustomPayload;
+import net.minecraftforge.fml.common.network.internal.FMLProxyPacket;
 
 /**
  * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical
@@ -40,10 +40,10 @@ final class ForgeChannelTaps {
       return ((FMLProxyPacket) msg).channel();
     }
     if (msg instanceof S3FPacketCustomPayload) {
-      return ((S3FPacketCustomPayload) msg).func_149169_c();
+      return ((S3FPacketCustomPayload) msg).getChannelName();
     }
     if (msg instanceof C17PacketCustomPayload) {
-      return ((C17PacketCustomPayload) msg).getChannel();
+      return ((C17PacketCustomPayload) msg).getChannelName();
     }
     return null;
   }
@@ -51,15 +51,19 @@ final class ForgeChannelTaps {
   /** A non-destructive copy of a custom payload's bytes, or {@code null} when it is not one. */
   static byte[] payloadOf(Object msg) {
     if (msg instanceof S3FPacketCustomPayload) {
-      return ((S3FPacketCustomPayload) msg).func_149168_d();
+      return bytesOf(((S3FPacketCustomPayload) msg).getBufferData());
     }
     if (msg instanceof C17PacketCustomPayload) {
-      return ((C17PacketCustomPayload) msg).getData();
+      return bytesOf(((C17PacketCustomPayload) msg).getBufferData());
     }
     if (!(msg instanceof FMLProxyPacket)) {
       return null;
     }
-    ByteBuf data = ((FMLProxyPacket) msg).payload();
+    return bytesOf(((FMLProxyPacket) msg).payload());
+  }
+
+  /** This line carries a payload in a {@code PacketBuffer}, not an already-copied byte array. */
+  private static byte[] bytesOf(ByteBuf data) {
     if (data == null) {
       return null;
     }

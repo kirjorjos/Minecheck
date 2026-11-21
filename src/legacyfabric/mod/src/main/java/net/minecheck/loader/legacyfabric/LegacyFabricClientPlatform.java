@@ -44,7 +44,7 @@ import net.minecraft.client.util.Window;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
-import net.minecraft.entity.player.ControllablePlayerEntity;
+import net.minecraft.entity.player.ClientPlayerEntity;
 import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.inventory.slot.Slot;
 import net.minecraft.item.Item;
@@ -198,7 +198,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return;
     }
     LOG.warning(
-        "Minecheck: hideGameWindow is on, but 1.7.10's LWJGL 2 has no hidden window — the game"
+        "Minecheck: hideGameWindow is on, but this line's LWJGL 2 has no hidden window — the game"
             + " window stays mapped (pause-on-focus-loss is still off)");
   }
 
@@ -387,12 +387,12 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isInWorld() {
-    return mc().field_3805 != null && mc().world != null;
+    return mc().player != null && mc().world != null;
   }
 
   @Override
   public boolean isWorldReady() {
-    ControllablePlayerEntity player = mc().field_3805;
+    ClientPlayerEntity player = mc().player;
     // Standing, too: this line puts the player a couple of blocks above the surface while the
     // client starts the integrated world, and a script that read its position before the fall had
     // finished saw a height no block under it agreed with. `onGround` is the settled state every
@@ -413,7 +413,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public boolean isLoggingIn() {
     MinecraftClient client = mc();
-    if (client.field_3805 != null) {
+    if (client.player != null) {
       return false;
     }
     ClientPlayNetworkHandler handler = client.getNetworkHandler();
@@ -468,8 +468,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
     }
-    BlockPos spawn = overworld.getWorldSpawnPos();
-    return overworld.getChunkProvider().chunkExists(spawn.x >> 4, spawn.z >> 4);
+    BlockPos spawn = overworld.getSpawnPos();
+    return overworld.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
   }
 
   // ------------------------------------------------------------ input
@@ -509,11 +509,11 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                       TextFieldWidget field = findTextField(screen);
                       String text = field == null ? "" : field.getText();
                       if (!text.isEmpty()
-                          && mc().field_3805 != null
+                          && mc().player != null
                           && mc().getNetworkHandler() != null) {
                         // A typed command goes through the same rewrite as a scripted one: `@s` and
                         // `/fill` are not syntax this line has, wherever the command came from.
-                        ControllablePlayerEntity player = mc().field_3805;
+                        ClientPlayerEntity player = mc().player;
                         for (String line :
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
@@ -636,7 +636,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public PlayerInfo getPlayer() {
     MinecraftClient client = mc();
-    ControllablePlayerEntity player = client.field_3805;
+    ClientPlayerEntity player = client.player;
     if (player == null || client.world == null) {
       return null;
     }
@@ -657,7 +657,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
    * {@code Dimension} carries no name of its own, while the number is what the whole 1.12.2 world
    * model is keyed by.
    */
-  private static String dimensionName(ControllablePlayerEntity player) {
+  private static String dimensionName(ClientPlayerEntity player) {
     int id = 0;
     try {
       Field field = Entity.class.getDeclaredField("dimension");
@@ -682,7 +682,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   public void setLook(float pitch, float yaw) {
     onClientThread(
         () -> {
-          ControllablePlayerEntity player = mc().field_3805;
+          ClientPlayerEntity player = mc().player;
           if (player != null) {
             player.pitch = pitch;
             player.yaw = yaw;
@@ -694,7 +694,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   public void lookAt(double x, double y, double z) {
     onClientThread(
         () -> {
-          ControllablePlayerEntity player = mc().field_3805;
+          ClientPlayerEntity player = mc().player;
           if (player == null) {
             return;
           }
@@ -710,9 +710,9 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public BlockPosition getTargetBlock(String entityName) {
     MinecraftClient client = mc();
-    if (client.field_3805 == null
+    if (client.player == null
         || client.world == null
-        || !client.field_3805.getGameProfile().getName().equals(entityName)) {
+        || !client.player.getGameProfile().getName().equals(entityName)) {
       return null;
     }
     return getCrosshairBlock();
@@ -721,28 +721,29 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public BlockPosition getCrosshairBlock() {
     MinecraftClient client = mc();
-    if (client.world == null || client.field_3805 == null) {
+    if (client.world == null || client.player == null) {
       return null;
     }
     // This line's own mouse-over is refreshed by the frame loop, and a script asks right after it
     // turned the player — before the next frame — so the pick is made here, from the look the
     // player has now, at the reach vanilla gives the crosshair.
-    ControllablePlayerEntity player = client.field_3805;
-    Vec3d start = Vec3d.of(player.x, LegacyEntitySpace.eyeY(player), player.z);
+    ClientPlayerEntity player = client.player;
+    Vec3d start = new Vec3d(player.x, LegacyEntitySpace.eyeY(player), player.z);
     Vec3d direction = directionOf(player);
     Vec3d end = start.add(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
     BlockHitResult hit = client.world.rayTrace(start, end);
     if (hit == null || hit.hitResult != HitResultType.BLOCK) {
       return null;
     }
-    return new BlockPosition(hit.x, hit.y, hit.z);
+    return new BlockPosition(
+        hit.getBlockPos().getX(), hit.getBlockPos().getY(), hit.getBlockPos().getZ());
   }
 
   /** The unit vector a player is looking along; this line has no accessor for it. */
-  private static Vec3d directionOf(ControllablePlayerEntity player) {
+  private static Vec3d directionOf(ClientPlayerEntity player) {
     float pitch = (float) Math.toRadians(player.pitch);
     float yaw = (float) Math.toRadians(player.yaw);
-    return Vec3d.of(
+    return new Vec3d(
         -Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
 
@@ -788,7 +789,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public void runCommand(String command) {
     MinecraftClient client = mc();
-    ControllablePlayerEntity player = client.field_3805;
+    ClientPlayerEntity player = client.player;
     if (player == null || client.getNetworkHandler() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
@@ -847,24 +848,24 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public void useItemOnTarget() {
     MinecraftClient client = mc();
-    if (client.field_3805 == null || client.interactionManager == null || client.world == null) {
+    if (client.player == null || client.interactionManager == null || client.world == null) {
       throw new IllegalStateException("not in a world");
     }
-    BlockHitResult hit = client.result;
+    // The frame loop refreshes this line's own mouse-over, and a script clicks right after it
+    // turned the player — before the next frame — so the pick is made here from the look the
+    // player has now, the same way {@link #getCrosshairBlock()} answers the wait that precedes this
+    // click. Clicking a stale pick aims at whatever the previous frame held and vanilla drops the
+    // attempt silently, leaving the container shut.
+    ClientPlayerEntity player = client.player;
+    Vec3d start = new Vec3d(player.x, LegacyEntitySpace.eyeY(player), player.z);
+    Vec3d direction = directionOf(player);
+    Vec3d end = start.add(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
+    BlockHitResult hit = client.world.rayTrace(start, end);
     if (hit == null || hit.hitResult != HitResultType.BLOCK) {
       return;
     }
-    // This line has one hand and an int side: the held stack and the side the hit reports are what
-    // the item's use-on-block callback takes.
-    client.interactionManager.method_1229(
-        client.field_3805,
-        client.world,
-        client.field_3805.getStackInHand(),
-        hit.x,
-        hit.y,
-        hit.z,
-        hit.side,
-        hit.pos);
+    client.interactionManager.onRightClick(
+        player, client.world, player.getStackInHand(), hit.getBlockPos(), hit.direction, hit.pos);
   }
 
   @Override
@@ -873,7 +874,9 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
-    BlockEntity blockEntity = client.world.getBlockEntity(pos.x(), pos.y(), pos.z());
+    BlockEntity blockEntity =
+        client.world.getBlockEntity(
+            new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
     if (!(blockEntity instanceof SignBlockEntity)) {
       return false;
     }
@@ -1150,7 +1153,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     HandledScreen screen = (HandledScreen) client.currentScreen;
     client.interactionManager.clickSlot(
-        screen.screenHandler.syncId, slot, button, itemAction(actionType), client.field_3805);
+        screen.screenHandler.syncId, slot, button, itemAction(actionType), client.player);
     return true;
   }
 
@@ -1245,7 +1248,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
-    String itemId = Item.REGISTRY.getId(stack.getItem());
+    Object rawItemId = Item.REGISTRY.getIdentifier(stack.getItem());
+    String itemId = rawItemId == null ? null : rawItemId.toString();
     NbtCompound nbt = stack.getNbt();
     return new SlotInfo(
         false,
@@ -1268,9 +1272,10 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     // No block states here: the block, placed with its metadata, is what the newer lines' state
     // resolves to, and the id a script reads is the block's own.
-    Block block = client.world.getBlock(blockPos.x, blockPos.y, blockPos.z);
-    BlockEntity blockEntity = client.world.getBlockEntity(blockPos.x, blockPos.y, blockPos.z);
-    String blockId = Block.REGISTRY.getId(block);
+    Block block = client.world.getBlockState(blockPos).getBlock();
+    BlockEntity blockEntity = client.world.getBlockEntity(blockPos);
+    Object rawBlockId = Block.REGISTRY.getIdentifier(block);
+    String blockId = rawBlockId == null ? null : rawBlockId.toString();
     NbtCompound blockEntityTag = new NbtCompound();
     if (blockEntity != null) {
       // This line writes a block entity's NBT into a compound and answers nothing.
@@ -1296,7 +1301,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     // This line has no column-top query: the column is scanned down from the build limit and the
     // first block that is not air is the surface, whose height is one above it.
     for (int y = client.world.getEffectiveHeight() - 1; y >= 0; y--) {
-      if (!client.world.isAir(x, y, z)) {
+      if (!client.world.isAir(new net.minecraft.util.math.BlockPos(x, y, z))) {
         return y + 1;
       }
     }

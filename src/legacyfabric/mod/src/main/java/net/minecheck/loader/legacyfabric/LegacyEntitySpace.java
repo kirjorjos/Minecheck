@@ -21,7 +21,7 @@ final class LegacyEntitySpace {
 
   /** The y an entity's bounding box starts at: its feet. */
   static double feetY(Entity entity) {
-    return entity.boundingBox.minY;
+    return entity.getBoundingBox().minY;
   }
 
   /** The y a player looks from: its eyes. */

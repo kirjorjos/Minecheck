@@ -20,9 +20,9 @@ if not phase then
 end
 
 -- Client-side entity query. The server spawns a mob that never occurs naturally for this phase: a
--- vex on 1.8 and later, a snow golem where the line predates it (one only exists when a player
+-- vex on 1.11 and later, a snow golem where the line predates it (one only exists when a player
 -- builds it), so the type is a handle the client can use to tell our target from worldgen mobs.
-local TARGET_TYPE = (tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0) < 8
+local TARGET_TYPE = (tonumber((minecheck.minecraftVersion():match("^%d+%.(%d+)")) or "") or 0) < 11
     and "minecraft:snow_golem"
   or "minecraft:vex"
 local targetId = nil

@@ -5,7 +5,6 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.text.LiteralText;
 import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
 /**
@@ -83,10 +82,13 @@ public final class LegacyCameraEntity extends PlayerEntity {
     return false;
   }
 
+  /**
+   * 1.8 makes this abstract on {@link PlayerEntity}. The camera is not a spectator in the game's
+   * sense — nothing in vanilla should treat it as one — it just has to answer.
+   */
   @Override
-  public BlockPos getPosition() {
-    // This line names an entity's position x/y/z, not posX/posY/posZ.
-    return new BlockPos((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+  public boolean isSpectator() {
+    return false;
   }
 
   @Override

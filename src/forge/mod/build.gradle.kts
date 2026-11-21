@@ -31,18 +31,18 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.12.2 is mapped by MCP, and stable_39 is the last stable
+  // No Mojang mappings this far back: 1.8 is mapped by MCP, and stable_18 is the last stable
   // release for it. FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:39-1.12`; without the suffix nothing publishes that coordinate. Forge resolves its
+  // `mcp_stable:18-1.8`; without the suffix nothing publishes that coordinate. Forge resolves its
   // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
-  mappings { mcp("stable", "12-1.7.10") }
-  // 14.23.5.2860 is the last 1.12.2 Forge build, and the one a user on this version installs.
-  minecraftForge { loader("10.13.4.1614-1.7.10") }
+  mappings { mcp("stable", "18-1.8") }
+  // 11.14.4.1577 is the last 1.8 Forge build, and the one a user on this version installs.
+  minecraftForge { loader("11.14.4.1577") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.12.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.8 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -50,7 +50,7 @@ unimined.minecraft {
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 // The runs launch through the toolchain, not through a hand-set `executable`: Gradle rejects a
-// task that carries both, and unimined sets the launcher from `javaVersion`. 1.7.10 predates
+// task that carries both, and unimined sets the launcher from `javaVersion`. 1.8 predates
 // ModLauncher, so any Java 8 works here (the pinned build is for the ModLauncher-era lines).
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
@@ -65,15 +65,55 @@ tasks
 val lwjgl2Natives by configurations.creating
 
 dependencies {
-  lwjgl2Natives("org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209:natives-linux")
+  // The published nightly carries x86 natives only, which a 64-bit JVM cannot load (the client
+  // dies with `wrong ELF class: ELFCLASS32`). The Legacy Fabric build of the same LWJGL 2.9.4
+  // release ships amd64 and aarch64 as well, so the tests open a window on every host they run on.
+  lwjgl2Natives("org.lwjgl.lwjgl:lwjgl-platform:2.9.4+legacyfabric.8:natives-linux")
 }
 
 val lwjgl2NativeDir = layout.buildDirectory.dir("lwjgl2-natives")
 
+/** The natives suffix this host needs, as the Legacy Fabric LWJGL 2 release names its files. */
+val lwjgl2Arch =
+  providers.systemProperty("os.arch").map { arch ->
+    when (arch.lowercase()) {
+      "aarch64",
+      "arm64" -> "aarch64"
+      "amd64",
+      "x86_64" -> "amd64"
+      "x86",
+      "i386",
+      "i686" -> "i386"
+      else -> throw GradleException("Minecheck: LWJGL 2 has no natives for os.arch=$arch")
+    }
+  }
+
+// Staged under the fixed names the JVM loads (`liblwjgl.so`, `libopenal.so`): LWJGL 2 asks for the
+// library by name, not by the platform-suffixed file name the release uses.
 val extractLwjgl2Natives by
-  tasks.registering(Copy::class) {
-    from(lwjgl2Natives.map { zipTree(it) })
-    into(lwjgl2NativeDir)
+  tasks.registering {
+    val natives = lwjgl2Natives
+    val output = lwjgl2NativeDir
+    val arch = lwjgl2Arch
+    inputs.files(natives)
+    inputs.property("arch", arch)
+    outputs.dir(output)
+    doLast {
+      val target = output.get().asFile
+      target.deleteRecursively()
+      target.mkdirs()
+      project.copy {
+        from(zipTree(natives.singleFile)) {
+          include("liblwjgl-linux-" + arch.get() + ".so")
+          rename { "liblwjgl.so" }
+        }
+        from(zipTree(natives.singleFile)) {
+          include("libopenal-" + arch.get() + ".so")
+          rename { "libopenal.so" }
+        }
+        into(target)
+      }
+    }
   }
 
 // The lifecycle tests launch from a descriptor written by `devHelperClientLaunch`, which reads
@@ -91,6 +131,8 @@ gradle.projectsEvaluated {
 }
 
 repositories {
+  // The Legacy Fabric build of LWJGL 2 (the one that carries arm64 natives) is published here.
+  maven("https://maven.legacyfabric.net")
   // LWJGL 2's natives are published by Mojang, not on Central.
   maven("https://libraries.minecraft.net/") { content { includeGroup("org.lwjgl.lwjgl") } }
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
@@ -393,7 +435,8 @@ fun rewriteModClasses(key: String, value: String): String {
 // The run JDK is pinned rather than taken from whichever Java 8 the machine or CI happens to have:
 // Forge 35 ships ModLauncher 8.0.9, which calls sun.security.util.ManifestEntryVerifier(Manifest);
 // later JDK 8 builds no longer have that constructor (8u512, 11 and 17 all fail the same way). Each
-// archive below is the same Zulu build, so every platform runs the same runtime.
+// archive below is the same Zulu build where Azul published one, so every platform that has it runs
+// the same runtime; linux/aarch64 has no 8.0.292 build at all and is called out below.
 data class PinnedJdkArchive(val url: String, val sha256: String)
 
 val pinnedJdkVersion = "8.0.292"
@@ -419,6 +462,17 @@ val pinnedJdkArchives =
       PinnedJdkArchive(
         "https://cdn.azul.com/zulu/bin/zulu8.54.0.21-ca-jdk8.0.292-win_x64.zip",
         "35fc03994a65f62afa9510ff0044f52228208fddc7bbfa0cfd8e332b6e52c384",
+      ),
+    // Azul published no 8.0.292 build for linux/aarch64 (both filename spellings answer 404), so
+    // this
+    // platform takes the nearest later Zulu 8. The ModLauncher 8.0.9 constructor this map exists
+    // for is
+    // a 1.15+ concern; 1.8's Forge predates ModLauncher, so any Java 8 runs its dev runs and its
+    // boot.
+    ("linux" to "aarch64") to
+      PinnedJdkArchive(
+        "https://cdn.azul.com/zulu/bin/zulu8.86.0.25-ca-jdk8.0.452-linux_aarch64.tar.gz",
+        "0abb44ad23b0bcc312a50bff9bf1cfbfd1a08caecd2bc6d7c7fa34471e4d207c",
       ),
   )
 

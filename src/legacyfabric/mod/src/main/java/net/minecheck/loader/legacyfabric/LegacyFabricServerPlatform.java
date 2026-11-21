@@ -150,7 +150,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     try {
       // This line's reader keeps its entry point under an unmapped name; it answers the same
       // element the newer lines' `parse` does.
-      return (NbtCompound) StringNbtReader.method_7377(nbt);
+      return (NbtCompound) StringNbtReader.parse(nbt);
     } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
@@ -267,8 +267,8 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * The 1.13-style id of an entity.
    *
-   * <p>1.7.10 names its entity types in CamelCase and without a namespace ({@code Zombie}), and it
-   * has no id for the player class, so both are translated here rather than leaking this line's
+   * <p>This line names its entity types in CamelCase and without a namespace ({@code Zombie}), and
+   * it has no id for the player class, so both are translated here rather than leaking this line's
    * spelling into a script.
    */
   private static String entityId(Entity entity) {
@@ -295,8 +295,8 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           }
           // The chunk the level spawned in, not chunk 0,0: this line's world spawns its player away
           // from the origin, so 0,0 is generated but unloaded until something forces it.
-          BlockPos spawn = level.getWorldSpawnPos();
-          return level.getChunkProvider().chunkExists(spawn.x >> 4, spawn.z >> 4);
+          BlockPos spawn = level.getSpawnPos();
+          return level.getChunkProvider().chunkExists(spawn.getX() >> 4, spawn.getZ() >> 4);
         });
   }
 
@@ -313,7 +313,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           // height a player standing there stands at — which is what the newer lines' top position
           // is.
           for (int y = level.getEffectiveHeight() - 1; y >= 0; y--) {
-            if (!level.isAir(x, y, z)) {
+            if (!level.isAir(new net.minecraft.util.math.BlockPos(x, y, z))) {
               return y + 1;
             }
           }
@@ -343,7 +343,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           // Reading the chunk through makes the load synchronous rather than a later tick. This
           // line has no forced-chunk ticket exposed in its API, so the chunk is loaded but not held
           // against unload.
-          level.getChunkProvider().getOrGenerateChunk(chunkX, chunkZ);
+          level.getChunkProvider().getChunk(chunkX, chunkZ);
           return level.getChunkProvider().chunkExists(chunkX, chunkZ);
         });
   }
@@ -368,7 +368,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     entity.updatePosition(x, y, z);
     // The chunk is read through first: this line's spawn answers false for a position in a chunk
     // that is not loaded, and a script may name a spot far from any player.
-    level.getChunkProvider().getOrGenerateChunk(floorChunk(x), floorChunk(z));
+    level.getChunkProvider().getChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
@@ -388,17 +388,18 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
       throw new IllegalArgumentException("unknown block: " + id);
     }
     ServerWorld level = overworld();
-    if (!replace && !level.isAir(x, y, z)) {
+    if (!replace && !level.isAir(new net.minecraft.util.math.BlockPos(x, y, z))) {
       return false;
     }
-    // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
-    // is placed at metadata 0, which is what the newer lines' default state resolves to.
-    if (!level.setBlock(x, y, z, block, 0, 3)) {
+    // An id names a block, not one of its states: an id with no properties is the default state,
+    // which is what the newer lines place for it too.
+    if (!level.setBlockState(
+        new net.minecraft.util.math.BlockPos(x, y, z), block.getDefaultState(), 3)) {
       return false;
     }
     NbtCompound tag = parseTag(nbt);
     if (!tag.getKeys().isEmpty()) {
-      BlockEntity blockEntity = level.getBlockEntity(x, y, z);
+      BlockEntity blockEntity = level.getBlockEntity(new net.minecraft.util.math.BlockPos(x, y, z));
       if (blockEntity != null) {
         tag.putInt("x", x);
         tag.putInt("y", y);
@@ -417,18 +418,21 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
     String location = parseId(id, "item");
-    Object registered = Item.REGISTRY.get(location);
-    if (!(registered instanceof Item)) {
+    // This line's registry is keyed by Identifier, not by the string a script writes: looking up a
+    // raw String answers null for every id. The string entry point wraps it, and still accepts a
+    // numeric raw id the way the newer lines' lookup does.
+    Item item = Item.getFromId(location);
+    if (item == null) {
       throw new IllegalArgumentException("unknown item: " + id);
     }
     ServerWorld level = overworld();
-    ItemStack stack = new ItemStack((Item) registered, count, 0);
+    ItemStack stack = new ItemStack(item, count, 0);
     NbtCompound tag = parseTag(nbt);
     if (!tag.getKeys().isEmpty()) {
       stack.setNbt(tag);
     }
     ItemEntity itemEntity = new ItemEntity(level, x, y, z, stack);
-    level.getChunkProvider().getOrGenerateChunk(floorChunk(x), floorChunk(z));
+    level.getChunkProvider().getChunk(floorChunk(x), floorChunk(z));
     if (!level.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
@@ -438,10 +442,10 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   /**
    * Places a vanilla structure template.
    *
-   * <p>This line predates bundled templates: 1.7.10 has no {@code assets/minecraft/structures}, and
-   * its world generator builds villages and temples from code. There is nothing to stamp, so the
-   * name is reported as unknown rather than silently doing nothing — the same answer a name that
-   * does not exist gets on the newer lines.
+   * <p>This line ships no bundled templates: it has no {@code assets/minecraft/structures}, and its
+   * world generator builds villages and temples from code. There is nothing to stamp, so the name
+   * is reported as unknown rather than silently doing nothing — the same answer a name that does
+   * not exist gets on the newer lines.
    */
   @Override
   public boolean spawnStructure(String id, int x, int y, int z) {

@@ -1,12 +1,12 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.eventhandler.SubscribeEvent;
-import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.entity.EntityClientPlayerMP;
+import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.util.MovementInput;
 import net.minecraftforge.client.event.MouseEvent;
 import net.minecraftforge.client.event.sound.PlaySoundEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 /**
  * This line's client-only hooks.
@@ -45,7 +45,7 @@ public final class ForgeClientHooks {
     if (event.phase != TickEvent.Phase.START || !ForgeCameraPlatform.steering()) {
       return;
     }
-    EntityClientPlayerMP player = Minecraft.getMinecraft().thePlayer;
+    EntityPlayerSP player = Minecraft.getMinecraft().thePlayer;
     if (player == null) {
       return;
     }

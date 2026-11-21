@@ -17,9 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(InGameHud.class)
 public class FrameDrawnMixin {
 
-  @Inject(method = "render(FZII)V", at = @At("TAIL"), require = 0)
-  private void minecheck$frameDrawn(
-      float tickDelta, boolean inGame, int mouseX, int mouseY, CallbackInfo ci) {
+  // This line's HUD takes only the tick delta: the mouse position and in-game flag arrive in 1.9.
+  @Inject(method = "render(F)V", at = @At("TAIL"))
+  private void minecheck$frameDrawn(float tickDelta, CallbackInfo ci) {
     LegacyFabricClientPlatform.notifyFrameDrawn();
   }
 }

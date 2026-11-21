@@ -3,10 +3,12 @@ package net.minecheck.loader.forge;
 import com.mojang.authlib.GameProfile;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.util.BlockPos;
+import net.minecraft.util.IChatComponent;
 import net.minecraft.world.World;
 
 /**
- * The client-only entity the camera looks through, on the Forge 1.7.10 side.
+ * The client-only entity the camera looks through, on the Forge 1.8 side.
  *
  * <p>Its tick does nothing, on purpose: the platform moves it from the client tick hook, and no
  * vanilla system — gravity, fluid, collision, block effects — may alter where the camera is. {@code
@@ -44,6 +46,15 @@ final class MinecheckCameraEntity extends EntityPlayer {
   public void onUpdate() {}
 
   /**
+   * 1.8 makes this abstract on {@link EntityPlayer}. The camera is not a spectator in the game's
+   * sense — nothing in vanilla should treat it as one — it just has to answer.
+   */
+  @Override
+  public boolean isSpectator() {
+    return false;
+  }
+
+  /**
    * The id the camera answers, without touching this line's private id field: the camera is never
    * looked up on the server, so nothing it is asked about can act on a world.
    */
@@ -66,7 +77,7 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public void addChatMessage(net.minecraft.util.IChatComponent message) {
+  public void addChatMessage(IChatComponent message) {
     // Nothing is listening to the camera: it is a viewpoint, not a speaker.
   }
 
@@ -76,8 +87,7 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public net.minecraft.util.ChunkCoordinates getCommandSenderPosition() {
-    return new net.minecraft.util.ChunkCoordinates(
-        (int) Math.floor(posX), (int) Math.floor(posY), (int) Math.floor(posZ));
+  public BlockPos getPosition() {
+    return new BlockPos((int) Math.floor(posX), (int) Math.floor(posY), (int) Math.floor(posZ));
   }
 }

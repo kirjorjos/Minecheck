@@ -98,6 +98,12 @@ final class LegacyCommandShim {
   /** Every rewrite this line needs before a command reaches 1.7.10's parser. */
   static String translate(String command) {
     String out = rewriteGive(command);
+    if (out.startsWith("replaceitem ")) {
+      // 1.8 names a container slot with the `slot.` prefix (`slot.hotbar.0`); 1.9 dropped it, so a
+      // slot written the newer way is not a slot this line's parser knows and the command answers
+      // zero without touching the player.
+      out = out.replaceAll(" (hotbar|inventory|weapon|armor|enderchest|horse)\\.", " slot.$1.");
+    }
     // Selectors spell the game mode `m=` on this line and `gamemode=` from 1.13, and cap the match
     // with `c=` where 1.13 says `limit=`. An unknown argument is rejected outright, so a selector
     // carrying one matched nothing at all.
@@ -379,7 +385,9 @@ final class LegacyCommandShim {
       return 0;
     }
     // This line has no block states, so the block is what a state comparison resolves to.
-    return world.getBlock(x, y, z) == expected ? 1 : 0;
+    return world.getBlockState(new net.minecraft.util.BlockPos(x, y, z)).getBlock() == expected
+        ? 1
+        : 0;
   }
 
   /** The entities a selector names, with the 1.13 arguments this line has no parser for. */

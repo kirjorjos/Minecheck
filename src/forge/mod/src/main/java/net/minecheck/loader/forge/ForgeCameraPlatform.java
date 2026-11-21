@@ -1,7 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.client.registry.ClientRegistry;
-import cpw.mods.fml.common.Loader;
 import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -14,10 +12,12 @@ import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.entity.EntityClientPlayerMP;
+import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.MathHelper;
+import net.minecraftforge.fml.client.registry.ClientRegistry;
+import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 
@@ -182,7 +182,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     }
     // Re-asserted every tick: vanilla computes the render camera from this field, and a respawn or
     // a dimension change may have pointed it somewhere else since the last tick.
-    mc.renderViewEntity = camera;
+    mc.setRenderViewEntity(camera);
     steer(mc.thePlayer, allowed);
     CameraPose moved = controller.tick(inputs(), allowed);
     if (moved != null) {
@@ -213,7 +213,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private void attach() {
     Minecraft mc = mc();
-    EntityClientPlayerMP player = mc.thePlayer;
+    EntityPlayerSP player = mc.thePlayer;
     WorldClient level = mc.theWorld;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
@@ -238,7 +238,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     entity.setPosition(start.x(), start.y(), start.z());
     place(entity, start);
     level.spawnEntityInWorld(entity);
-    mc.renderViewEntity = entity;
+    mc.setRenderViewEntity(entity);
     camera = entity;
     LOG.info(
         String.format(
@@ -252,8 +252,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     controller.detach();
     Minecraft mc = mc();
     if (entity != null) {
-      if (mc.renderViewEntity == entity) {
-        mc.renderViewEntity = mc.thePlayer;
+      if (mc.getRenderViewEntity() == entity) {
+        mc.setRenderViewEntity(mc.thePlayer);
       }
       entity.setDead();
     }
@@ -300,7 +300,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
    * added to the camera, and the player is put back before the tick that would send it. The body is
    * therefore always at the rotation the server last saw.
    */
-  private void steer(EntityClientPlayerMP player, boolean allowed) {
+  private void steer(EntityPlayerSP player, boolean allowed) {
     if (!allowed || mc().currentScreen != null) {
       baseYaw = player.rotationYaw;
       basePitch = player.rotationPitch;
@@ -335,13 +335,13 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.gameSettings.keyBindForward.getIsKeyPressed(),
-        mc.gameSettings.keyBindBack.getIsKeyPressed(),
-        mc.gameSettings.keyBindLeft.getIsKeyPressed(),
-        mc.gameSettings.keyBindRight.getIsKeyPressed(),
-        mc.gameSettings.keyBindJump.getIsKeyPressed(),
-        mc.gameSettings.keyBindSneak.getIsKeyPressed(),
-        mc.gameSettings.keyBindSprint.getIsKeyPressed());
+        mc.gameSettings.keyBindForward.isKeyDown(),
+        mc.gameSettings.keyBindBack.isKeyDown(),
+        mc.gameSettings.keyBindLeft.isKeyDown(),
+        mc.gameSettings.keyBindRight.isKeyDown(),
+        mc.gameSettings.keyBindJump.isKeyDown(),
+        mc.gameSettings.keyBindSneak.isKeyDown(),
+        mc.gameSettings.keyBindSprint.isKeyDown());
   }
 
   private static Minecraft mc() {

@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.Loader;
 import java.lang.reflect.Field;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -8,6 +7,7 @@ import net.minecheck.common.config.AudioPolicy;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.SoundManager;
 import net.minecraftforge.client.event.sound.PlaySoundEvent;
+import net.minecraftforge.fml.common.Loader;
 
 /**
  * Keeps this client silent, when {@code muteAudio} says so.

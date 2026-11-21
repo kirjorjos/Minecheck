@@ -390,7 +390,9 @@ final class LegacyCommandShim {
       return 0;
     }
     // This line has no block states, so the block is what a state comparison resolves to.
-    return world.getBlock(x, y, z) == expected ? 1 : 0;
+    return world.getBlockState(new net.minecraft.util.math.BlockPos(x, y, z)).getBlock() == expected
+        ? 1
+        : 0;
   }
 
   /** The entities a selector names, with the 1.13 arguments this line has no parser for. */
