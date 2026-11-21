@@ -31,13 +31,15 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.8.8 is mapped by MCP, and stable_20 is its mapping set.
+  // No Mojang mappings this far back: 1.8.9 is mapped by MCP, and stable_22 is its mapping set.
   // FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:20-1.8.8`; without the suffix nothing publishes that coordinate. Forge resolves its
+  // `mcp_stable:22-1.8.9`; without the suffix nothing publishes that coordinate. Forge resolves its
   // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
-  mappings { mcp("stable", "20-1.8.8") }
-  // 11.15.0.1655 is the last 1.8.8 Forge build, and the one a user on this version installs.
-  minecraftForge { loader("11.15.0.1655") }
+  mappings { mcp("stable", "22-1.8.9") }
+  // 11.15.1.2318 is the last 1.8.9 Forge build, and the one a user on this version installs. Its
+  // Maven version carries a second game-version suffix - `1.8.9-11.15.1.2318-1.8.9` - because that
+  // is how 1.8.9's final builds were published; without it the coordinate does not exist.
+  minecraftForge { loader("11.15.1.2318-1.8.9") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
