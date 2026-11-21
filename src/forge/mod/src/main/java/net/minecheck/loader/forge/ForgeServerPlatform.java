@@ -408,7 +408,7 @@ public class ForgeServerPlatform implements ServerPlatform {
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
     String location = parseId(id, "item");
-    // 1.8.8's mappings type this registry by ResourceLocation, not by the raw key 1.8 accepted.
+    // 1.8.9's mappings type this registry by ResourceLocation, not by the raw key 1.8 accepted.
     Object registered =
         Item.itemRegistry.getObject(
             new net.minecraft.util.ResourceLocation(MinecheckNames.legacyId(location)));
