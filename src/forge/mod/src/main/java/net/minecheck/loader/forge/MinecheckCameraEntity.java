@@ -72,7 +72,7 @@ final class MinecheckCameraEntity extends EntityPlayer {
   // ------------------------------------------------------------------ command source
 
   @Override
-  public String getCommandSenderName() {
+  public String getName() {
     return "MinecheckCamera";
   }
 

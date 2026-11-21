@@ -266,7 +266,12 @@ final class LegacyCommandShim {
     }
     // A rule this line does not have reads as "off": 1.7.10 predates doWeatherCycle and doInsomnia,
     // and the suite's question is only ever "is it disabled".
-    String value = world.getGameRules().getGameRuleStringValue(match.group(1));
+    // stable_20 names the read `getString`, and has no null return: a rule this line does not have
+    // would read as an empty string, so it is asked for explicitly first.
+    if (!world.getGameRules().hasRule(match.group(1))) {
+      return 0;
+    }
+    String value = world.getGameRules().getString(match.group(1));
     if (value == null || value.isEmpty() || value.equalsIgnoreCase("false") || value.equals("0")) {
       return 0;
     }
@@ -473,7 +478,7 @@ final class LegacyCommandShim {
   }
 
   private static String playerName(Entity entity) {
-    return entity instanceof EntityPlayer ? ((EntityPlayer) entity).getCommandSenderName() : "";
+    return entity instanceof EntityPlayer ? ((EntityPlayer) entity).getName() : "";
   }
 
   private static String stripQuotes(String value) {

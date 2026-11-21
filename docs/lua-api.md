@@ -1761,7 +1761,7 @@ carries the same Lua API this document describes, with the differences the game 
 - `rename`-free stacks carry a `count` field, item ids are strings, and GUI screens are
   `HandledScreen`s.
 
-### 1.8 (Forge, Legacy Fabric)
+### 1.8.8 (Forge, Legacy Fabric)
 
 This line ships on both loaders and carries the same Lua API this document describes, with the
 differences the game itself imposes:
