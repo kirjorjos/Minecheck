@@ -193,9 +193,14 @@ public class ForgeServerPlatform implements ServerPlatform {
           // which is not an entity: `tp @s ...` answers "The entity UUID provided is in an invalid
           // format" and the player never moves. The sender stays the console so a command keeps
           // the run's permissions; only the selector is resolved.
-          return s.getCommandManager()
-              .executeCommand(
-                  s, LegacyCommandShim.substituteSelf(line, LegacyCommandShim.selfName(world)));
+          int result =
+              s.getCommandManager()
+                  .executeCommand(
+                      s, LegacyCommandShim.substituteSelf(line, LegacyCommandShim.selfName(world)));
+          // Every 1.9 command root returns void, so the handler answers 0 for a command that
+          // succeeded; the 1.8 line answered 1, and a fixture reads that count back. An executed
+          // command therefore reports at least one.
+          return Math.max(1, result);
         });
   }
 
