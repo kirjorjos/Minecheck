@@ -12,14 +12,13 @@ import net.minecraftforge.fml.common.Loader;
 /**
  * Keeps this client silent, when {@code muteAudio} says so.
  *
- * <p>1.7.10 has neither Mixin nor an event that fires before the sound engine starts, so silence is
+ * <p>1.9 has neither Mixin nor an event that fires before the sound engine starts, so silence is
  * enforced twice: {@code PlaySoundEvent} refuses every play before the engine mixes it, and the
  * device vanilla opened during startup is shut down on the first client tick through the sound
  * manager's own teardown.
  *
- * <p>This line's event carries the replacement as a public {@code result} field (a {@code
- * SoundPoolEntry}) rather than a setter, and holding {@code null} there is what "play nothing"
- * means to it.
+ * <p>This line's event exposes the replacement through {@code setResultSound}, and setting {@code
+ * null} is what "play nothing" means to it.
  */
 final class ForgeSilentSound {
 
@@ -43,11 +42,11 @@ final class ForgeSilentSound {
     if (!muted()) {
       return;
     }
-    event.result = null;
+    event.setResultSound(null);
     if (!reported) {
       reported = true;
       LOG.info(
-          "Minecheck: muteAudio is on — no sound will be played (1.7.10 has no hook before the"
+          "Minecheck: muteAudio is on — no sound will be played (1.9 has no hook before the"
               + " engine starts, so vanilla's startup device is closed on the first client tick)");
     }
   }

@@ -8,8 +8,8 @@ import io.netty.channel.ChannelPipeline;
 import java.util.Map;
 import java.util.logging.Logger;
 import net.minecraft.network.NetworkManager;
-import net.minecraft.network.play.client.C17PacketCustomPayload;
-import net.minecraft.network.play.server.S3FPacketCustomPayload;
+import net.minecraft.network.play.client.CPacketCustomPayload;
+import net.minecraft.network.play.server.SPacketCustomPayload;
 import net.minecraftforge.fml.common.network.internal.FMLProxyPacket;
 
 /**
@@ -39,22 +39,22 @@ final class ForgeChannelTaps {
     if (msg instanceof FMLProxyPacket) {
       return ((FMLProxyPacket) msg).channel();
     }
-    if (msg instanceof S3FPacketCustomPayload) {
-      return ((S3FPacketCustomPayload) msg).getChannelName();
+    if (msg instanceof SPacketCustomPayload) {
+      return ((SPacketCustomPayload) msg).getChannelName();
     }
-    if (msg instanceof C17PacketCustomPayload) {
-      return ((C17PacketCustomPayload) msg).getChannelName();
+    if (msg instanceof CPacketCustomPayload) {
+      return ((CPacketCustomPayload) msg).getChannelName();
     }
     return null;
   }
 
   /** A non-destructive copy of a custom payload's bytes, or {@code null} when it is not one. */
   static byte[] payloadOf(Object msg) {
-    if (msg instanceof S3FPacketCustomPayload) {
-      return bytesOf(((S3FPacketCustomPayload) msg).getBufferData());
+    if (msg instanceof SPacketCustomPayload) {
+      return bytesOf(((SPacketCustomPayload) msg).getBufferData());
     }
-    if (msg instanceof C17PacketCustomPayload) {
-      return bytesOf(((C17PacketCustomPayload) msg).getBufferData());
+    if (msg instanceof CPacketCustomPayload) {
+      return bytesOf(((CPacketCustomPayload) msg).getBufferData());
     }
     if (!(msg instanceof FMLProxyPacket)) {
       return null;

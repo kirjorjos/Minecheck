@@ -3,12 +3,12 @@ package net.minecheck.loader.forge;
 import com.mojang.authlib.GameProfile;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.util.BlockPos;
-import net.minecraft.util.IChatComponent;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.world.World;
 
 /**
- * The client-only entity the camera looks through, on the Forge 1.8 side.
+ * The client-only entity the camera looks through, on the Forge 1.9 side.
  *
  * <p>Its tick does nothing, on purpose: the platform moves it from the client tick hook, and no
  * vanilla system — gravity, fluid, collision, block effects — may alter where the camera is. {@code
@@ -46,11 +46,20 @@ final class MinecheckCameraEntity extends EntityPlayer {
   public void onUpdate() {}
 
   /**
-   * 1.8 makes this abstract on {@link EntityPlayer}. The camera is not a spectator in the game's
+   * 1.9 makes this abstract on {@link EntityPlayer}. The camera is not a spectator in the game's
    * sense — nothing in vanilla should treat it as one — it just has to answer.
    */
   @Override
   public boolean isSpectator() {
+    return false;
+  }
+
+  /**
+   * 1.9 also asks its player type whether it is in creative mode. The camera is not: a creative
+   * player's reach and block breaking are applied by the server the camera never talks to.
+   */
+  @Override
+  public boolean isCreative() {
     return false;
   }
 
@@ -77,7 +86,7 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public void addChatMessage(IChatComponent message) {
+  public void addChatMessage(ITextComponent message) {
     // Nothing is listening to the camera: it is a viewpoint, not a speaker.
   }
 

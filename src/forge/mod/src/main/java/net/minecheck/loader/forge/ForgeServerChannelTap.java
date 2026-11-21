@@ -62,8 +62,15 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (server == null) {
       return false;
     }
-    for (Object candidate : server.getConfigurationManager().playerEntityList) {
-      install((EntityPlayerMP) candidate);
+    // Every loaded world, since a player is only in one dimension's entity list: the tap has to
+    // follow them wherever they are.
+    for (net.minecraft.world.WorldServer world : server.worldServers) {
+      if (world == null) {
+        continue;
+      }
+      for (net.minecraft.entity.player.EntityPlayer candidate : world.playerEntities) {
+        install((EntityPlayerMP) candidate);
+      }
     }
     return true;
   }
@@ -81,9 +88,7 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
       return false;
     }
     NetworkManager manager =
-        player.playerNetServerHandler == null
-            ? null
-            : player.playerNetServerHandler.getNetworkManager();
+        player.connection == null ? null : player.connection.getNetworkManager();
     return ForgeChannelTaps.install(manager, INSTANCE, "server");
   }
 

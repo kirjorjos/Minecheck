@@ -89,7 +89,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     try {
       if (dedicated) {
         MinecraftServer server = server();
-        if (server == null || server.getConfigurationManager().getCurrentPlayerCount() == 0) {
+        if (server == null || server.getPlayerList().getCurrentPlayerCount() == 0) {
           return false;
         }
         channel.sendToAll(new MinecheckS2CMessage(payload));
@@ -113,7 +113,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     if (server == null) {
       return false;
     }
-    EntityPlayerMP player = server.getConfigurationManager().getPlayerByUsername(playerName);
+    EntityPlayerMP player = server.getPlayerList().getPlayerByUsername(playerName);
     if (player == null) {
       return false;
     }

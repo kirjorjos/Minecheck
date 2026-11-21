@@ -61,7 +61,7 @@ public final class ForgeClientHooks {
 
   @SubscribeEvent
   public void onMouseScroll(MouseEvent event) {
-    if (ForgeCameraPlatform.handleScroll(event.dwheel)) {
+    if (ForgeCameraPlatform.handleScroll(event.getDwheel())) {
       event.setCanceled(true);
     }
   }

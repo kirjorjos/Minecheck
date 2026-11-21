@@ -21,9 +21,9 @@ import net.minecraft.world.World;
 import net.minecraft.world.gen.ChunkProviderServer;
 
 /**
- * Answers the parts of the newer command syntax 1.7.10 cannot execute.
+ * Answers the parts of the newer command syntax 1.9 cannot execute.
  *
- * <p>{@code /execute if block} and {@code /execute if entity} are 1.13 syntax that 1.7.10 parses as
+ * <p>{@code /execute if block} and {@code /execute if entity} are 1.13 syntax that 1.9 parses as
  * {@code execute} with an entity named {@code if}, which answers zero — a zero that reads as a
  * failed condition rather than an unsupported command. {@code /data get entity} and a bare {@code
  * /gamerule <name>} query are missing here for the same reason, and {@code /tag} goes further: this
@@ -63,14 +63,6 @@ final class LegacyCommandShim {
 
   private static final Pattern SELECTOR_ARG = Pattern.compile("([a-zA-Z]+)=([^,\\]]+)");
 
-  private static final Pattern FILL =
-      Pattern.compile(
-          "^fill\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+"
-              + "([A-Za-z0-9_.:\\-]+)(?:\\s.*)?$");
-
-  private static final Pattern TELEPORT =
-      Pattern.compile("^tp\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+\\S+\\s+\\S+$");
-
   private LegacyCommandShim() {}
 
   /** The tags a script has set on an entity, as it would read them back. */
@@ -95,15 +87,9 @@ final class LegacyCommandShim {
     return tags != null && tags.remove(tag);
   }
 
-  /** Every rewrite this line needs before a command reaches 1.7.10's parser. */
+  /** Every rewrite this line needs before a command reaches 1.9's parser. */
   static String translate(String command) {
     String out = rewriteGive(command);
-    if (out.startsWith("replaceitem ")) {
-      // 1.8 names a container slot with the `slot.` prefix (`slot.hotbar.0`); 1.9 dropped it, so a
-      // slot written the newer way is not a slot this line's parser knows and the command answers
-      // zero without touching the player.
-      out = out.replaceAll(" (hotbar|inventory|weapon|armor|enderchest|horse)\\.", " slot.$1.");
-    }
     // Selectors spell the game mode `m=` on this line and `gamemode=` from 1.13, and cap the match
     // with `c=` where 1.13 says `limit=`. An unknown argument is rejected outright, so a selector
     // carrying one matched nothing at all.
@@ -119,63 +105,18 @@ final class LegacyCommandShim {
   }
 
   /**
-   * A command rewritten into the commands this line can run, which can be more than one.
+   * A command prepared for this line, as a list so a caller can send more than one.
    *
-   * <p>Two things the newer lines' parser accepts do not exist here: {@code /fill} (1.8) and the
-   * six-argument teleport (1.8). A {@code /fill} becomes one {@code /setblock} per block — the
-   * shape the newer lines' {@code /fill} is a shorthand for anyway — and the teleport's angles are
-   * dropped rather than faked. Coordinates are resolved against the runner's feet, so the relative
-   * form means the same thing it does on the newer lines.
+   * <p>1.9 parses {@code @s}, {@code /fill} and the six-argument teleport itself, so those are left
+   * exactly as written; what this line lacks are the 1.13 roots, and those are answered in {@link
+   * #translate} and by the shim's own handlers rather than rewritten into other commands.
    */
-  static List<String> expandForLegacy(
-      String command, String playerName, double feetX, double feetY, double feetZ) {
-    String rewritten = command.replace("@s", playerName);
-    Matcher teleport = TELEPORT.matcher(rewritten.trim());
-    if (teleport.matches()) {
-      rewritten =
-          "tp "
-              + teleport.group(1)
-              + " "
-              + teleport.group(2)
-              + " "
-              + teleport.group(3)
-              + " "
-              + teleport.group(4);
-    }
-    Matcher fill = FILL.matcher(rewritten.trim());
-    if (!fill.matches()) {
-      return Collections.singletonList(rewritten);
-    }
-    int fromX = coordinate(fill.group(1), feetX);
-    int fromY = coordinate(fill.group(2), feetY);
-    int fromZ = coordinate(fill.group(3), feetZ);
-    int toX = coordinate(fill.group(4), feetX);
-    int toY = coordinate(fill.group(5), feetY);
-    int toZ = coordinate(fill.group(6), feetZ);
-    String block = MinecheckNames.legacyId(fill.group(7));
-    List<String> out = new ArrayList<>();
-    for (int x = Math.min(fromX, toX); x <= Math.max(fromX, toX); x++) {
-      for (int y = Math.min(fromY, toY); y <= Math.max(fromY, toY); y++) {
-        for (int z = Math.min(fromZ, toZ); z <= Math.max(fromZ, toZ); z++) {
-          out.add("setblock " + x + " " + y + " " + z + " " + block);
-        }
-      }
-    }
-    return out;
-  }
-
-  /** A fill coordinate: absolute, or {@code ~} relative to the runner's feet. */
-  private static int coordinate(String token, double origin) {
-    if (!token.startsWith("~")) {
-      return (int) Math.floor(Double.parseDouble(token));
-    }
-    String offset = token.substring(1);
-    double relative = offset.isEmpty() ? 0.0 : Double.parseDouble(offset);
-    return (int) Math.floor(origin + relative);
+  static List<String> expandForLegacy(String command) {
+    return Collections.singletonList(command);
   }
 
   /**
-   * Rewrites the 1.13 inline-tag {@code /give} into the form 1.7.10 parses, or returns the command
+   * Rewrites the 1.13 inline-tag {@code /give} into the form 1.9 parses, or returns the command
    * unchanged when it is anything else.
    */
   static String rewriteGive(String command) {
@@ -202,7 +143,7 @@ final class LegacyCommandShim {
       count = "1";
     }
     // <player> <item> [amount] [data] [dataTag]: the tag is the last argument here, not part of the
-    // item a 1.7.10 lookup would try to resolve.
+    // item a 1.9 lookup would try to resolve.
     return "give " + parts[0] + " " + parts[1] + " " + count + " 0 " + tag;
   }
 
@@ -264,7 +205,7 @@ final class LegacyCommandShim {
     if (!match.matches() || world == null) {
       return null;
     }
-    // A rule this line does not have reads as "off": 1.7.10 predates doWeatherCycle and doInsomnia,
+    // A rule this line does not have reads as "off": 1.9 predates doWeatherCycle and doInsomnia,
     // and the suite's question is only ever "is it disabled".
     // stable_20 names the read `getString`, and has no null return: a rule this line does not have
     // would read as an empty string, so it is asked for explicitly first.
@@ -389,8 +330,7 @@ final class LegacyCommandShim {
         && !((ChunkProviderServer) world.getChunkProvider()).chunkExists(x >> 4, z >> 4)) {
       return 0;
     }
-    // This line has no block states, so the block is what a state comparison resolves to.
-    return world.getBlockState(new net.minecraft.util.BlockPos(x, y, z)).getBlock() == expected
+    return world.getBlockState(new net.minecraft.util.math.BlockPos(x, y, z)).getBlock() == expected
         ? 1
         : 0;
   }

@@ -31,20 +31,20 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.8.9 is mapped by MCP, and stable_22 is its mapping set.
+  // No Mojang mappings this far back: 1.9 is mapped by MCP, and stable_24 is its mapping set.
   // FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:22-1.8.9`; without the suffix nothing publishes that coordinate. Forge resolves its
+  // `mcp_stable:24-1.9`; without the suffix nothing publishes that coordinate. Forge resolves its
   // production members by SRG name, so the remapped jar is still checked by `checkProductionJars`.
-  mappings { mcp("stable", "22-1.8.9") }
-  // 11.15.1.2318 is the last 1.8.9 Forge build, and the one a user on this version installs. Its
-  // Maven version carries a second game-version suffix - `1.8.9-11.15.1.2318-1.8.9` - because that
-  // is how 1.8.9's final builds were published; without it the coordinate does not exist.
-  minecraftForge { loader("11.15.1.2318-1.8.9") }
+  mappings { mcp("stable", "24-1.9") }
+  // 12.16.1.1887 is the recommended 1.9 Forge build and the last one published to Maven. The
+  // promotions file calls 12.16.1.1938 the latest, but that coordinate answers 404 — nobody can
+  // install it — so the line pins the one a user can actually download.
+  minecraftForge { loader("12.16.1.1887") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.8 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.9 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -52,7 +52,7 @@ unimined.minecraft {
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 // The runs launch through the toolchain, not through a hand-set `executable`: Gradle rejects a
-// task that carries both, and unimined sets the launcher from `javaVersion`. 1.8 predates
+// task that carries both, and unimined sets the launcher from `javaVersion`. 1.9 predates
 // ModLauncher, so any Java 8 works here (the pinned build is for the ModLauncher-era lines).
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
@@ -469,7 +469,7 @@ val pinnedJdkArchives =
     // this
     // platform takes the nearest later Zulu 8. The ModLauncher 8.0.9 constructor this map exists
     // for is
-    // a 1.15+ concern; 1.8's Forge predates ModLauncher, so any Java 8 runs its dev runs and its
+    // a 1.15+ concern; 1.9's Forge predates ModLauncher, so any Java 8 runs its dev runs and its
     // boot.
     ("linux" to "aarch64") to
       PinnedJdkArchive(
