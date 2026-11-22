@@ -121,8 +121,13 @@ check(byTag, "findEntities(tag) sees the tagged cow")
 local taggedInfo = ourCow()
 check(taggedInfo ~= nil and taggedInfo.type == "minecraft:cow", "tagged entry reports type")
 check(taggedInfo ~= nil and taggedInfo.tags[1] == "querytag", "tagged entry reports the tag")
+-- Collision resolution runs even with NoAI, so the cow can be nudged by a fraction of a block
+-- before this read: the assertion is that it still reports the block column it was spawned in,
+-- not bit-exact coordinates.
 check(
-  taggedInfo ~= nil and taggedInfo.pos.x == bx + 0.5 and taggedInfo.pos.z == bz + 0.5,
+  taggedInfo ~= nil
+    and math.abs(taggedInfo.pos.x - (bx + 0.5)) <= 0.5
+    and math.abs(taggedInfo.pos.z - (bz + 0.5)) <= 0.5,
   "tagged entry reports the spawn x/z"
 )
 
