@@ -59,6 +59,7 @@ import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.text.ITextComponent;
 import net.minecraft.world.EnumDifficulty;
+import net.minecraft.world.GameType;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
 import net.minecraftforge.fml.client.FMLClientHandler;
@@ -257,8 +258,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
             mc().launchIntegratedServer(
                     worldName,
                     worldName,
-                    new WorldSettings(
-                        0L, WorldSettings.GameType.SURVIVAL, false, false, WorldType.DEFAULT)));
+                    new WorldSettings(0L, GameType.SURVIVAL, false, false, WorldType.DEFAULT)));
   }
 
   @Override
@@ -374,8 +374,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // what tells the server the player left. Dropping the world alone closed the socket without
     // it, and the server kept the player in the game until the connection reset showed up as a
     // lost connection instead of a logout.
-    if (client.theWorld != null && !client.isSingleplayer()) {
-      client.theWorld.sendQuittingDisconnectingPacket();
+    if (client.world != null && !client.isSingleplayer()) {
+      client.world.sendQuittingDisconnectingPacket();
     }
     // Dropping the world is also what stops an integrated server through the client's own
     // connection path.
@@ -412,10 +412,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
     quitRequested = false;
     // A held clock parks the server thread, and the save runs there.
     net.minecheck.common.tick.TickClock.get().resume();
-    if (client.theWorld != null && client.isSingleplayer()) {
+    if (client.world != null && client.isSingleplayer()) {
       net.minecraft.server.MinecraftServer server = ForgeEntrypoint.server();
       if (server != null) {
-        for (net.minecraft.world.WorldServer world : server.worldServers) {
+        for (net.minecraft.world.WorldServer world : server.worlds) {
           if (world == null) {
             continue;
           }
@@ -445,12 +445,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isInWorld() {
-    return mc().thePlayer != null && mc().theWorld != null;
+    return mc().player != null && mc().world != null;
   }
 
   @Override
   public boolean isWorldReady() {
-    EntityPlayer player = mc().thePlayer;
+    EntityPlayer player = mc().player;
     // Standing, too: this line puts the player a couple of blocks above the surface while the
     // client starts the integrated world, and a script that read its position before the fall had
     // finished saw a height no block under it agreed with. `onGround` is the settled state every
@@ -471,7 +471,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public boolean isLoggingIn() {
     Minecraft client = mc();
-    if (client.thePlayer != null) {
+    if (client.player != null) {
       return false;
     }
     NetHandlerPlayClient handler = client.getConnection();
@@ -567,11 +567,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
                     if (code == Keyboard.KEY_RETURN && screen instanceof GuiChat) {
                       GuiTextField field = findTextField(screen);
                       String text = field == null ? "" : field.getText();
-                      if (!text.isEmpty()
-                          && mc().thePlayer != null
-                          && mc().getConnection() != null) {
+                      if (!text.isEmpty() && mc().player != null && mc().getConnection() != null) {
                         // A typed command goes through the same rewrite as a scripted one.
-                        EntityPlayer player = mc().thePlayer;
+                        EntityPlayer player = mc().player;
                         for (String line :
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
@@ -590,9 +588,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
                   // reacts to keys it read itself, and the press time a script can set is read on
                   // the next tick only when that loop advanced it, so a tap opened the inventory
                   // on some runs and not others. This is the same screen that path opens.
-                  if (code == inventoryKeyCode() && mc().thePlayer != null) {
+                  if (code == inventoryKeyCode() && mc().player != null) {
                     mc().displayGuiScreen(
-                            new net.minecraft.client.gui.inventory.GuiInventory(mc().thePlayer));
+                            new net.minecraft.client.gui.inventory.GuiInventory(mc().player));
                     return;
                   }
                   // A swing goes through the player's own attack, at the entity the crosshair is
@@ -602,8 +600,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
                   net.minecraft.entity.Entity swingTarget =
                       code == keyCodeNamed("key.attack") ? pickedEntity(4.5) : null;
                   if (swingTarget != null) {
-                    mc().playerController.attackEntity(mc().thePlayer, swingTarget);
-                    mc().thePlayer.swingArm(net.minecraft.util.EnumHand.MAIN_HAND);
+                    mc().playerController.attackEntity(mc().player, swingTarget);
+                    mc().player.swingArm(net.minecraft.util.EnumHand.MAIN_HAND);
                     return;
                   }
                   pressKeyCode(code, true);
@@ -676,8 +674,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
    */
   private static net.minecraft.entity.Entity pickedEntity(double reach) {
     Minecraft client = mc();
-    EntityPlayer player = client.thePlayer;
-    if (player == null || client.theWorld == null) {
+    EntityPlayer player = client.player;
+    if (player == null || client.world == null) {
       return null;
     }
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
@@ -692,7 +690,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
             .expand(1.0, 1.0, 1.0);
     net.minecraft.entity.Entity best = null;
     double bestDistance = reach;
-    for (Object candidate : client.theWorld.getEntitiesWithinAABBExcludingEntity(player, area)) {
+    for (Object candidate : client.world.getEntitiesWithinAABBExcludingEntity(player, area)) {
       net.minecraft.entity.Entity entity = (net.minecraft.entity.Entity) candidate;
       if (!entity.canBeCollidedWith()) {
         continue;
@@ -827,8 +825,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public PlayerInfo getPlayer() {
     Minecraft client = mc();
-    EntityPlayer player = client.thePlayer;
-    if (player == null || client.theWorld == null) {
+    EntityPlayer player = client.player;
+    if (player == null || client.world == null) {
       return null;
     }
     // The feet, from the bounding box: on this line {@code posY} is the eye position, a full eye
@@ -881,7 +879,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void setLook(float pitch, float yaw) {
     onClientThread(
         () -> {
-          EntityPlayer player = mc().thePlayer;
+          EntityPlayer player = mc().player;
           if (player != null) {
             player.rotationPitch = pitch;
             player.rotationYaw = yaw;
@@ -893,7 +891,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void lookAt(double x, double y, double z) {
     onClientThread(
         () -> {
-          EntityPlayer player = mc().thePlayer;
+          EntityPlayer player = mc().player;
           if (player == null) {
             return;
           }
@@ -914,9 +912,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // Against the command-sender name, which is the name {@link #getPlayer()} reports: the game
     // profile's name is empty in an offline dev session, so comparing against it answered null for
     // every script (the crosshair test's whole first expectation).
-    if (client.thePlayer == null
-        || client.theWorld == null
-        || !client.thePlayer.getName().equals(entityName)) {
+    if (client.player == null
+        || client.world == null
+        || !client.player.getName().equals(entityName)) {
       return null;
     }
     return getCrosshairBlock();
@@ -925,19 +923,19 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public BlockPosition getCrosshairBlock() {
     Minecraft client = mc();
-    if (client.theWorld == null || client.thePlayer == null) {
+    if (client.world == null || client.player == null) {
       return null;
     }
     // This line's own mouse-over is refreshed by the frame loop, and a script asks right after it
     // turned the player — before the next frame — so the pick is made here, from the look the
     // player has now, at the reach vanilla gives the crosshair.
-    EntityPlayer player = client.thePlayer;
+    EntityPlayer player = client.player;
     // The crosshair starts at the eyes, which this line reports separately from `posY` (the feet).
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
     Vec3d direction = directionOf(player);
     Vec3d end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
-    RayTraceResult hit = client.theWorld.rayTraceBlocks(start, end);
+    RayTraceResult hit = client.world.rayTraceBlocks(start, end);
     if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return null;
     }
@@ -961,7 +959,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public List<EntityInfo> findNearbyEntities(String type) {
     Minecraft client = mc();
-    WorldClient level = client.theWorld;
+    WorldClient level = client.world;
     if (level == null) {
       return java.util.Collections.emptyList();
     }
@@ -1006,7 +1004,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public void runCommand(String command) {
     Minecraft client = mc();
-    EntityPlayer player = client.thePlayer;
+    EntityPlayer player = client.player;
     if (player == null || client.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
@@ -1059,28 +1057,28 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public void useItemOnTarget() {
     Minecraft client = mc();
-    if (client.thePlayer == null || client.playerController == null || client.theWorld == null) {
+    if (client.player == null || client.playerController == null || client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     // Picked from the look the player has this instant: a script aims and clicks in the same
     // breath, and this line's own pick (`objectMouseOver`) is a frame behind — clicking it aims at
     // whatever the previous look held and vanilla drops the attempt silently, leaving the
     // container shut.
-    EntityPlayer player = client.thePlayer;
+    EntityPlayer player = client.player;
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
     Vec3d direction = directionOf(player);
     Vec3d end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
-    RayTraceResult hit = client.theWorld.rayTraceBlocks(start, end);
+    RayTraceResult hit = client.world.rayTraceBlocks(start, end);
     if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return;
     }
     // The held stack, the side the hit reports and the hand are what the item's use-on-block
     // callback takes.
     client.playerController.processRightClickBlock(
-        client.thePlayer,
-        client.theWorld,
-        client.thePlayer.getHeldItemMainhand(),
+        client.player,
+        client.world,
+        client.player.getHeldItemMainhand(),
         hit.getBlockPos(),
         hit.sideHit,
         hit.hitVec,
@@ -1090,12 +1088,11 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public boolean openSignEditor(BlockPosition pos) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     TileEntity blockEntity =
-        client.theWorld.getTileEntity(
-            new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
+        client.world.getTileEntity(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
     if (!(blockEntity instanceof TileEntitySign)) {
       return false;
     }
@@ -1378,11 +1375,11 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // window in the packet. If the two disagree (a screen that outlived the container the client
     // was told to open), the click is applied to another container, the packet carries that slot's
     // stack, and the server silently drops it: nothing moves and nothing errors.
-    if (client.thePlayer.openContainer != screen.inventorySlots) {
-      client.thePlayer.openContainer = screen.inventorySlots;
+    if (client.player.openContainer != screen.inventorySlots) {
+      client.player.openContainer = screen.inventorySlots;
     }
     client.playerController.windowClick(
-        screen.inventorySlots.windowId, slot, button, itemAction(actionType), client.thePlayer);
+        screen.inventorySlots.windowId, slot, button, itemAction(actionType), client.player);
     return true;
   }
 
@@ -1493,7 +1490,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public BlockInfo getBlock(BlockPosition pos) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     if (!isChunkLoaded(pos.x() >> 4, pos.z() >> 4)) {
@@ -1503,12 +1500,11 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // resolves to, and the id a script reads is the block's own.
     Block block =
         client
-            .theWorld
+            .world
             .getBlockState(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()))
             .getBlock();
     TileEntity blockEntity =
-        client.theWorld.getTileEntity(
-            new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
+        client.world.getTileEntity(new net.minecraft.util.math.BlockPos(pos.x(), pos.y(), pos.z()));
     Object rawBlockId = Block.REGISTRY.getNameForObject(block);
     String blockId = rawBlockId == null ? null : rawBlockId.toString();
     NBTTagCompound blockEntityTag = new NBTTagCompound();
@@ -1524,7 +1520,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public Integer groundHeight(int x, int z) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     if (!isChunkLoaded(x >> 4, z >> 4)) {
@@ -1535,8 +1531,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // platform and the newer lines' MOTION_BLOCKING read.
     // This line has no column-top query: the column is scanned down from the build limit and the
     // first block that is not air is the surface, whose height is one above it.
-    for (int y = client.theWorld.getHeight() - 1; y >= 0; y--) {
-      if (!client.theWorld.isAirBlock(new net.minecraft.util.math.BlockPos(x, y, z))) {
+    for (int y = client.world.getHeight() - 1; y >= 0; y--) {
+      if (!client.world.isAirBlock(new net.minecraft.util.math.BlockPos(x, y, z))) {
         return y + 1;
       }
     }
@@ -1546,9 +1542,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
   @Override
   public boolean isChunkLoaded(int chunkX, int chunkZ) {
     Minecraft client = mc();
-    return client.theWorld != null
-        && ((net.minecraft.client.multiplayer.ChunkProviderClient)
-                    client.theWorld.getChunkProvider())
+    return client.world != null
+        && ((net.minecraft.client.multiplayer.ChunkProviderClient) client.world.getChunkProvider())
                 .getLoadedChunk(chunkX, chunkZ)
             != null;
   }
@@ -1567,7 +1562,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void pinClientClock() {
     Minecraft client = mc();
     applyPendingWorldSettings(client);
-    WorldClient level = client.theWorld;
+    WorldClient level = client.world;
     if (level == null) {
       return;
     }
@@ -1576,7 +1571,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       // Remote server: no authoritative value in this process.
       return;
     }
-    if (server.worldServers == null || server.worldServers.length == 0) {
+    if (server.worlds == null || server.worlds.length == 0) {
       // The integrated server exists before it has prepared a world — the handoff client ticks in
       // that window — so there is no time of day to re-assert yet.
       return;
@@ -1599,7 +1594,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (server == null) {
       return;
     }
-    if (server.worldServers == null || server.worldServers.length == 0) {
+    if (server.worlds == null || server.worlds.length == 0) {
       // Keep the request pending: the world these rules belong to has not been prepared yet.
       return;
     }
@@ -1620,18 +1615,18 @@ public final class ForgeClientPlatform implements ClientPlatform {
     server.setDifficultyForAllWorlds(difficulty(options.difficulty()));
   }
 
-  private static WorldSettings.GameType gameMode(String name) {
+  private static GameType gameMode(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "survival":
-        return WorldSettings.GameType.SURVIVAL;
+        return GameType.SURVIVAL;
       case "adventure":
-        return WorldSettings.GameType.ADVENTURE;
+        return GameType.ADVENTURE;
       case "spectator":
         // 1.7.10 predates spectator mode; adventure is the closest mode it has — no flight and no
         // ability to place blocks, which is what a spectator fixture relies on.
-        return WorldSettings.GameType.ADVENTURE;
+        return GameType.ADVENTURE;
       default:
-        return WorldSettings.GameType.CREATIVE;
+        return GameType.CREATIVE;
     }
   }
 
@@ -1814,7 +1809,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   /** One attempt at a capture, on the client thread. */
   private void captureScreenshot(ScreenshotRequest request, boolean write) {
     Minecraft client = mc();
-    boolean clearChat = !request.chatVisible() && client.theWorld != null;
+    boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
       client.ingameGUI.getChatGUI().clearChatMessages();
       chatClearedAtFrame = DRAWN_FRAMES.get();

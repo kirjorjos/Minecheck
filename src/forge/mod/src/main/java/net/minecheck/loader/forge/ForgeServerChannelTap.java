@@ -64,7 +64,7 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     }
     // Every loaded world, since a player is only in one dimension's entity list: the tap has to
     // follow them wherever they are.
-    for (net.minecraft.world.WorldServer world : server.worldServers) {
+    for (net.minecraft.world.WorldServer world : server.worlds) {
       if (world == null) {
         continue;
       }

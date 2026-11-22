@@ -176,14 +176,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     Minecraft mc = mc();
-    if (mc.thePlayer == null || mc.theWorld == null || camera.worldObj != mc.theWorld) {
+    if (mc.player == null || mc.world == null || camera.world != mc.world) {
       detach();
       return;
     }
     // Re-asserted every tick: vanilla computes the render camera from this field, and a respawn or
     // a dimension change may have pointed it somewhere else since the last tick.
     mc.setRenderViewEntity(camera);
-    steer(mc.thePlayer, allowed);
+    steer(mc.player, allowed);
     CameraPose moved = controller.tick(inputs(), allowed);
     if (moved != null) {
       place(camera, moved);
@@ -213,8 +213,8 @@ public final class ForgeCameraPlatform implements CameraPlatform {
 
   private void attach() {
     Minecraft mc = mc();
-    EntityPlayerSP player = mc.thePlayer;
-    WorldClient level = mc.theWorld;
+    EntityPlayerSP player = mc.player;
+    WorldClient level = mc.world;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
       return;
@@ -237,7 +237,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     // this the first rendered frame would interpolate the camera in from 0,0,0.
     entity.setPosition(start.x(), start.y(), start.z());
     place(entity, start);
-    level.spawnEntityInWorld(entity);
+    level.spawnEntity(entity);
     mc.setRenderViewEntity(entity);
     camera = entity;
     LOG.info(
@@ -253,7 +253,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     Minecraft mc = mc();
     if (entity != null) {
       if (mc.getRenderViewEntity() == entity) {
-        mc.setRenderViewEntity(mc.thePlayer);
+        mc.setRenderViewEntity(mc.player);
       }
       entity.setDead();
     }
@@ -323,7 +323,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
             pose.y(),
             pose.z(),
             MathHelper.wrapDegrees((float) pose.yaw() + yawDelta),
-            MathHelper.clamp_float((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
+            MathHelper.clamp((float) pose.pitch() + pitchDelta, -90.0f, 90.0f));
     if (controller.setPose(turned)) {
       place(camera, turned);
     }

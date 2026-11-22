@@ -373,7 +373,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     // The chunk is read through first: this line's spawn answers false for a position in a chunk
     // that is not loaded, and a script may name a spot far from any player.
     level.getChunkProvider().provideChunk(floorChunk(x), floorChunk(z));
-    if (!level.spawnEntityInWorld(entity)) {
+    if (!level.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
     return entity.getEntityId();
@@ -437,7 +437,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     EntityItem itemEntity = new EntityItem(level, x, y, z, stack);
     level.getChunkProvider().provideChunk(floorChunk(x), floorChunk(z));
-    if (!level.spawnEntityInWorld(itemEntity)) {
+    if (!level.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
     return itemEntity.getEntityId();

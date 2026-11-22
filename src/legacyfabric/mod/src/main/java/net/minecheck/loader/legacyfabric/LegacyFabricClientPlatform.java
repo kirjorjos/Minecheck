@@ -59,6 +59,7 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.Difficulty;
+import net.minecraft.world.GameMode;
 import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
 import org.lwjgl.input.Keyboard;
@@ -251,11 +252,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                     worldName,
                     worldName,
                     new LevelInfo(
-                        0L,
-                        LevelInfo.GameMode.SURVIVAL,
-                        false,
-                        false,
-                        LevelGeneratorType.DEFAULT)));
+                        0L, GameMode.SURVIVAL, false, false, LevelGeneratorType.DEFAULT)));
   }
 
   @Override
@@ -1386,18 +1383,18 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     server.setDifficulty(difficulty(options.difficulty()));
   }
 
-  private static LevelInfo.GameMode gameMode(String name) {
+  private static GameMode gameMode(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "survival":
-        return LevelInfo.GameMode.SURVIVAL;
+        return GameMode.SURVIVAL;
       case "adventure":
-        return LevelInfo.GameMode.ADVENTURE;
+        return GameMode.ADVENTURE;
       case "spectator":
         // 1.7.10 predates spectator mode; adventure is the closest mode it has — no flight and no
         // ability to place blocks, which is what a spectator fixture relies on.
-        return LevelInfo.GameMode.ADVENTURE;
+        return GameMode.ADVENTURE;
       default:
-        return LevelInfo.GameMode.CREATIVE;
+        return GameMode.CREATIVE;
     }
   }
 

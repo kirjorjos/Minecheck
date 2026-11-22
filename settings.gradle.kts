@@ -22,10 +22,10 @@ include(":platform-api")
 
 project(":platform-api").projectDir = file("src/platform-api")
 
-// No Fabric here: Fabric's loader starts at 1.14. Legacy Fabric's first supported game version is
-// 1.9.4, so this is the first line in the family that carries it; its module is the intermediate
-// mapping family's loader, not a reuse of `src/fabric`, whose platform classes are 1.14+ API. The
-// Forge here predates Mixin, so its hooks are native FML events.
+// No Fabric here: Fabric's loader starts at 1.14. Legacy Fabric covers this line (its first
+// supported game version is 1.9.4), so this module is the intermediate mapping family's loader,
+// not a reuse of `src/fabric`, whose platform classes are 1.14+ API. The Forge here predates
+// Mixin, so its hooks are native FML events.
 include(":forge-mod")
 
 project(":forge-mod").projectDir = file("src/forge/mod")
