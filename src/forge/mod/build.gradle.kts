@@ -31,20 +31,20 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.10.2 is mapped by MCP, and stable_29 is its mapping set.
-  // FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:29-1.10.2`; without the suffix nothing publishes that coordinate. Forge resolves
+  // No Mojang mappings this far back: 1.11 is mapped by MCP, and stable_32 is its newest mapping
+  // set. FG 2.x suffixes the mapping version with the game version, so the artifact is
+  // `mcp_stable:32-1.11`; without the suffix nothing publishes that coordinate. Forge resolves
   // its production members by SRG name, so the remapped jar is still checked by
   // `checkProductionJars`.
-  mappings { mcp("stable", "29-1.10.2") }
-  // 12.18.3.2511 is both the latest and recommended 1.10.2 build, and unlike 1.9.4's promoted
-  // build it publishes its universal, userdev and installer jars.
-  minecraftForge { loader("12.18.3.2511") }
+  mappings { mcp("stable", "32-1.11") }
+  // 13.19.1.2199 is the latest 1.11 build and publishes its universal, userdev and installer
+  // jars; the promotions file's recommended build is the older 13.19.1.2189.
+  minecraftForge { loader("13.19.1.2199") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.10.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.11 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -52,7 +52,7 @@ unimined.minecraft {
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 // The runs launch through the toolchain, not through a hand-set `executable`: Gradle rejects a
-// task that carries both, and unimined sets the launcher from `javaVersion`. 1.10.2 predates
+// task that carries both, and unimined sets the launcher from `javaVersion`. 1.11 predates
 // ModLauncher, so any Java 8 works here (the pinned build is for the ModLauncher-era lines).
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
@@ -61,7 +61,7 @@ tasks
       JavaVersion.toVersion(runJavaVersion.get())
   }
 
-// 1.12.2 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
+// 1.11 runs on LWJGL 2, whose native libraries are not put on the run classpath by default: the
 // client died with "no lwjgl64 in java.library.path" before it could open a window. Extract them
 // from the published natives artefact and point the client's library path at the directory.
 val lwjgl2Natives by configurations.creating
@@ -469,7 +469,7 @@ val pinnedJdkArchives =
     // this
     // platform takes the nearest later Zulu 8. The ModLauncher 8.0.9 constructor this map exists
     // for is
-    // a 1.15+ concern; 1.9's Forge predates ModLauncher, so any Java 8 runs its dev runs and its
+    // a 1.15+ concern; Forge 13.19 predates ModLauncher, so any Java 8 runs its dev runs and its
     // boot.
     ("linux" to "aarch64") to
       PinnedJdkArchive(

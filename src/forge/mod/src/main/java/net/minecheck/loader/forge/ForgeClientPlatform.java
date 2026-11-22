@@ -426,7 +426,6 @@ public final class ForgeClientPlatform implements ClientPlatform {
           // dropped the one the handoff script had just written.
           try {
             world.saveAllChunks(true, null);
-            world.getChunkProvider().saveExtraData();
           } catch (net.minecraft.world.MinecraftException e) {
             throw new IllegalStateException("could not save the world before quitting", e);
           }
@@ -521,7 +520,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       LOG.warning("worldGenSettled: not in a local/integrated world; treating as settled");
       return true;
     }
-    net.minecraft.world.WorldServer overworld = server.worldServerForDimension(0);
+    net.minecraft.world.WorldServer overworld = server.getWorld(0);
     if (overworld == null) {
       LOG.warning("worldGenSettled: no overworld loaded; treating as settled");
       return true;
@@ -680,14 +679,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
     Vec3d direction = directionOf(player);
-    Vec3d end =
-        start.addVector(
-            direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach);
+    Vec3d end = start.addVector(direction.x * reach, direction.y * reach, direction.z * reach);
     AxisAlignedBB area =
         player
             .getEntityBoundingBox()
-            .addCoord(direction.xCoord * reach, direction.yCoord * reach, direction.zCoord * reach)
-            .expand(1.0, 1.0, 1.0);
+            .expand(direction.x * reach, direction.y * reach, direction.z * reach)
+            .grow(1.0, 1.0, 1.0);
     net.minecraft.entity.Entity best = null;
     double bestDistance = reach;
     for (Object candidate : client.world.getEntitiesWithinAABBExcludingEntity(player, area)) {
@@ -696,7 +693,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
         continue;
       }
       RayTraceResult hit =
-          entity.getEntityBoundingBox().expand(0.3, 0.3, 0.3).calculateIntercept(start, end);
+          entity.getEntityBoundingBox().grow(0.3, 0.3, 0.3).calculateIntercept(start, end);
       if (hit == null) {
         continue;
       }
@@ -933,8 +930,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // The crosshair starts at the eyes, which this line reports separately from `posY` (the feet).
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
     Vec3d direction = directionOf(player);
-    Vec3d end =
-        start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
+    Vec3d end = start.addVector(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
     RayTraceResult hit = client.world.rayTraceBlocks(start, end);
     if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return null;
@@ -1036,7 +1032,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   /** One command on the integrated server, through the shim first. */
   private static void runIntegratedCommand(
       net.minecraft.server.MinecraftServer server, EntityPlayerMP self, String cmd) {
-    net.minecraft.world.WorldServer world = server.worldServerForDimension(0);
+    net.minecraft.world.WorldServer world = server.getWorld(0);
     Integer rule = LegacyCommandShim.gameruleValue(world, cmd);
     Integer entity = rule == null ? LegacyCommandShim.executeIfEntity(world, cmd) : null;
     Integer data =
@@ -1067,8 +1063,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     EntityPlayer player = client.player;
     Vec3d start = new Vec3d(player.posX, eyeY(player), player.posZ);
     Vec3d direction = directionOf(player);
-    Vec3d end =
-        start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
+    Vec3d end = start.addVector(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
     RayTraceResult hit = client.world.rayTraceBlocks(start, end);
     if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
       return;
@@ -1078,7 +1073,6 @@ public final class ForgeClientPlatform implements ClientPlatform {
     client.playerController.processRightClickBlock(
         client.player,
         client.world,
-        client.player.getHeldItemMainhand(),
         hit.getBlockPos(),
         hit.sideHit,
         hit.hitVec,
@@ -1143,8 +1137,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     GuiButton target = matches.get(at);
-    int clickX = target.xPosition + target.width / 2;
-    int clickY = target.yPosition + target.height / 2;
+    int clickX = target.x + target.width / 2;
+    int clickY = target.y + target.height / 2;
     // A press alone leaves the button down: this line runs a button's action on release, so the
     // screen is given the whole click the way a real one arrives.
     invokeScreen(
@@ -1471,7 +1465,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     ItemStack stack = slots.get(index).getStack();
     // This line's stack has a count field and no emptiness test, and an empty slot holds null.
-    if (stack == null || stack.stackSize <= 0) {
+    if (stack == null || stack.getCount() <= 0) {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
@@ -1481,7 +1475,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     return new SlotInfo(
         false,
         MinecheckNames.modernId(itemId == null ? "" : itemId),
-        stack.stackSize,
+        stack.getCount(),
         nbt == null ? null : MinecheckNames.toMap(nbt));
   }
 
@@ -1576,7 +1570,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       // that window — so there is no time of day to re-assert yet.
       return;
     }
-    net.minecraft.world.WorldServer overworld = server.worldServerForDimension(0);
+    net.minecraft.world.WorldServer overworld = server.getWorld(0);
     if (overworld == null) {
       return;
     }
@@ -1599,7 +1593,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     pendingWorldOptions = null;
-    net.minecraft.world.WorldServer overworld = server.worldServerForDimension(0);
+    net.minecraft.world.WorldServer overworld = server.getWorld(0);
     if (overworld != null) {
       if (!options.mobSpawning()) {
         overworld.getGameRules().setOrCreateGameRule("doMobSpawning", "false");
@@ -1811,7 +1805,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     Minecraft client = mc();
     boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
-      client.ingameGUI.getChatGUI().clearChatMessages();
+      client.ingameGUI.getChatGUI().clearChatMessages(true);
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");
