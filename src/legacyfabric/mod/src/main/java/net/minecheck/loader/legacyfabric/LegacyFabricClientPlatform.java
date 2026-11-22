@@ -325,9 +325,29 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       client.getNetworkHandler().clearWorld();
     }
     // What vanilla's own "Save and Quit to Title" does: it drops the world and stops an integrated
-    // server through the client's own connection path.
+    // server through the client's own connection path. The chunk writer is drained first, because
+    // dropping the world closes the region files it is still writing into.
+    if (client.world != null && client.isIntegratedServerRunning()) {
+      flushChunkWrites();
+    }
     client.connect(null);
     client.setScreen(new TitleScreen());
+  }
+
+  /**
+   * Waits for the chunk writer to finish, so the region files are closed with nothing queued.
+   *
+   * <p>1.10.2 writes chunks on {@code FileIoThread}: the save returns once a chunk is queued, so a
+   * leave that dropped the world straight away closed the region underneath a write still in
+   * flight. The script's next join then found no {@code level.dat}, and CI — slower than the local
+   * disk — failed the rejoin phase, so the drain runs before the world is dropped.
+   */
+  private static void flushChunkWrites() {
+    try {
+      net.minecraft.util.FileIoThread.getInstance().waitUntilComplete();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   /** Set by {@link #quit()} and applied from the client tick. */
@@ -373,6 +393,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
           world.getChunkProvider().flushChunks();
         }
       }
+      flushChunkWrites();
       // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
       // path is what makes the integrated server write its chunks before it stops.
       client.connect(null);
