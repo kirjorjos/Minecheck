@@ -59,6 +59,7 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.Difficulty;
+import net.minecraft.world.GameMode;
 import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
 import org.lwjgl.input.Keyboard;
@@ -251,11 +252,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                     worldName,
                     worldName,
                     new LevelInfo(
-                        0L,
-                        LevelInfo.GameMode.SURVIVAL,
-                        false,
-                        false,
-                        LevelGeneratorType.DEFAULT)));
+                        0L, GameMode.SURVIVAL, false, false, LevelGeneratorType.DEFAULT)));
   }
 
   @Override
@@ -328,9 +325,29 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       client.getNetworkHandler().clearWorld();
     }
     // What vanilla's own "Save and Quit to Title" does: it drops the world and stops an integrated
-    // server through the client's own connection path.
+    // server through the client's own connection path. The chunk writer is drained first, because
+    // dropping the world closes the region files it is still writing into.
+    if (client.world != null && client.isIntegratedServerRunning()) {
+      flushChunkWrites();
+    }
     client.connect(null);
     client.setScreen(new TitleScreen());
+  }
+
+  /**
+   * Waits for the chunk writer to finish, so the region files are closed with nothing queued.
+   *
+   * <p>1.10.2 writes chunks on {@code FileIoThread}: the save returns once a chunk is queued, so a
+   * leave that dropped the world straight away closed the region underneath a write still in
+   * flight. The script's next join then found no {@code level.dat}, and CI — slower than the local
+   * disk — failed the rejoin phase, so the drain runs before the world is dropped.
+   */
+  private static void flushChunkWrites() {
+    try {
+      net.minecraft.util.FileIoThread.getInstance().waitUntilComplete();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   /** Set by {@link #quit()} and applied from the client tick. */
@@ -376,6 +393,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
           world.getChunkProvider().flushChunks();
         }
       }
+      flushChunkWrites();
       // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
       // path is what makes the integrated server write its chunks before it stops.
       client.connect(null);
@@ -1386,18 +1404,18 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     server.setDifficulty(difficulty(options.difficulty()));
   }
 
-  private static LevelInfo.GameMode gameMode(String name) {
+  private static GameMode gameMode(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "survival":
-        return LevelInfo.GameMode.SURVIVAL;
+        return GameMode.SURVIVAL;
       case "adventure":
-        return LevelInfo.GameMode.ADVENTURE;
+        return GameMode.ADVENTURE;
       case "spectator":
         // 1.7.10 predates spectator mode; adventure is the closest mode it has — no flight and no
         // ability to place blocks, which is what a spectator fixture relies on.
-        return LevelInfo.GameMode.ADVENTURE;
+        return GameMode.ADVENTURE;
       default:
-        return LevelInfo.GameMode.CREATIVE;
+        return GameMode.CREATIVE;
     }
   }
 

@@ -31,21 +31,20 @@ val mcNext =
 
 unimined.minecraft {
   version(mcVersion)
-  // No Mojang mappings this far back: 1.9.4 is mapped by MCP, and stable_26 is its mapping set.
+  // No Mojang mappings this far back: 1.10.2 is mapped by MCP, and stable_29 is its mapping set.
   // FG 2.x suffixes the mapping version with the game version, so the artifact is
-  // `mcp_stable:26-1.9.4`; without the suffix nothing publishes that coordinate. Forge resolves
+  // `mcp_stable:29-1.10.2`; without the suffix nothing publishes that coordinate. Forge resolves
   // its production members by SRG name, so the remapped jar is still checked by
   // `checkProductionJars`.
-  mappings { mcp("stable", "26-1.9.4") }
-  // 12.17.0.2051 is the newest 1.9.4 Forge build published to Maven. The promotions file calls
-  // 12.17.0.2317 the latest and recommended, but its userdev, installer and universal jars all
-  // answer 404 — nobody can install it — so the line pins the one a user can actually download.
-  minecraftForge { loader("12.17.0.2051") }
+  mappings { mcp("stable", "29-1.10.2") }
+  // 12.18.3.2511 is both the latest and recommended 1.10.2 build, and unlike 1.9.4's promoted
+  // build it publishes its universal, userdev and installer jars.
+  minecraftForge { loader("12.18.3.2511") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
 
-// Forge on 1.9.4 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
+// Forge on 1.10.2 is Java 8 and only Java 8, and it predates ModLauncher entirely: it loads mods
 // through FML. The repo compiles at 17, so this line's bytecode is downgraded to class file 52
 // (root build.gradle.kts, `minecheck.downgradeTo`) and the runs use a pinned JDK 8 build rather
 // than whichever one happens to be installed. The line also has no Mixin at all — Mixin only
@@ -53,7 +52,7 @@ unimined.minecraft {
 val runJavaVersion = providers.gradleProperty("minecheck.runJava").map(String::toInt).orElse(8)
 
 // The runs launch through the toolchain, not through a hand-set `executable`: Gradle rejects a
-// task that carries both, and unimined sets the launcher from `javaVersion`. 1.9.4 predates
+// task that carries both, and unimined sets the launcher from `javaVersion`. 1.10.2 predates
 // ModLauncher, so any Java 8 works here (the pinned build is for the ModLauncher-era lines).
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }

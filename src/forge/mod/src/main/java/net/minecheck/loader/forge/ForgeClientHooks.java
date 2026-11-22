@@ -45,7 +45,7 @@ public final class ForgeClientHooks {
     if (event.phase != TickEvent.Phase.START || !ForgeCameraPlatform.steering()) {
       return;
     }
-    EntityPlayerSP player = Minecraft.getMinecraft().thePlayer;
+    EntityPlayerSP player = Minecraft.getMinecraft().player;
     if (player == null) {
       return;
     }

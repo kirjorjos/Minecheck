@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.minecraft.nbt.NBTBase;
+import net.minecraft.nbt.NBTPrimitive;
 import net.minecraft.nbt.NBTTagByteArray;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagIntArray;
@@ -156,7 +157,7 @@ final class MinecheckNames {
 
   /** A numeric tag's value, or {@code 0} for anything else. */
   static double asDouble(NBTBase base) {
-    return base instanceof NBTBase.NBTPrimitive ? ((NBTBase.NBTPrimitive) base).getDouble() : 0.0;
+    return base instanceof NBTPrimitive ? ((NBTPrimitive) base).getDouble() : 0.0;
   }
 
   /** A compound as the documented map shape. */
@@ -175,17 +176,17 @@ final class MinecheckNames {
     }
     switch (base.getId()) {
       case 1:
-        return ((NBTBase.NBTPrimitive) base).getByte();
+        return ((NBTPrimitive) base).getByte();
       case 2:
-        return ((NBTBase.NBTPrimitive) base).getShort();
+        return ((NBTPrimitive) base).getShort();
       case 3:
-        return ((NBTBase.NBTPrimitive) base).getInt();
+        return ((NBTPrimitive) base).getInt();
       case 4:
-        return ((NBTBase.NBTPrimitive) base).getLong();
+        return ((NBTPrimitive) base).getLong();
       case 5:
-        return ((NBTBase.NBTPrimitive) base).getFloat();
+        return ((NBTPrimitive) base).getFloat();
       case 6:
-        return ((NBTBase.NBTPrimitive) base).getDouble();
+        return ((NBTPrimitive) base).getDouble();
       case 7:
         return numbers(((NBTTagByteArray) base).getByteArray());
       case 8:

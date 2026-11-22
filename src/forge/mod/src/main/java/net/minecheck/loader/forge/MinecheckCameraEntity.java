@@ -58,7 +58,6 @@ final class MinecheckCameraEntity extends EntityPlayer {
    * 1.9 also asks its player type whether it is in creative mode. The camera is not: a creative
    * player's reach and block breaking are applied by the server the camera never talks to.
    */
-  @Override
   public boolean isCreative() {
     return false;
   }
@@ -86,12 +85,12 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public void addChatMessage(ITextComponent message) {
+  public void sendMessage(ITextComponent message) {
     // Nothing is listening to the camera: it is a viewpoint, not a speaker.
   }
 
   @Override
-  public boolean canCommandSenderUseCommand(int permissionLevel, String command) {
+  public boolean canUseCommand(int permissionLevel, String command) {
     return false;
   }
 
