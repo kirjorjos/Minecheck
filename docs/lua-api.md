@@ -1873,6 +1873,31 @@ differences the game itself imposes:
 - Spectator mode and dual wielding exist; the item actions name the main hand. Item stacks carry
   `count` and NBT the way the newer lines do.
 
+### 1.11.2 (Forge, Legacy Fabric)
+
+This line ships on both loaders — Legacy Fabric's intermediary and yarn cover 1.11.2, so it returns
+here after the Forge-only 1.11 line — and carries the same Lua API this document describes, with the
+differences the game itself imposes:
+
+- `spawnStructure` places vanilla structure templates. A 1.13 name resolves to the file this line
+  ships under its pre-1.13 name (`minecraft:igloo/top` reads `igloo/igloo_top.nbt`), and the
+  template is stamped without its entities.
+- Content the line predates is refused by its registry: concrete, glazed terracotta and parrots
+  arrived in 1.12, so none resolves here. 1.11's own additions do: observers, shulker boxes,
+  llamas, vindicators, evokers, vexes, totems of undying, and iron and gold nuggets.
+- Item ids are strings while the item registry is keyed by `Identifier`: the platform wraps a
+  script's id, so `minecraft:diamond` resolves, and a numeric raw id still works.
+- Commands are rewritten before they reach this line's parser where its syntax differs: 1.13's
+  `gamemode=`/`limit=` selector arguments are translated to `m=`/`c=`, and `execute if block` /
+  `execute if entity`, `data get entity`, `tag` and a bare `/gamerule` query are answered by this
+  line's shim. `/fill`, `@s`, the six-argument teleport and `replaceitem` slots need no rewriting —
+  this line has them.
+- Block states exist here, so `getBlock` reports the block with its state; entity tags live in
+  Minecheck's own store because the `/tag` root arrives in 1.13.
+- Spectator mode and dual wielding exist; the item actions name the main hand. Item stacks carry
+  `count` and NBT the way the newer lines do.
+- `doWeatherCycle` exists here too, so deterministic runs turn it off on both loaders.
+
 Every action in this document is exercised end-to-end by a lifecycle suite on every loader the line ships — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.

@@ -22,12 +22,15 @@ include(":platform-api")
 
 project(":platform-api").projectDir = file("src/platform-api")
 
-// No Fabric here: Fabric's loader starts at 1.14. Legacy Fabric does not cover 1.11 either — it
-// publishes no 1.11 intermediary or yarn builds, so its 1.11 support starts at 1.11.2 — which is
-// why this line is Forge only, like 1.9. The Forge here predates Mixin, so its hooks are native FML
-// events.
+// No Fabric here: Fabric's loader starts at 1.14. Legacy Fabric is the intermediary family that
+// covers 1.11.2 — its first 1.11.x mappings — so this line carries it alongside Forge. The Forge
+// here predates Mixin, so its hooks are native FML events.
 include(":forge-mod")
 
 project(":forge-mod").projectDir = file("src/forge/mod")
+
+include(":legacyfabric-mod")
+
+project(":legacyfabric-mod").projectDir = file("src/legacyfabric/mod")
 
 includeBuild("src/plugin")
