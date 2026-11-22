@@ -239,8 +239,8 @@ final class LegacyCommandShim {
     if (!match.matches() || world == null) {
       return null;
     }
-    // A rule this line does not have reads as "off": 1.9 predates doWeatherCycle and doInsomnia,
-    // and the suite's question is only ever "is it disabled".
+    // A rule this line does not have reads as "off": 1.11 has doWeatherCycle but predates
+    // doInsomnia, and the suite's question is only ever "is it disabled".
     // stable_20 names the read `getString`, and has no null return: a rule this line does not have
     // would read as an empty string, so it is asked for explicitly first.
     if (!world.getGameRules().hasRule(match.group(1))) {

@@ -122,7 +122,7 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   private WorldServer overworld() {
-    WorldServer level = requireServer().worldServerForDimension(0);
+    WorldServer level = requireServer().getWorld(0);
     if (level == null) {
       throw new IllegalStateException("overworld not available yet");
     }
@@ -168,7 +168,7 @@ public class ForgeServerPlatform implements ServerPlatform {
           MinecraftServer s = requireServer();
           String line =
               LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command);
-          WorldServer world = s.worldServerForDimension(0);
+          WorldServer world = s.getWorld(0);
           Integer rule = LegacyCommandShim.gameruleValue(world, line);
           if (rule != null) {
             return rule;
@@ -219,11 +219,11 @@ public class ForgeServerPlatform implements ServerPlatform {
         () -> {
           WorldServer level = overworld();
           net.minecraft.world.GameRules rules = level.getGameRules();
-          // doWeatherCycle arrives in 1.11; this line knows no such rule and creates nothing for
-          // it.
-          // Weather is pinned by the run's own clock instead.
+          // doWeatherCycle arrives in 1.11, so this line has it to turn off; doInsomnia is still
+          // four versions away and is created by nobody.
           rules.setOrCreateGameRule("doMobSpawning", "false");
           rules.setOrCreateGameRule("doDaylightCycle", "false");
+          rules.setOrCreateGameRule("doWeatherCycle", "false");
           return null;
         });
   }
@@ -293,7 +293,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     return onServerThread(
         () -> {
-          WorldServer level = s.worldServerForDimension(0);
+          WorldServer level = s.getWorld(0);
           if (level == null) {
             return false;
           }
