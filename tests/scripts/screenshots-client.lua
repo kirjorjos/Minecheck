@@ -140,6 +140,17 @@ minecheck.expect(minecheck.waitFor(minecheck.worldGenSettled, 120), "world gener
 -- The surface height is the world's, not a constant: 1.18's flat preset tops out at -60, while
 -- 1.16.5 has no negative Y at all — its flat surface is the top of the layer list, measured here from
 -- the player the world spawned standing on it.
+local lastY
+minecheck.waitFor(function()
+  -- A fresh world drops the player a little above the surface, and the fall's last fraction can
+  -- still be on the clock when the generation wait ends: flooring 3.9 names the block inside the
+  -- floor, so the pinned spot differed between two runs of the same scene. Wait for the height to
+  -- hold across a tick before reading it.
+  local y = minecheck.getPlayer().pos.y
+  local held = lastY ~= nil and y == lastY
+  lastY = y
+  return held
+end, 10)
 local SURFACE_Y = math.floor(minecheck.getPlayer().pos.y)
 
 local function atPinnedSpot()
