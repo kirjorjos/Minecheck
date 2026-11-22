@@ -885,12 +885,11 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (hit == null || hit.type != BlockHitResult.Type.BLOCK) {
       return;
     }
-    // Yarn 1.9.4 leaves the block right-click unnamed too; `method_12232` is its mapped name and
-    // the trailing hand is the one 1.9 added.
-    client.interactionManager.method_12232(
+    // Yarn leaves the block right-click unnamed; `method_13842` is its mapped name. 1.11 dropped
+    // the held stack from the arguments, so the hand alone says which item is used.
+    client.interactionManager.method_13842(
         player,
         client.world,
-        player.getStackInHand(net.minecraft.util.Hand.MAIN_HAND),
         hit.getBlockPos(),
         hit.direction,
         hit.pos,
@@ -1271,8 +1270,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
           "slot index " + index + " out of range (0.." + (slots.size() - 1) + ")");
     }
     ItemStack stack = slots.get(index).getStack();
-    // This line's stack has a count field and no emptiness test, and an empty slot holds null.
-    if (stack == null || stack.count <= 0) {
+    // This line's stack exposes its count through a getter, and an empty slot holds null.
+    if (stack == null || stack.getCount() <= 0) {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
@@ -1282,7 +1281,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     return new SlotInfo(
         false,
         LegacyFabricNbt.modernId(itemId == null ? "" : itemId),
-        stack.count,
+        stack.getCount(),
         nbt == null ? null : LegacyFabricNbt.toMap(nbt));
   }
 
@@ -1600,7 +1599,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     MinecraftClient client = mc();
     boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
-      client.inGameHud.getChatHud().clear();
+      client.inGameHud.getChatHud().clear(true);
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");

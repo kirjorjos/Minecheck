@@ -22,7 +22,7 @@ unimined.minecraft {
   // cover this line: upstream intermediary starts at 1.14.
   mappings {
     legacyIntermediary()
-    // 604 is the newest legacy yarn build for 1.10.2 (meta.legacyfabric.net/v2/versions/yarn).
+    // 604 is the newest legacy yarn build for 1.11.2 (meta.legacyfabric.net/v2/versions/yarn).
     legacyYarn(604)
   }
   // 0.20.1 is the newest loader release that still supports 1.12.2.
@@ -121,7 +121,7 @@ if (dhServerSetupDir != null) {
     }
 }
 
-// 1.10.2 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the
+// 1.11.2 runs on LWJGL 2, whose native libraries are not on the run classpath by default: the
 // client dies with "no lwjgl64 in java.library.path" before it can open a window. Extract them from
 // the published natives artefact and point the client's library path at the directory.
 val lwjgl2Natives by configurations.creating
