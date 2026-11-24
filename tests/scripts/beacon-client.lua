@@ -355,7 +355,10 @@ local redstoneReady = minecheck.waitFor(function()
     end
   end
   return false
-end, 30)
+  -- 90 s, not 30: the give is one server tick's work, but the chest's container sync and this
+  -- client's own phase can both trail a loaded runner by a long way, and a give window that is
+  -- merely tight reads as a missing item and fails the run.
+end, 90)
 check(redstoneReady, "server gave the 8-redstone stack (in the hotbar)")
 local partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
 if not partial then
@@ -444,7 +447,7 @@ minecheck.runCommand("give @s minecraft:oak_planks 4")
 check(
   minecheck.waitFor(function()
     return countInContainer("minecraft:oak_planks") == 4
-  end, 30),
+  end, 90),
   "server gave 4 oak planks"
 )
 

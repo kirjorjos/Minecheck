@@ -1,7 +1,6 @@
 package net.minecheck.loader.legacyfabric;
 
 import java.util.logging.Logger;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecheck.common.config.AudioPolicy;
 
 /**
@@ -27,7 +26,7 @@ public final class LegacySilentSound {
 
   /** The config's answer, read through the same cached policy the other loaders use. */
   static boolean muted() {
-    return AudioPolicy.muted(FabricLoader.getInstance().getConfigDir());
+    return AudioPolicy.muted(LegacyFabricLoaders.get().getConfigDir());
   }
 
   /** Whether one play should be dropped. Answers the mixin's question and reports once. */

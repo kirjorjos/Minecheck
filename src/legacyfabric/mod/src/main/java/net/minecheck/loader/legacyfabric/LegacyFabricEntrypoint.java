@@ -58,7 +58,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
   public void onInitialize() {
     instance = this;
 
-    FabricLoader loader = FabricLoader.getInstance();
+    FabricLoader loader = LegacyFabricLoaders.get();
     // Absolute, because this loader answers with a relative `config` on this line: a relative
     // config dir makes the run directory derived from it relative too, so the dedicated server's
     // staged save was copied beside the config instead of into the run directory and the server
@@ -129,7 +129,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
 
           @Override
           public boolean isModLoaded(String modId) {
-            return FabricLoader.getInstance().isModLoaded(modId);
+            return LegacyFabricLoaders.get().isModLoaded(modId);
           }
         };
 
