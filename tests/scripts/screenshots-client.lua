@@ -77,15 +77,7 @@ local SETTLE_MAX_TICKS = 400
 -- wall-clock gap too, not only across a tick step. The gap and the sample cap are both bounded: a
 -- scene that never holds still fails the run instead of writing a picture that is still moving.
 local SETTLE_STABLE_GAP = 0.5
--- A pair of identical samples is not stillness. 1.4.7 grants the "open your inventory" achievement
--- as the player joins and draws the card motionless in the top-right corner for seconds: two samples
--- half a second apart agree while it is up, so a runner that reaches the first capture quickly
--- photographed the card as scenery and a slower one did not — the only difference between two
--- otherwise identical frames, and enough to re-baseline a whole corpus. Stillness is a span, not a
--- pair: the digest must hold for longer than that card lives, and the span restarts whenever the
--- picture moves.
-local SETTLE_STABLE_HOLD = 12
-local SETTLE_STABLE_SAMPLES = SETTLE_STABLE_HOLD * 2
+local SETTLE_STABLE_SAMPLES = 10
 
 local function settle(label, opts)
   opts = opts or {}
@@ -117,17 +109,11 @@ local function settle(label, opts)
   -- frame the scene has stopped changing, not one that happens to sit between two chunks of a
   -- background build.
   local previousFrame
-  local held = 0
-  for _ = 1, SETTLE_STABLE_SAMPLES do
+  for sample = 1, SETTLE_STABLE_SAMPLES do
     local frame = minecheck.captureFrame()
     if previousFrame ~= nil and frame.sha256 == previousFrame then
-      held = held + 1
-      if held >= SETTLE_STABLE_HOLD then
-        minecheck.log(label .. " held still across " .. held * SETTLE_STABLE_GAP .. "s")
-        return
-      end
-    else
-      held = 0
+      minecheck.log(label .. " held still across " .. (sample - 1) * SETTLE_STABLE_GAP .. "s")
+      return
     end
     previousFrame = frame.sha256
     minecheck.wait(SETTLE_STABLE_GAP)

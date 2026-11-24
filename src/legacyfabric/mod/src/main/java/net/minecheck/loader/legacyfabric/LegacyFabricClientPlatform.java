@@ -1800,12 +1800,64 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
             .toAbsolutePath());
   }
 
+  /**
+   * Drops the achievement card 1.4.7 pops into the corner, which is otherwise part of the picture.
+   *
+   * <p>The card stays up while it slides and fades, so a capture that lands inside that window
+   * writes it into the scene while a run that got there later does not — it was the only difference
+   * between two otherwise identical frames, and enough to make the corpus disagree with itself.
+   * None of these classes or fields got MCP names on this line, so they are found structurally: the
+   * popup under the in-game HUD, then its single achievement, the queue behind it and its timer.
+   */
+  private static void clearAchievementCard(Object hud) {
+    if (hud == null) {
+      return;
+    }
+    try {
+      for (Class<?> type = hud.getClass(); type != null; type = type.getSuperclass()) {
+        for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+          if (!field.getType().getSimpleName().equals("GuiAchievement")) {
+            continue;
+          }
+          field.setAccessible(true);
+          clearAchievementState(field.get(hud));
+        }
+      }
+    } catch (ReflectiveOperationException | RuntimeException ignored) {
+      // Nothing to clear on a version that has no such card.
+    }
+  }
+
+  /** Empties one popup: its achievement, the queue of ones still to show, and its timer. */
+  private static void clearAchievementState(Object card) throws ReflectiveOperationException {
+    if (card == null) {
+      return;
+    }
+    for (Class<?> type = card.getClass(); type != null; type = type.getSuperclass()) {
+      for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+        if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+          continue;
+        }
+        field.setAccessible(true);
+        Object value = field.get(card);
+        if (value instanceof java.util.Collection) {
+          ((java.util.Collection<?>) value).clear();
+        } else if (field.getType().getSimpleName().equals("Achievement")) {
+          field.set(card, null);
+        } else if (field.getType() == int.class) {
+          field.setInt(card, 0);
+        }
+      }
+    }
+  }
+
   /** One attempt at a capture, on the client thread. */
   private void captureScreenshot(ScreenshotRequest request, boolean write) {
     Minecraft client = mc();
     boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
       client.inGameHud.getChatHud().clear();
+      clearAchievementCard(client.inGameHud);
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");
