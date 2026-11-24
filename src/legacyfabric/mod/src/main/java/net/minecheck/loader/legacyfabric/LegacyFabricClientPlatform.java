@@ -285,24 +285,32 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     if (isClientThread()) {
       return action.get();
     }
-    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
+    // A latch rather than a future: on Java 7 JvmDowngrader rewrites `CompletableFuture` to a stub
+    // that only carries the static factories, so `new CompletableFuture<>()` does not survive the
+    // downgrade.
+    Object[] value = new Object[1];
+    Throwable[] failure = new Throwable[1];
+    java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
     CLIENT_TASKS.add(
         () -> {
           try {
-            done.complete(action.get());
+            value[0] = action.get();
           } catch (Throwable t) {
-            done.completeExceptionally(t);
+            failure[0] = t;
+          } finally {
+            done.countDown();
           }
         });
     try {
-      return done.get(10, java.util.concurrent.TimeUnit.SECONDS);
-    } catch (java.util.concurrent.TimeoutException e) {
-      throw new IllegalStateException("the client did not reach the screen read in time", e);
+      if (!done.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the client did not reach the screen read in time");
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("interrupted while waiting for the client", e);
-    } catch (java.util.concurrent.ExecutionException e) {
-      Throwable cause = e.getCause();
+    }
+    Throwable cause = failure[0];
+    if (cause != null) {
       if (cause instanceof RuntimeException) {
         throw (RuntimeException) cause;
       }
@@ -311,6 +319,9 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
       }
       throw new IllegalStateException(cause);
     }
+    @SuppressWarnings("unchecked")
+    T result = (T) value[0];
+    return result;
   }
 
   @Override

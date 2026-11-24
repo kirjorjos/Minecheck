@@ -5,11 +5,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.EntityInfo;
@@ -88,24 +86,32 @@ public class LegacyFabricServerPlatform extends ServerPlatformBase {
     if (thread == null || thread == Thread.currentThread()) {
       return action.get();
     }
-    CompletableFuture<T> done = new CompletableFuture<>();
+    // A latch rather than a future: on Java 7 JvmDowngrader rewrites `CompletableFuture` to a stub
+    // that only carries the static factories, so `new CompletableFuture<>()` does not survive the
+    // downgrade.
+    Object[] value = new Object[1];
+    Throwable[] failure = new Throwable[1];
+    CountDownLatch done = new CountDownLatch(1);
     pending.add(
         () -> {
           try {
-            done.complete(action.get());
+            value[0] = action.get();
           } catch (Throwable t) {
-            done.completeExceptionally(t);
+            failure[0] = t;
+          } finally {
+            done.countDown();
           }
         });
     try {
-      return done.get(WAIT_SECONDS, TimeUnit.SECONDS);
-    } catch (TimeoutException e) {
-      throw new IllegalStateException("the server did not reach the action in time", e);
+      if (!done.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the server did not reach the action in time");
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("interrupted while waiting for the server", e);
-    } catch (ExecutionException e) {
-      Throwable cause = e.getCause();
+    }
+    Throwable cause = failure[0];
+    if (cause != null) {
       if (cause instanceof RuntimeException) {
         throw (RuntimeException) cause;
       }
@@ -114,6 +120,9 @@ public class LegacyFabricServerPlatform extends ServerPlatformBase {
       }
       throw new IllegalStateException(cause);
     }
+    @SuppressWarnings("unchecked")
+    T result = (T) value[0];
+    return result;
   }
 
   private ServerWorld overworld() {
