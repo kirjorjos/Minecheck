@@ -258,7 +258,10 @@ tasks.shadowJar {
   // writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
   exclude("com/mojang/brigadier/**")
-  exclude("com/google/gson/**")
+  // gson is not excluded here, unlike the Forge module: 1.4.7's jar has no gson and the Legacy
+  // Fabric launcher adds none, so the copy above (2.2.2, the version the game ships on the lines
+  // that do carry it) has to ride along. Without it the entrypoint dies on the first class that
+  // touches `com.google.gson` — the boot arm caught exactly that with JsonSyntaxException.
   exclude("com/google/errorprone/**")
   exclude("net/minecraft/**")
   exclude("net/legacyfabric/**")

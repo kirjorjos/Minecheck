@@ -9,6 +9,7 @@ import java.util.logging.Logger;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.loader.api.ModContainer;
 import net.minecheck.common.bootstrap.MinecheckBootstrap;
 import net.minecheck.common.script.ScriptEngine;
 import net.minecheck.common.tick.TickClock;
@@ -65,12 +66,19 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     // generated a world of its own.
     Path configDir = loader.getConfigDir().toAbsolutePath().normalize();
     // Read from the loader rather than a constant: a hardcoded version silently reports the wrong
-    // one the moment this build supports another Minecraft version.
-    String mcVersion =
-        loader
-            .getModContainer("minecraft")
-            .map(container -> container.getMetadata().getVersion().getFriendlyString())
-            .orElse("1.12.2");
+    // one the moment this build supports another Minecraft version. Walked rather than asked for by
+    // id: `getModContainer` answers with an `Optional`, and this line's downgrade rewrites that
+    // call to the stub `Optional` while the loader's own jar still returns `java.util.Optional` —
+    // the runtime then dies with NoSuchMethodError on the erasure (the boot arm found exactly
+    // that). `getAllMods` has no newer-than-Java-7 type in its signature.
+    String found = "1.12.2";
+    for (ModContainer container : loader.getAllMods()) {
+      if ("minecraft".equals(container.getMetadata().getId())) {
+        found = container.getMetadata().getVersion().getFriendlyString();
+        break;
+      }
+    }
+    final String mcVersion = found;
 
     dedicated = loader.getEnvironmentType() == EnvType.SERVER;
     // Both sides have a server platform: a dedicated server answers every server-side action with
