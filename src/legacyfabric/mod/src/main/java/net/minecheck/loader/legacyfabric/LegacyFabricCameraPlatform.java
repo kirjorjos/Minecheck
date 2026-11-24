@@ -12,7 +12,7 @@ import net.minecheck.common.config.CameraPolicy;
 import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.config.JsonConfigManager;
 import net.minecheck.platform.api.CameraPlatform;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.Input;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
@@ -107,8 +107,8 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
         && mc().currentScreen == null;
   }
 
-  private static MinecraftClient mc() {
-    return MinecraftClient.getInstance();
+  private static Minecraft mc() {
+    return Minecraft.getMinecraft();
   }
 
   @Override
@@ -155,8 +155,8 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
     if (camera == null) {
       return;
     }
-    MinecraftClient mc = mc();
-    ControllablePlayerEntity player = mc.field_3805;
+    Minecraft mc = mc();
+    ControllablePlayerEntity player = mc.playerEntity;
     if (player == null || mc.world == null || camera.world != mc.world) {
       detach();
       return;
@@ -173,7 +173,7 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
     }
     // Re-asserted every tick: the renderer's view entity is read fresh each frame, and a respawn or
     // a dimension change may have pointed it somewhere else since the last tick.
-    mc.field_6279 = camera;
+    mc.cameraEntity = camera;
     steer(player, allowed);
     CameraPose moved = controller.tick(inputs(player), allowed);
     if (moved != null) {
@@ -259,8 +259,8 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
   }
 
   private void attach() {
-    MinecraftClient mc = mc();
-    ControllablePlayerEntity player = mc.field_3805;
+    Minecraft mc = mc();
+    ControllablePlayerEntity player = mc.playerEntity;
     ClientWorld level = mc.world;
     if (player == null || level == null) {
       LOG.info("Minecheck: the camera cannot attach before the client is in a world");
@@ -275,13 +275,13 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
       return;
     }
     LegacyCameraEntity entity = new LegacyCameraEntity(level);
-    entity.setEntityId(CAMERA_ENTITY_ID);
+    entity.id = CAMERA_ENTITY_ID;
     // Placed before the first publish so the old position is the camera's, not the origin: without
     // this the first rendered frame would interpolate the camera in from 0,0,0.
     entity.updatePosition(start.x(), start.y(), start.z());
     place(entity, start);
     level.spawnEntity(entity);
-    mc.field_6279 = entity;
+    mc.cameraEntity = entity;
     camera = entity;
     LOG.info(
         String.format(
@@ -293,10 +293,10 @@ public final class LegacyFabricCameraPlatform implements CameraPlatform {
     LegacyCameraEntity entity = camera;
     camera = null;
     controller.detach();
-    MinecraftClient mc = mc();
+    Minecraft mc = mc();
     if (entity != null) {
-      if (mc.field_6279 == entity) {
-        mc.field_6279 = mc.field_3805;
+      if (mc.cameraEntity == entity) {
+        mc.cameraEntity = mc.playerEntity;
       }
       entity.removed = true;
     }

@@ -221,6 +221,23 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getScreenshotChatVisible();
 
   /**
+   * The UI language the screenshot profile pins (default {@code en_us}).
+   *
+   * <p>Not one spelling for every line: 1.4.7 ships its language file as {@code en_US.lang} and
+   * resolves the option against that name, so a task on that line pins {@code en_US}. Pinning the
+   * newer lowercase code there left the client's language resource unresolved — a {@code
+   * NullPointerException} out of {@code StringTranslate.loadLanguage} during startup, before the
+   * capture pass drew a frame.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getLanguageName();
+
+  private String languageName() {
+    return getLanguageName().getOrElse("en_us");
+  }
+
+  /**
    * The camera mode the run boots with (default {@code "off"}). The client-features suites set
    * {@code "assist"} so the camera is installed; a lifecycle run has no human at the controls, so
    * only Lua drives it.
@@ -875,7 +892,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       options.append("skipMultiplayerWarning:true\n");
       options.append("joinedFirstServer:true\n");
       // The system locale would otherwise pick the UI language.
-      options.append("lang:en_us\n");
+      options.append("lang:").append(languageName()).append('\n');
     }
     Files.writeString(runDir.resolve("options.txt"), options.toString());
     getLogger()

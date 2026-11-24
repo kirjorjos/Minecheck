@@ -1,68 +1,87 @@
 package net.minecheck.loader.forge;
 
 import cpw.mods.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.network.IPacketHandler;
 import cpw.mods.fml.common.network.NetworkRegistry;
-import cpw.mods.fml.common.network.simpleimpl.IMessage;
-import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
-import cpw.mods.fml.common.network.simpleimpl.MessageContext;
-import cpw.mods.fml.common.network.simpleimpl.SimpleNetworkWrapper;
+import cpw.mods.fml.common.network.PacketDispatcher;
+import cpw.mods.fml.common.network.Player;
 import cpw.mods.fml.relauncher.Side;
-import io.netty.buffer.ByteBuf;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.net.MinecheckPacket;
-import net.minecheck.platform.api.net.NetworkPlatform;
+import net.minecheck.platform.api.net.NetworkPlatformBase;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.network.INetworkManager;
+import net.minecraft.network.packet.Packet;
+import net.minecraft.network.packet.Packet250CustomPayload;
 import net.minecraft.server.MinecraftServer;
 
 /**
- * Forge transport over an FML {@code SimpleNetworkWrapper}.
+ * Forge transport on a 1.4.7 custom-payload channel.
  *
- * <p>One channel carries both directions, with one message index per direction. FML has a single
- * receiver per channel per direction, which is why {@link #observeChannel} cannot piggyback on it:
- * watching another mod's channel needs a lower-level tap — {@link ForgeClientChannelTap} on a
- * client, {@link ForgeServerChannelTap} on a dedicated server.
+ * <p>This line has no SimpleNetworkWrapper and no netty: a mod channel is a {@link
+ * Packet250CustomPayload} registered with {@link NetworkRegistry}, and every registered handler for
+ * a channel receives every payload on it. That last part is what makes {@link #observeChannel}
+ * possible without a pipeline tap: an observer is just another handler on the channel, registered
+ * beside whichever mod already owns it.
  *
- * <p>Messages arrive on the netty thread. This line's server has no task queue to hand work to, so
- * an inbound frame is parked and drained from the server tick by {@link #drainServerTasks()}, the
- * same marshaling the Legacy Fabric transport uses. The client does have one ({@code
- * Minecraft.addScheduledTask}) and uses it.
+ * <p>1.4.7 processes packets on the game thread itself — the client's read loop runs inside the
+ * client tick and the server's inside the server tick — so delivery needs no marshaling. The queue
+ * below is only a safety net for a handler invoked from a network thread during login.
  */
-public class ForgeNetworkPlatform implements NetworkPlatform {
+public class ForgeNetworkPlatform extends NetworkPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
-  private static final String CHANNEL_NAME = "minecheck:main";
 
-  /** The process's one network platform; FML's message handlers are instantiated by reflection. */
+  /** 1.4.7 caps a custom-payload channel name at 20 bytes; this one is 14. */
+  static final String CHANNEL_NAME = "minecheck:main";
+
+  /** The process's one network platform; the registered handler reaches it through this. */
   private static volatile Consumer<MinecheckPacket> sink = packet -> {};
 
-  /** Frames waiting for the server thread, drained at the end of each server tick. */
+  /** Frames waiting for the game thread, drained at the end of each server tick. */
   private static final ConcurrentLinkedQueue<Runnable> SERVER_TASKS = new ConcurrentLinkedQueue<>();
 
   private final boolean dedicated;
-  private final boolean registered;
-  private volatile SimpleNetworkWrapper channel;
+  private volatile boolean registered;
 
   public ForgeNetworkPlatform(boolean dedicated) {
     this.dedicated = dedicated;
-    boolean ok;
+  }
+
+  /**
+   * Registers the channel.
+   *
+   * <p>Called when the receiver is bound, because a channel nothing registered cannot receive: the
+   * first script to touch the channel on a client is usually a {@code waitForPacket}, not a send,
+   * and registering only on send meant the client was not listening when the dedicated server's cue
+   * went out. Both halves then waited on each other until their timeouts.
+   *
+   * <p>The registration used to be deferred because FML exchanges REGISTER packets as a world
+   * loads, and 1.4.7's client-side handler casts the client player to FML's {@code Player}
+   * interface, which only the server player implemented — the load died with a ClassCastException.
+   * That interface is now added to both player classes (see {@code addInterface} in the build), so
+   * the exchange is safe.
+   */
+  private synchronized boolean register() {
+    if (registered) {
+      return true;
+    }
     try {
-      SimpleNetworkWrapper net = NetworkRegistry.INSTANCE.newSimpleChannel(CHANNEL_NAME);
-      net.registerMessage(HandlerC2S.class, MinecheckC2SMessage.class, 0, Side.SERVER);
-      net.registerMessage(HandlerS2C.class, MinecheckS2CMessage.class, 1, Side.CLIENT);
-      this.channel = net;
-      ok = true;
+      NetworkRegistry registry = NetworkRegistry.instance();
+      registry.registerChannel(new Receiver(), CHANNEL_NAME, dedicated ? Side.SERVER : Side.CLIENT);
+      registered = true;
     } catch (RuntimeException e) {
       LOG.severe(
           String.format("Minecheck: failed to register the %s channel: %s", CHANNEL_NAME, e));
-      ok = false;
     }
-    this.registered = ok;
+    return registered;
   }
 
   private static MinecraftServer server() {
@@ -71,7 +90,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
 
   @Override
   public boolean isAvailable() {
-    if (!registered) {
+    if (!register()) {
       return false;
     }
     if (dedicated) {
@@ -85,16 +104,17 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     if (!isAvailable()) {
       return false;
     }
-    byte[] payload = new MinecheckPacket(name, args).encode();
+    byte[] payload = envelope(new MinecheckPacket(name, args).encode());
     try {
+      Packet packet = PacketDispatcher.getPacket(CHANNEL_NAME, payload);
       if (dedicated) {
-        MinecraftServer server = server();
-        if (server == null || server.getConfigurationManager().getCurrentPlayerCount() == 0) {
+        MinecraftServer current = server();
+        if (current == null || current.getConfigurationManager().getCurrentPlayerCount() == 0) {
           return false;
         }
-        channel.sendToAll(new MinecheckS2CMessage(payload));
+        current.getConfigurationManager().sendPacketToAllPlayers(packet);
       } else {
-        channel.sendToServer(new MinecheckC2SMessage(payload));
+        PacketDispatcher.sendPacketToServer(packet);
       }
       return true;
     } catch (RuntimeException e) {
@@ -106,20 +126,21 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
 
   @Override
   public boolean sendTo(String playerName, String name, List<PacketValue> args) {
-    if (!registered || !dedicated) {
+    if (!register() || !dedicated) {
       return false;
     }
-    MinecraftServer server = server();
-    if (server == null) {
+    MinecraftServer current = server();
+    if (current == null) {
       return false;
     }
-    EntityPlayerMP player = server.getConfigurationManager().getPlayerByUsername(playerName);
+    EntityPlayerMP player = current.getConfigurationManager().getPlayerForUsername(playerName);
     if (player == null) {
       return false;
     }
-    byte[] payload = new MinecheckPacket(name, args).encode();
+    byte[] payload = envelope(new MinecheckPacket(name, args).encode());
     try {
-      channel.sendTo(new MinecheckS2CMessage(payload), player);
+      player.playerNetServerHandler.sendPacketToPlayer(
+          PacketDispatcher.getPacket(CHANNEL_NAME, payload));
       return true;
     } catch (RuntimeException e) {
       LOG.warning(
@@ -133,24 +154,41 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
   @Override
   public void setReceiver(Consumer<MinecheckPacket> receiver) {
     sink = receiver;
+    // Bound at startup by the composition root, on both sides: this is the earliest point at which
+    // packets are meant to arrive, so it is where the channel has to be live.
+    register();
   }
 
   /**
-   * A frame tap is installed instead of a channel receiver, because on Forge the tap sits
-   * <em>below</em> the channel: it copies each decoded custom payload's bytes as they pass, so it
-   * can observe a channel that another mod (or Minecheck's own transport) already receives.
+   * Adds a handler beside whichever mod already owns {@code channel}. 1.4.7 keeps handlers in a
+   * multimap and hands every payload to all of them, so an observer never steals the channel.
    */
   @Override
   public boolean observeChannel(String channel, Consumer<byte[]> observer) {
     try {
-      return dedicated
-          ? ForgeServerChannelTap.observe(channel, observer)
-          : ForgeClientChannelTap.observe(channel, observer);
+      return ForgeChannelTaps.observe(channel, observer, dedicated);
     } catch (RuntimeException e) {
       LOG.warning(
           String.format("Minecheck: failed to observe channel %s: %s", channel, String.valueOf(e)));
       return false;
     }
+  }
+
+  /**
+   * Puts the frame behind the leading message index a Forge payload carries.
+   *
+   * <p>SimpleChannel writes a VarInt message index before the message, so anything watching a Forge
+   * channel — a frame tap, another mod's handler — reads that index first and then the frame. This
+   * line has no SimpleChannel: a custom payload is whatever the sender put in it, which made the
+   * 1.4.7 wire one byte shorter than the same frame on 1.7.10 and a tap decoding it came out one
+   * byte off (it read the frame's first discriminator byte as the index). Writing the index this
+   * line never uses — zero — keeps the frame identical to see on both lines; it costs one byte per
+   * packet and {@link Receiver} removes it again.
+   */
+  private static byte[] envelope(byte[] frame) {
+    byte[] payload = new byte[frame.length + 1];
+    System.arraycopy(frame, 0, payload, 1, frame.length);
+    return payload;
   }
 
   private static void deliver(byte[] payload) {
@@ -180,83 +218,18 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     }
   }
 
-  /** Server-side receiver: netty thread into the server thread, which has no task queue here. */
-  public static final class HandlerC2S implements IMessageHandler<MinecheckC2SMessage, IMessage> {
+  /** The receiving end of Minecheck's own channel. */
+  public static final class Receiver implements IPacketHandler {
 
     @Override
-    public IMessage onMessage(MinecheckC2SMessage message, MessageContext ctx) {
-      final byte[] payload = message.payload();
-      SERVER_TASKS.add(() -> deliver(payload));
-      return null;
-    }
-  }
-
-  /** Client-side receiver: netty thread into the client thread. */
-  public static final class HandlerS2C implements IMessageHandler<MinecheckS2CMessage, IMessage> {
-
-    @Override
-    public IMessage onMessage(MinecheckS2CMessage message, MessageContext ctx) {
-      final byte[] payload = message.payload();
-      Minecraft client = Minecraft.getMinecraft();
-      if (client == null) {
-        return null;
+    public void onPacketData(
+        INetworkManager manager, Packet250CustomPayload packet, Player player) {
+      if (packet == null || packet.data == null) {
+        return;
       }
-      client.addScheduledTask(() -> deliver(payload));
-      return null;
-    }
-  }
-
-  /** Client → server message: just the encoded {@link MinecheckPacket} frame. */
-  public static final class MinecheckC2SMessage implements IMessage {
-
-    private byte[] payload;
-
-    public MinecheckC2SMessage() {}
-
-    public MinecheckC2SMessage(byte[] payload) {
-      this.payload = payload;
-    }
-
-    public byte[] payload() {
-      return payload;
-    }
-
-    @Override
-    public void fromBytes(ByteBuf buf) {
-      payload = new byte[buf.readableBytes()];
-      buf.readBytes(payload);
-    }
-
-    @Override
-    public void toBytes(ByteBuf buf) {
-      buf.writeBytes(payload);
-    }
-  }
-
-  /** Server → client message: just the encoded {@link MinecheckPacket} frame. */
-  public static final class MinecheckS2CMessage implements IMessage {
-
-    private byte[] payload;
-
-    public MinecheckS2CMessage() {}
-
-    public MinecheckS2CMessage(byte[] payload) {
-      this.payload = payload;
-    }
-
-    public byte[] payload() {
-      return payload;
-    }
-
-    @Override
-    public void fromBytes(ByteBuf buf) {
-      payload = new byte[buf.readableBytes()];
-      buf.readBytes(payload);
-    }
-
-    @Override
-    public void toBytes(ByteBuf buf) {
-      buf.writeBytes(payload);
+      final byte[] payload = packet.data;
+      // The leading message index belongs to the envelope, not to the frame (see envelope()).
+      deliver(payload.length == 0 ? payload : Arrays.copyOfRange(payload, 1, payload.length));
     }
   }
 }

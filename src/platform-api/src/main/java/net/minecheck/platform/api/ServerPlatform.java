@@ -115,7 +115,5 @@ public interface ServerPlatform {
    * applicable" since a running server always has its world generated. Called on the server thread;
    * fresh poll each tick.
    */
-  default boolean isWorldGenSettled() {
-    return true;
-  }
+  boolean isWorldGenSettled();
 }

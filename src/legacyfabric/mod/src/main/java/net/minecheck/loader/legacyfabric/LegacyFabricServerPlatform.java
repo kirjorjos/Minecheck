@@ -13,7 +13,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.EntityInfo;
-import net.minecheck.platform.api.ServerPlatform;
+import net.minecheck.platform.api.ServerPlatformBase;
 import net.minecraft.block.Block;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
@@ -22,7 +22,6 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.StringNbtReader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
@@ -40,7 +39,7 @@ import net.minecraft.util.math.BlockPos;
  * what a caller waiting on the answer pays; it is bounded by {@link #WAIT_SECONDS} so a stopped
  * server reports an error instead of hanging the caller for ever.
  */
-public class LegacyFabricServerPlatform implements ServerPlatform {
+public class LegacyFabricServerPlatform extends ServerPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
@@ -148,10 +147,10 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
       return new NbtCompound();
     }
     try {
-      // This line's reader keeps its entry point under an unmapped name; it answers the same
-      // element the newer lines' `parse` does.
-      return (NbtCompound) StringNbtReader.method_7377(nbt);
-    } catch (Exception e) {
+      // The script bridge hands over SNBT (`{NoAI:true}`), whose keys are unquoted; the reader
+      // accepts both forms.
+      return LegacyJsonToNbt.parseSnbt(nbt);
+    } catch (RuntimeException e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
   }
@@ -184,8 +183,61 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
           if (conditional != null) {
             return conditional;
           }
-          return s.getCommandManager().execute(s, line);
+          // This line has no `/setblock` (and no `/fill`, which the shim expands into setblocks),
+          // so the block is written through the world instead of the command table.
+          Integer placed = LegacyCommandShim.setBlock(world, line);
+          if (placed != null) {
+            return placed;
+          }
+          // This line's give drops the stack on the ground and drops the tag argument, so gives
+          // are answered here, straight into the inventory.
+          Integer gave = LegacyCommandShim.give(null, line);
+          if (gave != null) {
+            return gave;
+          }
+          ((net.minecraft.server.command.CommandRegistry) s.getCommandManager())
+              .executeCommand(s, line);
+          // This line's command API returns nothing: a command that parses and runs has
+          // succeeded, and a bad one throws before reaching here. One is the count a caller
+          // that checks `result > 0` expects.
+          return 1;
         });
+  }
+
+  /**
+   * Applies a chat command this line's command table cannot run, for the server's command hook.
+   *
+   * <p>Only the block-writing lines are answered here; every other command is left to vanilla.
+   * Returns {@code true} when the line was consumed.
+   */
+  public static boolean handleChatCommand(
+      net.minecraft.entity.player.ServerPlayerEntity player, String command) {
+    if (player == null || player.world == null) {
+      return false;
+    }
+    MinecraftServer s = LegacyFabricEntrypoint.server();
+    String line = command.startsWith("/") ? command.substring(1) : command;
+    // This line's operator list is a raw set of names on the player manager, and `canCheat` is the
+    // permission a command itself checks.
+    boolean allowed =
+        s != null
+            && player.username != null
+            && (s.getPlayerManager().getAdmins().contains(player.username)
+                || s.getPlayerManager().canCheat(player.username));
+    if (!allowed) {
+      return false;
+    }
+    try {
+      if (LegacyCommandShim.setBlock(player.world, line) != null) {
+        return true;
+      }
+      return LegacyCommandShim.give(player, line) != null;
+    } catch (IllegalArgumentException e) {
+      // An unknown name is a failed command, not a broken connection: vanilla answers the line
+      // itself, and the packet handler must not throw or the player is dropped.
+      LOG.warning("Minecheck: " + e.getMessage());
+      return false;
+    }
   }
 
   @Override
@@ -233,11 +285,11 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     Map<Integer, Entity> entities = new LinkedHashMap<>();
     for (Object o : level.loadedEntities) {
       Entity entity = (Entity) o;
-      entities.put(entity.getEntityId(), entity);
+      entities.put(entity.id, entity);
     }
     for (Object o : level.playerEntities) {
       Entity entity = (Entity) o;
-      entities.put(entity.getEntityId(), entity);
+      entities.put(entity.id, entity);
     }
     for (Entity entity : entities.values()) {
       // A removed entity stays listed until the next tick; it is not something a client observes.
@@ -254,7 +306,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
       }
       out.add(
           new EntityInfo(
-              entity.getEntityId(),
+              entity.id,
               actual.toString(),
               entity.x,
               LegacyEntitySpace.feetY(entity),
@@ -350,7 +402,12 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
 
   @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
-    return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
+    try {
+      return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
+    } catch (RuntimeException e) {
+      LOG.log(java.util.logging.Level.WARNING, "Minecheck: spawnEntity(" + id + ") failed", e);
+      throw e;
+    }
   }
 
   private int spawnEntityOnServerThread(String id, double x, double y, double z, String nbt) {
@@ -361,6 +418,23 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     // id is translated before it reaches it.
     String legacy = LegacyFabricNbt.legacyEntityId(location);
     tag.putString("id", legacy == null ? location.substring(location.indexOf(':') + 1) : legacy);
+    // This far back an entity's tag carries its position, motion and rotation, and the loader reads
+    // all three unconditionally: a tag without them throws before the entity exists. They are
+    // written from the spawn position, so the loader starts where the script asked.
+    net.minecraft.nbt.NbtList pos = new net.minecraft.nbt.NbtList();
+    pos.addItem(new net.minecraft.nbt.NbtDouble("", x));
+    pos.addItem(new net.minecraft.nbt.NbtDouble("", y));
+    pos.addItem(new net.minecraft.nbt.NbtDouble("", z));
+    tag.put("Pos", pos);
+    net.minecraft.nbt.NbtList motion = new net.minecraft.nbt.NbtList();
+    for (int i = 0; i < 3; i++) {
+      motion.addItem(new net.minecraft.nbt.NbtDouble("", 0.0));
+    }
+    tag.put("Motion", motion);
+    net.minecraft.nbt.NbtList rotation = new net.minecraft.nbt.NbtList();
+    rotation.addItem(new net.minecraft.nbt.NbtFloat("", 0.0f));
+    rotation.addItem(new net.minecraft.nbt.NbtFloat("", 0.0f));
+    tag.put("Rotation", rotation);
     Entity entity = EntityType.createInstanceFromNbt(tag, level);
     if (entity == null) {
       throw new IllegalArgumentException("unknown entity type: " + id);
@@ -372,7 +446,9 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     if (!level.spawnEntity(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
-    return entity.getEntityId();
+    // The tag is kept for the parts this line has no system to hold (see dataGetEntity).
+    LegacyCommandShim.rememberSpawnTag(entity.id, tag);
+    return entity.id;
   }
 
   @Override
@@ -383,7 +459,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   private boolean spawnBlockOnServerThread(
       String id, int x, int y, int z, String nbt, boolean replace) {
     String location = parseId(id, "block");
-    Block block = Block.get(location);
+    Block block = LegacyFabricNames.block(location);
     if (block == null) {
       throw new IllegalArgumentException("unknown block: " + id);
     }
@@ -393,11 +469,11 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     }
     // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
     // is placed at metadata 0, which is what the newer lines' default state resolves to.
-    if (!level.setBlock(x, y, z, block, 0, 3)) {
+    if (!LegacyFabricNames.setBlock(level, x, y, z, block)) {
       return false;
     }
     NbtCompound tag = parseTag(nbt);
-    if (!tag.getKeys().isEmpty()) {
+    if (!tag.isEmpty()) {
       BlockEntity blockEntity = level.getBlockEntity(x, y, z);
       if (blockEntity != null) {
         tag.putInt("x", x);
@@ -417,14 +493,14 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
     String location = parseId(id, "item");
-    Object registered = Item.REGISTRY.get(location);
-    if (!(registered instanceof Item)) {
+    Item registered = LegacyFabricNames.item(location);
+    if (registered == null) {
       throw new IllegalArgumentException("unknown item: " + id);
     }
     ServerWorld level = overworld();
-    ItemStack stack = new ItemStack((Item) registered, count, 0);
+    ItemStack stack = new ItemStack(registered, count, 0);
     NbtCompound tag = parseTag(nbt);
-    if (!tag.getKeys().isEmpty()) {
+    if (!tag.isEmpty()) {
       stack.setNbt(tag);
     }
     ItemEntity itemEntity = new ItemEntity(level, x, y, z, stack);
@@ -432,7 +508,7 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
     if (!level.spawnEntity(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
-    return itemEntity.getEntityId();
+    return itemEntity.id;
   }
 
   /**

@@ -15,6 +15,7 @@ import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecheck.platform.api.RecipeViewers;
 import net.minecheck.platform.api.ServerPlatform;
@@ -85,7 +86,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     final List<RecipeViewer> viewers = new ArrayList<>();
 
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return mcVersion;
@@ -170,6 +171,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     }
     // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
     // queues a client task and waits for it, which cannot happen while that queue is draining.
+    LegacyFabricClientPlatform.drainClientTasks();
     entrypoint.client.applyPendingLeave();
     // Same reason, and the same place: a quit has to drop the world from the tick so the integrated
     // server writes its save before the client stops.

@@ -1,12 +1,12 @@
 package net.minecheck.loader.forge;
 
-import com.mojang.authlib.GameProfile;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.util.ChunkCoordinates;
 import net.minecraft.world.World;
 
 /**
- * The client-only entity the camera looks through, on the Forge 1.7.10 side.
+ * The client-only entity the camera looks through, on the Forge 1.4.7 side.
  *
  * <p>Its tick does nothing, on purpose: the platform moves it from the client tick hook, and no
  * vanilla system — gravity, fluid, collision, block effects — may alter where the camera is. {@code
@@ -14,25 +14,21 @@ import net.minecraft.world.World;
  * lines use.
  *
  * <p>It is a player entity because that is what this line's renderer looks through. The client
- * holds its view entity in a field declared as a living entity, and more than one place in the
- * world renderer casts that field to a player outright — the field of view and the world render
- * itself — so anything else fails the first time a frame is drawn with the camera attached.
- * Vanilla's own view entity is a player for exactly that reason.
+ * holds its view entity in a field declared as a living entity, and the world renderer casts that
+ * field to a player for the field of view, so anything else fails the first time a frame is drawn
+ * with the camera attached. 1.4.7 identifies a player by a plain username, so that is what it
+ * carries.
  *
  * <p>Nothing about it is a player in any other sense: it is invisible, never ticked, never sent to
  * a server, and everything the renderer reads is written by {@link ForgeCameraPlatform}.
  */
 final class MinecheckCameraEntity extends EntityPlayer {
 
-  /** The profile the camera's player carries; it is never sent anywhere. */
-  private static final GameProfile PROFILE =
-      new GameProfile(new java.util.UUID(0L, 0L), "MinecheckCamera");
-
   MinecheckCameraEntity(World world) {
-    super(world, PROFILE);
+    super(world);
+    this.username = "MinecheckCamera";
     this.noClip = true;
-    // The camera is the point the picture is taken from, never something standing in it.
-    setInvisible(true);
+    this.entityId = ForgeCameraPlatform.CAMERA_ENTITY_ID;
   }
 
   @Override
@@ -42,15 +38,6 @@ final class MinecheckCameraEntity extends EntityPlayer {
 
   @Override
   public void onUpdate() {}
-
-  /**
-   * The id the camera answers, without touching this line's private id field: the camera is never
-   * looked up on the server, so nothing it is asked about can act on a world.
-   */
-  @Override
-  public int getEntityId() {
-    return ForgeCameraPlatform.CAMERA_ENTITY_ID;
-  }
 
   @Override
   public void readEntityFromNBT(NBTTagCompound tag) {}
@@ -66,8 +53,13 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public void addChatMessage(net.minecraft.util.IChatComponent message) {
+  public void sendChatToPlayer(String message) {
     // Nothing is listening to the camera: it is a viewpoint, not a speaker.
+  }
+
+  @Override
+  public String translateString(String key, Object... args) {
+    return key;
   }
 
   @Override
@@ -76,8 +68,8 @@ final class MinecheckCameraEntity extends EntityPlayer {
   }
 
   @Override
-  public net.minecraft.util.ChunkCoordinates getCommandSenderPosition() {
-    return new net.minecraft.util.ChunkCoordinates(
+  public ChunkCoordinates getPlayerCoordinates() {
+    return new ChunkCoordinates(
         (int) Math.floor(posX), (int) Math.floor(posY), (int) Math.floor(posZ));
   }
 }

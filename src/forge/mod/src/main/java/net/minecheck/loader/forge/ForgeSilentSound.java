@@ -1,7 +1,6 @@
 package net.minecheck.loader.forge;
 
 import cpw.mods.fml.common.Loader;
-import java.lang.reflect.Field;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.minecheck.common.config.AudioPolicy;
@@ -14,8 +13,8 @@ import net.minecraftforge.client.event.sound.PlaySoundEvent;
  *
  * <p>1.7.10 has neither Mixin nor an event that fires before the sound engine starts, so silence is
  * enforced twice: {@code PlaySoundEvent} refuses every play before the engine mixes it, and the
- * device vanilla opened during startup is shut down on the first client tick through the sound
- * manager's own teardown.
+ * sound manager is marked unloaded on the first client tick so every sound call returns before it
+ * reaches the engine.
  *
  * <p>This line's event carries the replacement as a public {@code result} field (a {@code
  * SoundPoolEntry}) rather than a setter, and holding {@code null} there is what "play nothing"
@@ -53,8 +52,16 @@ final class ForgeSilentSound {
   }
 
   /**
-   * Closes the device vanilla opened at startup. Called from the client tick, before the camera
-   * work, until it has been attempted once.
+   * Stops vanilla's mixer listening. Called from the client tick, before the camera work, until it
+   * has been attempted once.
+   *
+   * <p>Deliberately not {@code SoundManager.closeMinecraft()}: that runs the paulscode engine's
+   * {@code cleanup()}, which drops the engine's command thread but leaves the manager's own {@code
+   * loaded} flag set. Every sound call then keeps going through the dead engine, and the first
+   * {@code setListener} — which runs once per frame as soon as a world is up — dies with a {@code
+   * NullPointerException} in {@code SoundSystem.setListenerPosition} and takes the client down.
+   * Clearing {@code loaded} instead is this line's own "no sound" state: every entry point, {@code
+   * setListener} included, returns immediately, and nothing is left pointing at a torn-down engine.
    */
   static void shutDownDevice() {
     if (quietAttempted || !muted()) {
@@ -74,36 +81,47 @@ final class ForgeSilentSound {
     }
     quietAttempted = true;
     try {
-      // unloadSoundSystem() is the manager's own teardown: it stops every play, cleans the engine
-      // up and clears `loaded`, so later queries stop at that flag. Closing the engine's library
-      // directly does not: `loaded` stays true, MusicTicker keeps asking isSoundPlaying, and the
-      // query reaches OpenAL natives the cleanup has unbound (UnsatisfiedLinkError:
-      // org.lwjgl.openal.AL10.nalGetSourcei).
       manager.stopAllSounds();
-      manager.unloadSoundSystem();
-      LOG.info("Minecheck: muteAudio is on — closed the audio device vanilla opened at startup");
+      if (markUnloaded()) {
+        LOG.info("Minecheck: muteAudio is on — vanilla's sound manager is unloaded for this run");
+      } else {
+        LOG.warning(
+            "Minecheck: muteAudio is on, but vanilla's sound manager could not be unloaded —"
+                + " plays are still refused, so the run stays silent");
+      }
     } catch (RuntimeException e) {
       LOG.log(
           Level.WARNING,
-          "Minecheck: muteAudio is on but the audio device could not be closed — plays are still"
+          "Minecheck: muteAudio is on but the sound manager could not be stopped — plays are still"
               + " refused, so the run stays silent",
           e);
     }
   }
 
-  /** The sound handler's {@link SoundManager}, by type — dev and production names differ. */
-  private static SoundManager soundManager(Minecraft minecraft) {
-    try {
-      Object handler = minecraft.getSoundHandler();
-      for (Field field : handler.getClass().getDeclaredFields()) {
-        if (SoundManager.class.isAssignableFrom(field.getType())) {
-          field.setAccessible(true);
-          return (SoundManager) field.get(handler);
-        }
-      }
-    } catch (ReflectiveOperationException | RuntimeException e) {
-      LOG.log(Level.WARNING, "Minecheck: could not read the sound manager", e);
+  /**
+   * Clears the sound manager's {@code loaded} flag, which is the only thing every entry point of it
+   * checks before touching the engine. 1.4.7 keeps it static, so it is written as one; a line that
+   * keeps it per instance is handled too, since the field is looked up by name.
+   */
+  private static boolean markUnloaded() {
+    Minecraft minecraft = Minecraft.getMinecraft();
+    if (minecraft == null) {
+      return false;
     }
-    return null;
+    try {
+      java.lang.reflect.Field field = SoundManager.class.getDeclaredField("loaded");
+      field.setAccessible(true);
+      boolean isStatic = java.lang.reflect.Modifier.isStatic(field.getModifiers());
+      field.setBoolean(isStatic ? null : minecraft.sndManager, false);
+      return true;
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.log(Level.FINE, "Minecheck: could not clear the sound manager's loaded flag", e);
+      return false;
+    }
+  }
+
+  /** The client's {@link SoundManager}. 1.4.7 keeps it in a public field on the client. */
+  private static SoundManager soundManager(Minecraft minecraft) {
+    return minecraft.sndManager;
   }
 }

@@ -17,6 +17,7 @@ import net.minecheck.platform.api.BlockInfo;
 import net.minecheck.platform.api.BlockPosition;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecheck.platform.api.ClientPlatform;
+import net.minecheck.platform.api.ClientPlatformBase;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecheck.platform.api.EntityInfo;
 import net.minecheck.platform.api.InjectedInput;
@@ -27,8 +28,7 @@ import net.minecheck.platform.api.ViewWindow;
 import net.minecraft.block.Block;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.Framebuffer;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.gui.screen.ConnectScreen;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
@@ -36,30 +36,26 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.ingame.SignEditScreen;
+import net.minecraft.client.gui.screen.ingame.SurvivalInventoryScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
+import net.minecraft.client.network.ClientLoopbackPlayNetworkHandler;
 import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.Window;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.player.ControllablePlayerEntity;
 import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.inventory.slot.Slot;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.c2s.play.ChatMessageC2SPacket;
+import net.minecraft.network.Connection;
+import net.minecraft.network.packet.s2c.play.ChatMessageS2CPacket;
 import net.minecraft.server.integrated.IntegratedServer;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResultType;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
@@ -78,12 +74,29 @@ import org.lwjgl.opengl.GL30;
  * mixins. Every user-visible behaviour — world entry, input, commands, screens, slots, captures —
  * is the same, which is what the shared suites check.
  */
-public final class LegacyFabricClientPlatform implements ClientPlatform {
+public final class LegacyFabricClientPlatform extends ClientPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
   /** Client ticks between frames pushed to the view window (~10 fps at 20 ticks a second). */
   private static final int VIEW_WINDOW_TICK_INTERVAL = 2;
+
+  /**
+   * How long a scripted rotation stays authoritative.
+   *
+   * <p>A teleport is answered by the server with the rotation it holds, which is the old one when
+   * the script turned after sending the command, so the client's own fields can be put back a tick
+   * later. Two seconds covers that round trip, and a script that looks and then raycasts in the
+   * same breath reads what it asked for.
+   */
+  private static final int SCRIPTED_LOOK_TICKS = 40;
+
+  /** The rotation a script last asked for, and the ticks it remains authoritative. */
+  private static volatile float scriptedPitch;
+
+  private static volatile float scriptedYaw;
+
+  private static volatile int scriptedLookTicks;
 
   private final LegacyFabricCameraPlatform cameraPlatform;
   private final Path configDir;
@@ -137,12 +150,12 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   }
 
   /** The running client, or {@code null} before one exists. */
-  public static MinecraftClient client() {
-    return MinecraftClient.getInstance();
+  public static Minecraft client() {
+    return Minecraft.getMinecraft();
   }
 
-  private static MinecraftClient mc() {
-    return MinecraftClient.getInstance();
+  private static Minecraft mc() {
+    return Minecraft.getMinecraft();
   }
 
   /** Records that the client finished drawing a frame. */
@@ -202,19 +215,101 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
             + " window stays mapped (pause-on-focus-loss is still off)");
   }
 
+  /** Work handed over from the engine's thread, run by the client tick. */
+  private static final java.util.Queue<Runnable> CLIENT_TASKS =
+      new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+  /**
+   * Runs the work queued by {@link #onClientThread}, on the client thread.
+   *
+   * <p>Called at the head of the client tick, which is the one place the render thread's GL context
+   * is current: world creation, connection screens and command dispatch all touch it.
+   */
+  static void drainClientTasks() {
+    Runnable task;
+    while ((task = CLIENT_TASKS.poll()) != null) {
+      try {
+        task.run();
+      } catch (RuntimeException e) {
+        LOG.log(Level.WARNING, "Minecheck: a queued client action failed", e);
+      }
+    }
+    if (scriptedLookTicks > 0) {
+      Minecraft client = mc();
+      if (client != null && client.playerEntity != null) {
+        client.playerEntity.pitch = scriptedPitch;
+        client.playerEntity.yaw = scriptedYaw;
+      }
+      scriptedLookTicks--;
+    }
+  }
+
+  /** Applies a scripted rotation and keeps it authoritative for the next few ticks. */
+  private static void applyScriptedLook(ControllablePlayerEntity player, float pitch, float yaw) {
+    scriptedPitch = pitch;
+    scriptedYaw = yaw;
+    scriptedLookTicks = SCRIPTED_LOOK_TICKS;
+    if (player != null) {
+      player.pitch = pitch;
+      player.yaw = yaw;
+    }
+  }
+
   private static void onClientThread(Runnable r) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (client == null) {
       return;
     }
     if (isClientThread()) {
       r.run();
     } else {
-      client.execute(
-          () -> {
-            r.run();
-            return null;
-          });
+      // This line has no public task queue; the client tick is where the render thread's context
+      // is current, so work from any other thread waits for it there.
+      CLIENT_TASKS.add(r);
+    }
+  }
+
+  /**
+   * Runs {@code action} on the client thread and waits for its answer.
+   *
+   * <p>Screen state is written by the client thread and read by the script thread, and the fields
+   * are not volatile, so a direct read can see a screen that is not there yet (or one that has just
+   * been closed) and answer zero slots. Waiting for the tick that owns the state makes the answer
+   * the one a player looking at the screen would get.
+   */
+  private static <T> T onClientThreadAndWait(java.util.function.Supplier<T> action) {
+    Minecraft client = mc();
+    if (client == null) {
+      return null;
+    }
+    if (isClientThread()) {
+      return action.get();
+    }
+    java.util.concurrent.CompletableFuture<T> done = new java.util.concurrent.CompletableFuture<>();
+    CLIENT_TASKS.add(
+        () -> {
+          try {
+            done.complete(action.get());
+          } catch (Throwable t) {
+            done.completeExceptionally(t);
+          }
+        });
+    try {
+      return done.get(10, java.util.concurrent.TimeUnit.SECONDS);
+    } catch (java.util.concurrent.TimeoutException e) {
+      throw new IllegalStateException("the client did not reach the screen read in time", e);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while waiting for the client", e);
+    } catch (java.util.concurrent.ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof RuntimeException) {
+        throw (RuntimeException) cause;
+      }
+      if (cause instanceof Error) {
+        throw (Error) cause;
+      }
+      throw new IllegalStateException(cause);
     }
   }
 
@@ -225,11 +320,22 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   // ------------------------------------------------------------ resource reload
 
+  /** Runs this line's resource reload, which is private in 604. */
+  private static void forceResourceReload() {
+    try {
+      Method reload = Minecraft.class.getDeclaredMethod("forceReload");
+      reload.setAccessible(true);
+      reload.invoke(mc());
+    } catch (ReflectiveOperationException e) {
+      LOG.log(Level.WARNING, "Minecheck: could not reload resources", e);
+    }
+  }
+
   @Override
   public void reloadResources() {
     onClientThread(
         () -> {
-          mc().reloadResources();
+          forceResourceReload();
           reloadTicksRemaining = 2;
         });
   }
@@ -249,7 +355,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () ->
-            mc().startIntegratedServer(
+            mc().method_2935(
                     worldName,
                     worldName,
                     new LevelInfo(
@@ -270,7 +376,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       info.enableCommands();
     }
     pendingWorldOptions = options;
-    onClientThread(() -> mc().startIntegratedServer(options.name(), options.name(), info));
+    onClientThread(() -> mc().method_2935(options.name(), options.name(), info));
   }
 
   @Override
@@ -290,8 +396,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     int finalPort = port;
     onClientThread(
         () -> {
-          MinecraftClient client = mc();
-          client.setScreen(new ConnectScreen(client.currentScreen, client, finalHost, finalPort));
+          Minecraft client = mc();
+          client.openScreen(new ConnectScreen(client, finalHost, finalPort));
           LOG.info(String.format("joinServer: ConnectScreen(%s:%s)", finalHost, finalPort));
         });
   }
@@ -308,7 +414,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (!leaveRequested) {
       return;
     }
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (!isClientThread()) {
       return; // the tick is the only place this can run; anything else retries next tick
     }
@@ -320,15 +426,10 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     // Only for a server this client does not own. On an integrated world the disconnect below
     // stops the server itself; calling stop directly from this thread waits on a task the same
     // thread has to drain.
-    if (client.world != null
-        && !client.isIntegratedServerRunning()
-        && client.getNetworkHandler() != null) {
-      client.getNetworkHandler().clearWorld();
-    }
     // What vanilla's own "Save and Quit to Title" does: it drops the world and stops an integrated
     // server through the client's own connection path.
     client.connect(null);
-    client.setScreen(new TitleScreen());
+    client.openScreen(new TitleScreen());
   }
 
   /** Set by {@link #quit()} and applied from the client tick. */
@@ -353,7 +454,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (!quitRequested) {
       return;
     }
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (!isClientThread()) {
       return; // the tick is the only place this can run; anything else retries next tick
     }
@@ -371,13 +472,13 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
           // happens to unload, and the chunk a script just wrote stays loaded, so the marker was
           // never on disk to hand over.
           world.getChunkProvider().saveChunks(true, null);
-          world.getChunkProvider().flushChunks();
         }
+        drainChunkWrites(client, server);
       }
       // Vanilla's own "Save and Quit to Title": dropping the world through the client's connection
       // path is what makes the integrated server write its chunks before it stops.
       client.connect(null);
-      client.setScreen(new TitleScreen());
+      client.openScreen(new TitleScreen());
       // The chunks were written above, so there is nothing left to wait for: on this line the
       // integrated server ticks on the client thread itself, and waiting here for it to stop would
       // wait for the thread that is doing the waiting.
@@ -385,14 +486,52 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     client.scheduleStop();
   }
 
+  /**
+   * Drains this line's threaded chunk writes after the world has been saved.
+   *
+   * <p>Its chunk storage only queues a write ({@code save()} on it does nothing) and a save thread
+   * drains the queue a chunk at a time. Quitting stops that thread, so a chunk a script just wrote
+   * stayed queued and the save handed to another process had no trace of it.
+   */
+  private static void drainChunkWrites(
+      Minecraft client, net.minecraft.server.MinecraftServer server) {
+    for (net.minecraft.server.world.ServerWorld world : server.worlds) {
+      if (world == null) {
+        continue;
+      }
+      try {
+        for (Class<?> type = world.getChunkProvider().getClass();
+            type != null;
+            type = type.getSuperclass()) {
+          for (Field field : type.getDeclaredFields()) {
+            if (!net.minecraft.world.chunk.ChunkStorage.class.isAssignableFrom(field.getType())) {
+              continue;
+            }
+            field.setAccessible(true);
+            Object storage = field.get(world.getChunkProvider());
+            if (storage instanceof net.minecraft.world.chunk.ThreadedAnvilChunkStorage) {
+              net.minecraft.world.chunk.ThreadedAnvilChunkStorage threaded =
+                  (net.minecraft.world.chunk.ThreadedAnvilChunkStorage) storage;
+              while (threaded.saveNextChunk()) {
+                // One queued chunk per call, until the queue is empty.
+              }
+            }
+          }
+        }
+      } catch (IllegalAccessException | RuntimeException e) {
+        LOG.warning("Minecheck: could not drain the chunk writes: " + e);
+      }
+    }
+  }
+
   @Override
   public boolean isInWorld() {
-    return mc().field_3805 != null && mc().world != null;
+    return mc().playerEntity != null && mc().world != null;
   }
 
   @Override
   public boolean isWorldReady() {
-    ControllablePlayerEntity player = mc().field_3805;
+    ControllablePlayerEntity player = mc().playerEntity;
     // Standing, too: this line puts the player a couple of blocks above the surface while the
     // client starts the integrated world, and a script that read its position before the fall had
     // finished saw a height no block under it agreed with. `onGround` is the settled state every
@@ -412,26 +551,25 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isLoggingIn() {
-    MinecraftClient client = mc();
-    if (client.field_3805 != null) {
+    Minecraft client = mc();
+    if (client.playerEntity != null) {
       return false;
     }
-    ClientPlayNetworkHandler handler = client.getNetworkHandler();
+    ClientLoopbackPlayNetworkHandler handler = client.method_2960();
     if (handler == null) {
       return false;
     }
-    ClientConnection connection = connectionOf(handler);
-    return connection != null && connection.isOpen();
+    return handler != null;
   }
 
   /** The play handler's connection, found by type: the field name is mapping-dependent. */
-  private static ClientConnection connectionOf(ClientPlayNetworkHandler handler) {
+  private static Connection connectionOf(ClientLoopbackPlayNetworkHandler handler) {
     for (Class<?> type = handler.getClass(); type != null; type = type.getSuperclass()) {
       for (Field field : type.getDeclaredFields()) {
-        if (ClientConnection.class.isAssignableFrom(field.getType())) {
+        if (Connection.class.isAssignableFrom(field.getType())) {
           try {
             field.setAccessible(true);
-            return (ClientConnection) field.get(handler);
+            return (Connection) field.get(handler);
           } catch (ReflectiveOperationException | RuntimeException e) {
             return null;
           }
@@ -476,9 +614,45 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean keyDown(String key) {
+    // This line has no hotbar key bindings: the client reads the number keys straight from the
+    // keyboard event, so the press the API promises is the slot change itself.
+    int hotbar = hotbarSlotIndex(key);
+    if (hotbar >= 0) {
+      onClientThread(
+          () -> {
+            ControllablePlayerEntity player = mc().playerEntity;
+            if (player != null) {
+              player.inventory.selectedSlot = hotbar;
+            }
+          });
+      return true;
+    }
     int code = resolveKey(key);
     if (code == Keyboard.KEY_NONE) {
       return false;
+    }
+    // The inventory is opened by `wasPressed()` on this line, and a down/up pair synthesized in
+    // one tick is consumed before the vanilla tick reads it. The API promises the player's
+    // inventory, so it is opened directly instead of betting on the press being observed.
+    if ("key.inventory".equals(key) && mc().playerEntity != null) {
+      onClientThread(
+          () -> {
+            ControllablePlayerEntity player = mc().playerEntity;
+            if (player == null) {
+              return;
+            }
+            if (mc().currentScreen instanceof HandledScreen) {
+              // The same key closes an open container: this line's client closes it from its own
+              // key handling rather than the screen's, so the close belongs here as well. The
+              // screen
+              // may not be the one opened below — a creative player's inventory opens as the
+              // creative screen — and every container answers the inventory key the same way.
+              mc().openScreen(null);
+            } else {
+              mc().openScreen(new SurvivalInventoryScreen(player));
+            }
+          });
+      return true;
     }
     onClientThread(
         () ->
@@ -499,7 +673,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                     // ignored the key stayed up, and every press meant for the world was spent as
                     // a slot click instead.
                     if (code == Keyboard.KEY_ESCAPE || code == inventoryKeyCode()) {
-                      mc().setScreen(null);
+                      mc().openScreen(null);
                       return;
                     }
                     // Enter on the chat screen is the same story, and the submission has to be
@@ -509,26 +683,26 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
                       TextFieldWidget field = findTextField(screen);
                       String text = field == null ? "" : field.getText();
                       if (!text.isEmpty()
-                          && mc().field_3805 != null
-                          && mc().getNetworkHandler() != null) {
+                          && mc().playerEntity != null
+                          && mc().method_2960() != null) {
                         // A typed command goes through the same rewrite as a scripted one: `@s` and
                         // `/fill` are not syntax this line has, wherever the command came from.
-                        ControllablePlayerEntity player = mc().field_3805;
+                        ControllablePlayerEntity player = mc().playerEntity;
                         for (String line :
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
                                     text.substring(1),
-                                    player.getGameProfile().getName(),
+                                    player.username,
                                     player.x,
                                     LegacyEntitySpace.feetY(player),
                                     player.z)
                                 : java.util.Collections.singletonList(text)) {
-                          mc().getNetworkHandler()
+                          mc().method_2960()
                               .sendPacket(
-                                  new ChatMessageC2SPacket(line.equals(text) ? line : "/" + line));
+                                  new ChatMessageS2CPacket(line.equals(text) ? line : "/" + line));
                         }
                       }
-                      mc().setScreen(null);
+                      mc().openScreen(null);
                     }
                     return;
                   }
@@ -575,11 +749,25 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
    * Resolves a script key name: a binding id ({@code key.jump}) through the client's bindings, or a
    * key name ({@code F3}) through LWJGL.
    */
+  /** The hotbar slot a {@code key.hotbar.N} press selects, or {@code -1} for any other key. */
+  private static int hotbarSlotIndex(String key) {
+    String prefix = "key.hotbar.";
+    if (!key.startsWith(prefix)) {
+      return -1;
+    }
+    try {
+      int number = Integer.parseInt(key.substring(prefix.length()));
+      return number >= 1 && number <= 9 ? number - 1 : -1;
+    } catch (NumberFormatException e) {
+      return -1;
+    }
+  }
+
   private static int resolveKey(String key) {
     if (key.startsWith("key.")) {
       for (KeyBinding binding : keyBindings(mc().options)) {
-        if (key.equals(binding.getTranslationKey())) {
-          return binding.getCode();
+        if (key.equals(binding.translationKey)) {
+          return binding.code;
         }
       }
       LOG.warning(String.format("keyDown: unknown binding '%s'", key));
@@ -599,8 +787,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   /** The key code of the client's own inventory binding, or {@code -1} when it cannot be read. */
   private static int inventoryKeyCode() {
     for (KeyBinding binding : keyBindings(mc().options)) {
-      if ("key.inventory".equals(binding.getTranslationKey())) {
-        return binding.getCode();
+      if ("key.inventory".equals(binding.translationKey)) {
+        return binding.code;
       }
     }
     return -1;
@@ -635,19 +823,22 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public PlayerInfo getPlayer() {
-    MinecraftClient client = mc();
-    ControllablePlayerEntity player = client.field_3805;
-    if (player == null || client.world == null) {
-      return null;
-    }
-    // The feet, from the bounding box: this line's y field sits an eye height above them (see
-    // LegacyEntitySpace).
-    return new PlayerInfo(
-        player.getGameProfile().getName(),
-        player.x,
-        LegacyEntitySpace.feetY(player),
-        player.z,
-        dimensionName(player));
+    return onClientThreadAndWait(
+        () -> {
+          Minecraft client = mc();
+          ControllablePlayerEntity player = client.playerEntity;
+          if (player == null || client.world == null) {
+            return null;
+          }
+          // The feet, from the bounding box: this line's y field sits an eye height above them (see
+          // LegacyEntitySpace).
+          return new PlayerInfo(
+              player.username,
+              player.x,
+              LegacyEntitySpace.feetY(player),
+              player.z,
+              dimensionName(player));
+        });
   }
 
   /**
@@ -680,21 +871,17 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public void setLook(float pitch, float yaw) {
-    onClientThread(
-        () -> {
-          ControllablePlayerEntity player = mc().field_3805;
-          if (player != null) {
-            player.pitch = pitch;
-            player.yaw = yaw;
-          }
-        });
+    scriptedPitch = pitch;
+    scriptedYaw = yaw;
+    scriptedLookTicks = SCRIPTED_LOOK_TICKS;
+    onClientThread(() -> applyScriptedLook(mc().playerEntity, pitch, yaw));
   }
 
   @Override
   public void lookAt(double x, double y, double z) {
     onClientThread(
         () -> {
-          ControllablePlayerEntity player = mc().field_3805;
+          ControllablePlayerEntity player = mc().playerEntity;
           if (player == null) {
             return;
           }
@@ -702,17 +889,18 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
           double dy = y - LegacyEntitySpace.eyeY(player);
           double dz = z - player.z;
           double horizontal = Math.sqrt(dx * dx + dz * dz);
-          player.yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-          player.pitch = (float) -(Math.atan2(dy, horizontal) * 180.0 / Math.PI);
+          float yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+          float pitch = (float) -(Math.atan2(dy, horizontal) * 180.0 / Math.PI);
+          applyScriptedLook(player, pitch, yaw);
         });
   }
 
   @Override
   public BlockPosition getTargetBlock(String entityName) {
-    MinecraftClient client = mc();
-    if (client.field_3805 == null
+    Minecraft client = mc();
+    if (client.playerEntity == null
         || client.world == null
-        || !client.field_3805.getGameProfile().getName().equals(entityName)) {
+        || !client.playerEntity.username.equals(entityName)) {
       return null;
     }
     return getCrosshairBlock();
@@ -720,44 +908,50 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public BlockPosition getCrosshairBlock() {
-    MinecraftClient client = mc();
-    if (client.world == null || client.field_3805 == null) {
-      return null;
-    }
-    // This line's own mouse-over is refreshed by the frame loop, and a script asks right after it
-    // turned the player — before the next frame — so the pick is made here, from the look the
-    // player has now, at the reach vanilla gives the crosshair.
-    ControllablePlayerEntity player = client.field_3805;
-    Vec3d start = Vec3d.of(player.x, LegacyEntitySpace.eyeY(player), player.z);
-    Vec3d direction = directionOf(player);
-    Vec3d end = start.add(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
-    BlockHitResult hit = client.world.rayTrace(start, end);
-    if (hit == null || hit.hitResult != HitResultType.BLOCK) {
-      return null;
-    }
-    return new BlockPosition(hit.x, hit.y, hit.z);
+    return onClientThreadAndWait(
+        () -> {
+          Minecraft client = mc();
+          if (client.world == null || client.playerEntity == null) {
+            return null;
+          }
+          // This line's own mouse-over is refreshed by the frame loop, and a script asks right
+          // after
+          // it turned the player — before the next frame — so the pick is made here, from the look
+          // the player has now, at the reach vanilla gives the crosshair.
+          ControllablePlayerEntity player = client.playerEntity;
+          Vec3d start = Vec3d.fromXYZ(player.x, LegacyEntitySpace.eyeY(player), player.z);
+          Vec3d direction = directionOf(player);
+          Vec3d end = start.offset(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
+          BlockHitResult hit = client.world.rayTrace(start, end);
+          if (hit == null || hit.hitResult != HitResultType.TILE) {
+            return null;
+          }
+          return new BlockPosition(hit.x, hit.y, hit.z);
+        });
   }
 
   /** The unit vector a player is looking along; this line has no accessor for it. */
   private static Vec3d directionOf(ControllablePlayerEntity player) {
-    float pitch = (float) Math.toRadians(player.pitch);
-    float yaw = (float) Math.toRadians(player.yaw);
-    return Vec3d.of(
+    float pitchDegrees = scriptedLookTicks > 0 ? scriptedPitch : player.pitch;
+    float yawDegrees = scriptedLookTicks > 0 ? scriptedYaw : player.yaw;
+    float pitch = (float) Math.toRadians(pitchDegrees);
+    float yaw = (float) Math.toRadians(yawDegrees);
+    return Vec3d.fromXYZ(
         -Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
 
   @Override
   public List<EntityInfo> findNearbyEntities(String type) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     ClientWorld level = client.world;
     if (level == null) {
       return java.util.Collections.emptyList();
     }
-    Identifier typeId = type == null ? null : new Identifier(type.toLowerCase(Locale.ROOT));
+    String typeId = type == null ? null : type.toLowerCase(Locale.ROOT);
     List<EntityInfo> out = new ArrayList<>();
     for (Object candidate : level.loadedEntities) {
       Entity entity = (Entity) candidate;
-      Identifier actual = entityTypeId(entity);
+      String actual = entityTypeId(entity);
       if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
@@ -765,7 +959,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       // a faithful copy of what the client actually knows.
       out.add(
           new EntityInfo(
-              entity.getEntityId(),
+              entity.id,
               actual == null ? "" : actual.toString(),
               entity.x,
               entity.y,
@@ -776,20 +970,18 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   }
 
   /** The 1.13-style id of a client-side entity, from this line's CamelCase type name. */
-  private static Identifier entityTypeId(Entity entity) {
+  private static String entityTypeId(Entity entity) {
     String legacy = EntityType.getEntityName(entity);
-    return legacy == null
-        ? new Identifier("minecraft", "player")
-        : new Identifier(LegacyFabricNbt.modernEntityId(legacy));
+    return legacy == null ? "minecraft:player" : LegacyFabricNbt.modernEntityId(legacy);
   }
 
   // ------------------------------------------------------------ commands and use
 
   @Override
   public void runCommand(String command) {
-    MinecraftClient client = mc();
-    ControllablePlayerEntity player = client.field_3805;
-    if (player == null || client.getNetworkHandler() == null) {
+    Minecraft client = mc();
+    ControllablePlayerEntity player = client.playerEntity;
+    if (player == null || client.method_2960() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
     // `@s` and `/fill` are 1.8 syntax, so a command that uses either becomes the commands this
@@ -797,18 +989,16 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     List<String> lines =
         LegacyCommandShim.expandForLegacy(
             LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command),
-            player.getGameProfile().getName(),
+            player.username,
             player.x,
             LegacyEntitySpace.feetY(player),
             player.z);
     IntegratedServer server = client.getServer();
     ServerPlayerEntity self =
-        server == null
-            ? null
-            : server.getPlayerManager().getPlayer(player.getGameProfile().getName());
+        server == null ? null : server.getPlayerManager().getPlayer(player.username);
     if (self == null) {
       for (String line : lines) {
-        client.getNetworkHandler().sendPacket(new ChatMessageC2SPacket("/" + line));
+        client.method_2960().sendPacket(new ChatMessageS2CPacket("/" + line));
       }
       return;
     }
@@ -839,27 +1029,37 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
         rule == null && entity == null && data == null && tagged == null
             ? LegacyCommandShim.executeIfBlock(world, cmd)
             : null;
-    if (rule == null && entity == null && data == null && tagged == null && conditional == null) {
-      server.getCommandManager().execute(self, cmd);
+    Integer placed =
+        rule == null && entity == null && data == null && tagged == null && conditional == null
+            ? LegacyCommandShim.setBlock(world, cmd)
+            : null;
+    if (rule == null
+        && entity == null
+        && data == null
+        && tagged == null
+        && conditional == null
+        && placed == null) {
+      ((net.minecraft.server.command.CommandRegistry) server.getCommandManager())
+          .executeCommand(self, cmd);
     }
   }
 
   @Override
   public void useItemOnTarget() {
-    MinecraftClient client = mc();
-    if (client.field_3805 == null || client.interactionManager == null || client.world == null) {
+    Minecraft client = mc();
+    if (client.playerEntity == null || client.interactionManager == null || client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     BlockHitResult hit = client.result;
-    if (hit == null || hit.hitResult != HitResultType.BLOCK) {
+    if (hit == null || hit.hitResult != HitResultType.TILE) {
       return;
     }
     // This line has one hand and an int side: the held stack and the side the hit reports are what
     // the item's use-on-block callback takes.
     client.interactionManager.method_1229(
-        client.field_3805,
+        client.playerEntity,
         client.world,
-        client.field_3805.getStackInHand(),
+        client.playerEntity.getMainHandStack(),
         hit.x,
         hit.y,
         hit.z,
@@ -869,7 +1069,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean openSignEditor(BlockPosition pos) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
@@ -877,7 +1077,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (!(blockEntity instanceof SignBlockEntity)) {
       return false;
     }
-    onClientThread(() -> client.setScreen(new SignEditScreen((SignBlockEntity) blockEntity)));
+    onClientThread(() -> client.openScreen(new SignEditScreen((SignBlockEntity) blockEntity)));
     return true;
   }
 
@@ -989,7 +1189,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
         // This line's buttons keep their label in a plain String field (`message`), while the
         // newer lines hold a Text; both are read, and only the label-looking names are trusted so
         // an unrelated string field cannot answer as the label.
-        boolean isText = Text.class.isAssignableFrom(field.getType());
+        boolean isText = String.class.isAssignableFrom(field.getType());
         boolean isLabelString =
             field.getType() == String.class
                 && (field.getName().equals("message") || field.getName().equals("label"));
@@ -1144,13 +1344,13 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean clickSlot(int slot, int button, String actionType) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (!(client.currentScreen instanceof HandledScreen)) {
       return false;
     }
     HandledScreen screen = (HandledScreen) client.currentScreen;
     client.interactionManager.clickSlot(
-        screen.screenHandler.syncId, slot, button, itemAction(actionType), client.field_3805);
+        screen.screenHandler.syncId, slot, button, itemAction(actionType), client.playerEntity);
     return true;
   }
 
@@ -1180,11 +1380,15 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   @Override
   public void openChat(String mode) {
     boolean command = mode != null && mode.equalsIgnoreCase("command");
-    onClientThread(() -> mc().setScreen(new ChatScreen(command ? "/" : "")));
+    onClientThread(() -> mc().openScreen(new ChatScreen(command ? "/" : "")));
   }
 
   @Override
   public boolean isScreenOpen(String screenId) {
+    return Boolean.TRUE.equals(onClientThreadAndWait(() -> isScreenOpenNow(screenId)));
+  }
+
+  private static boolean isScreenOpenNow(String screenId) {
     Screen screen = mc().currentScreen;
     if (screen == null) {
       return false;
@@ -1215,7 +1419,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
   }
 
-  private static HandledScreen openScreen(String screenId) {
+  private static HandledScreen openScreenNow(String screenId) {
     Screen screen = mc().currentScreen;
     if (!(screen instanceof HandledScreen)) {
       throw new IllegalStateException("no container screen is open");
@@ -1225,40 +1429,68 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public int slotCount(String screenId) {
-    try {
-      return openScreen(screenId).screenHandler.slots.size();
-    } catch (IllegalStateException e) {
-      return 0;
+    // A container screen is put on screen before the server's slot sync reaches it, so the first
+    // read of a just-opened screen is an empty list. A container always has slots, so an empty one
+    // is a screen that is still arriving and is waited for here rather than reported as empty.
+    for (int attempt = 0; attempt < 40; attempt++) {
+      Integer count =
+          onClientThreadAndWait(
+              () -> {
+                try {
+                  return openScreenNow(screenId).screenHandler.slots.size();
+                } catch (IllegalStateException e) {
+                  return 0;
+                }
+              });
+      if (count != null && count > 0) {
+        return count;
+      }
+      try {
+        Thread.sleep(25L);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+      }
     }
+    return 0;
   }
 
   @Override
   public SlotInfo getSlot(int index, String screenId) {
-    List<Slot> slots = openScreen(screenId).screenHandler.slots;
-    if (index < 0 || index >= slots.size()) {
-      throw new IllegalStateException(
-          "slot index " + index + " out of range (0.." + (slots.size() - 1) + ")");
+    SlotInfo info =
+        onClientThreadAndWait(
+            () -> {
+              List<Slot> slots = openScreenNow(screenId).screenHandler.slots;
+              if (index < 0 || index >= slots.size()) {
+                throw new IllegalStateException(
+                    "slot index " + index + " out of range (0.." + (slots.size() - 1) + ")");
+              }
+              ItemStack stack = slots.get(index).getStack();
+              // This line's stack has a count field and no emptiness test, and an empty slot holds
+              // null.
+              if (stack == null || stack.count <= 0) {
+                return new SlotInfo(true, null, 0, null);
+              }
+              // Its registry answers a name string here, not an identifier.
+              String itemId = LegacyFabricNames.itemId(stack);
+              NbtCompound nbt = stack.getNbt();
+              return new SlotInfo(
+                  false,
+                  LegacyFabricNbt.modernId(itemId == null ? "" : itemId),
+                  stack.count,
+                  nbt == null ? null : LegacyFabricNbt.toMap(nbt));
+            });
+    if (info == null) {
+      throw new IllegalStateException("the client is not available");
     }
-    ItemStack stack = slots.get(index).getStack();
-    // This line's stack has a count field and no emptiness test, and an empty slot holds null.
-    if (stack == null || stack.count <= 0) {
-      return new SlotInfo(true, null, 0, null);
-    }
-    // Its registry answers a name string here, not an identifier.
-    String itemId = Item.REGISTRY.getId(stack.getItem());
-    NbtCompound nbt = stack.getNbt();
-    return new SlotInfo(
-        false,
-        LegacyFabricNbt.modernId(itemId == null ? "" : itemId),
-        stack.count,
-        nbt == null ? null : LegacyFabricNbt.toMap(nbt));
+    return info;
   }
 
   // ------------------------------------------------------------ world reads
 
   @Override
   public BlockInfo getBlock(BlockPosition pos) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
@@ -1268,9 +1500,11 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
     // No block states here: the block, placed with its metadata, is what the newer lines' state
     // resolves to, and the id a script reads is the block's own.
-    Block block = client.world.getBlock(blockPos.x, blockPos.y, blockPos.z);
+    int blockIdRaw = client.world.getBlock(blockPos.x, blockPos.y, blockPos.z);
+    Block block =
+        blockIdRaw >= 0 && blockIdRaw < Block.BLOCKS.length ? Block.BLOCKS[blockIdRaw] : null;
     BlockEntity blockEntity = client.world.getBlockEntity(blockPos.x, blockPos.y, blockPos.z);
-    String blockId = Block.REGISTRY.getId(block);
+    String blockId = LegacyFabricNames.blockId(block);
     NbtCompound blockEntityTag = new NbtCompound();
     if (blockEntity != null) {
       // This line writes a block entity's NBT into a compound and answers nothing.
@@ -1283,7 +1517,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public Integer groundHeight(int x, int z) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
@@ -1305,7 +1539,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public boolean isChunkLoaded(int chunkX, int chunkZ) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     return client.world != null && client.world.getChunkProvider().chunkExists(chunkX, chunkZ);
   }
 
@@ -1313,7 +1547,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public void pinClientClock() {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     applyPendingWorldSettings(client);
     ClientWorld level = client.world;
     if (level == null) {
@@ -1333,7 +1567,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
   }
 
   /** Applies the rules and difficulty a {@code createWorld} call asked for. */
-  private void applyPendingWorldSettings(MinecraftClient client) {
+  private void applyPendingWorldSettings(Minecraft client) {
     CreateWorldOptions options = pendingWorldOptions;
     if (options == null) {
       return;
@@ -1356,7 +1590,12 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       }
     }
     // No insomnia rule to set: 1.12.2 has no such game rule (it arrives in 1.15).
-    server.setDifficulty(difficulty(options.difficulty()));
+    int difficulty = difficulty(options.difficulty());
+    for (net.minecraft.server.world.ServerWorld world : server.worlds) {
+      if (world != null) {
+        world.difficulty = difficulty;
+      }
+    }
   }
 
   private static GameMode gameMode(String name) {
@@ -1374,16 +1613,16 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     }
   }
 
-  private static Difficulty difficulty(String name) {
+  private static int difficulty(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "peaceful":
-        return Difficulty.PEACEFUL;
+        return 0;
       case "easy":
-        return Difficulty.EASY;
+        return 1;
       case "hard":
-        return Difficulty.HARD;
+        return 3;
       default:
-        return Difficulty.NORMAL;
+        return 2;
     }
   }
 
@@ -1398,7 +1637,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return;
     }
     try {
-      for (Field field : MinecraftClient.class.getDeclaredFields()) {
+      for (Field field : Minecraft.class.getDeclaredFields()) {
         if (!field.getType().getSimpleName().equals("ClientTickTracker")) {
           continue;
         }
@@ -1452,9 +1691,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return;
     }
     try {
-      Framebuffer framebuffer = mc().getFramebuffer();
-      int width = framebuffer.textureWidth;
-      int height = framebuffer.textureHeight;
+      int width = Display.getWidth();
+      int height = Display.getHeight();
       if (width <= 0 || height <= 0) {
         return;
       }
@@ -1489,12 +1727,13 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
    * them (GL's origin is the bottom-left).
    */
   private static int[] readFramebuffer() {
-    Framebuffer framebuffer = mc().getFramebuffer();
-    int width = framebuffer.textureWidth;
-    int height = framebuffer.textureHeight;
+    // 1.4.7 draws straight to the default framebuffer: there is no render target to bind, so the
+    // readback is of framebuffer 0 at the window's size.
+    int width = Display.getWidth();
+    int height = Display.getHeight();
     ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(width * height * 4);
     int previous = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
-    GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer.fbo);
+    GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
     try {
       GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
       GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
@@ -1552,7 +1791,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   /** One attempt at a capture, on the client thread. */
   private void captureScreenshot(ScreenshotRequest request, boolean write) {
-    MinecraftClient client = mc();
+    Minecraft client = mc();
     boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
       client.inGameHud.getChatHud().clear();
@@ -1565,9 +1804,8 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       request.retry("waiting for the first frame drawn after the chat was cleared");
       return;
     }
-    Framebuffer framebuffer = client.getFramebuffer();
-    int frameWidth = framebuffer.textureWidth;
-    int frameHeight = framebuffer.textureHeight;
+    int frameWidth = Display.getWidth();
+    int frameHeight = Display.getHeight();
     if (frameWidth <= 0 || frameHeight <= 0) {
       request.fail("no client framebuffer — is the client in a world?");
       return;
@@ -1592,7 +1830,16 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
       return;
     }
 
-    int guiScale = new Window(client, Display.getWidth(), Display.getHeight()).getScaleFactor();
+    int guiScale = client.options.guiScale;
+    if (guiScale == 0) {
+      // Vanilla's auto scale: the largest factor whose GUI still fits a 320x240 layout.
+      guiScale = 1;
+      while (guiScale < 4
+          && client.width / (guiScale + 1) >= 320
+          && client.height / (guiScale + 1) >= 240) {
+        guiScale++;
+      }
+    }
     int x = 0;
     int y = 0;
     int cropWidth = frameWidth;

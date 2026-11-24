@@ -22,8 +22,8 @@ unimined.minecraft {
   // cover this line: upstream intermediary starts at 1.14.
   mappings {
     legacyIntermediary()
-    // 603 is the newest legacy yarn build for 1.7.10 (meta.legacyfabric.net/v2/versions/yarn).
-    legacyYarn(603)
+    // 604 is the newest legacy yarn build (meta.legacyfabric.net/v2/versions/yarn).
+    legacyYarn(604)
   }
   // 0.20.1 is the newest loader release that still supports 1.12.2.
   legacyFabric { loader("0.20.1") }
@@ -197,6 +197,9 @@ dependencies {
   // the game's classloader this module's classes and not the libraries they link against, so the
   // script engine's own dependency has to be there by hand.
   implementation("org.luaj:luaj-jse:3.0.1")
+  // 1.4.7 ships gson 2.2.2 inside the game jar; the compile classpath does not carry it, so the
+  // flat-world reader and the JSON-to-NBT reader link against the same version explicitly.
+  implementation("com.google.code.gson:gson:2.2.2")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
 }

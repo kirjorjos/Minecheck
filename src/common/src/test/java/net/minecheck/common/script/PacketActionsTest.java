@@ -16,9 +16,11 @@ import net.minecheck.common.net.PacketInbox;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.ServerPlatform;
 import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
+import net.minecheck.platform.api.net.NetworkPlatformBase;
 import net.minecheck.platform.api.net.PacketValue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +40,7 @@ class PacketActionsTest {
   /**
    * Fake transport: records what a script sends and can be driven as if the loader received data.
    */
-  static final class FakeNetwork implements NetworkPlatform {
+  static final class FakeNetwork extends NetworkPlatformBase {
     final List<String> sent = new ArrayList<>();
     final List<String> sentTo = new ArrayList<>();
     final List<String> observed = new ArrayList<>();
@@ -122,7 +124,7 @@ class PacketActionsTest {
     Path scriptFile = tempDir.resolve("packet-script.lua");
     Files.writeString(scriptFile, script);
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return "1.19.2";

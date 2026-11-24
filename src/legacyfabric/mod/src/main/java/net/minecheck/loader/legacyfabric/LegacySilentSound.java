@@ -3,16 +3,15 @@ package net.minecheck.loader.legacyfabric;
 import java.util.logging.Logger;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecheck.common.config.AudioPolicy;
-import net.minecraft.client.MinecraftClient;
 
 /**
  * Keeps this client silent, when {@code muteAudio} says so.
  *
- * <p>Two halves, because either one alone leaks sound on this line: {@link
- * net.minecheck.loader.legacyfabric.mixin.SoundManagerMixin} refuses every play before the engine
- * mixes it, and the device vanilla opened during startup is closed on the first client tick. The
- * device exists for the few seconds between client start and that tick, which is the same caveat
- * the Forge line carries.
+ * <p>There is one half here, not the two the newer lines carry: the sound-system mixin refuses
+ * every play before the engine mixes it, and the engine itself is left alone. 1.4.7's sound wrapper
+ * keeps calling {@code setListenerPosition} on the paulscode engine every frame, so stopping that
+ * engine nulls the state the render loop reads and crashes the client. A refused play never reaches
+ * the device, which is the silence that matters.
  */
 public final class LegacySilentSound {
 
@@ -21,7 +20,7 @@ public final class LegacySilentSound {
   /** Set once the refusal has been reported, so the reason is logged once per run. */
   private static boolean reported;
 
-  /** Set once closing the device has been attempted, so a failure is not retried every tick. */
+  /** Set once the one-time report has been made. */
   private static boolean quietAttempted;
 
   private LegacySilentSound() {}
@@ -39,34 +38,23 @@ public final class LegacySilentSound {
     if (!reported) {
       reported = true;
       LOG.info(
-          "Minecheck: muteAudio is on — no sound will be played (the device vanilla opened at"
-              + " startup is closed on the first client tick)");
+          "Minecheck: muteAudio is on — every play is refused before it reaches the audio device");
     }
     return true;
   }
 
   /**
-   * Closes the device vanilla opened at startup. Called from the client tick, before the camera
-   * work, until it has been attempted once.
+   * Reports the silence once, from the first client tick.
+   *
+   * <p>The device vanilla opened at startup is deliberately not touched: see the class comment.
    */
   static void shutDownDevice() {
     if (quietAttempted || !muted()) {
       return;
     }
     quietAttempted = true;
-    MinecraftClient minecraft = MinecraftClient.getInstance();
-    if (minecraft == null) {
-      return;
-    }
-    try {
-      // SoundManager.close() is what tears the system down, which closes the OpenAL device.
-      minecraft.getSoundManager().close();
-      minecraft.getSoundManager().stopAll();
-      LOG.info("Minecheck: muteAudio is on — closed the audio device vanilla opened at startup");
-    } catch (RuntimeException e) {
-      LOG.warning(
-          "Minecheck: muteAudio is on but the audio device could not be closed — plays are still"
-              + " refused, so the run stays silent");
-    }
+    LOG.info(
+        "Minecheck: muteAudio is on — the audio device is opened by vanilla and left running; no"
+            + " play reaches it");
   }
 }

@@ -5,22 +5,20 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.EntityInfo;
-import net.minecheck.platform.api.ServerPlatform;
+import net.minecheck.platform.api.ServerPlatformBase;
 import net.minecraft.block.Block;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
-import net.minecraft.nbt.JsonToNBT;
+import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tileentity.TileEntity;
@@ -41,7 +39,7 @@ import net.minecraft.world.gen.ChunkProviderServer;
  * by {@link #WAIT_SECONDS} so a stopped server reports an error instead of hanging the caller for
  * ever.
  */
-public class ForgeServerPlatform implements ServerPlatform {
+public class ForgeServerPlatform extends ServerPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
@@ -90,24 +88,32 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (thread == null || thread == Thread.currentThread()) {
       return action.get();
     }
-    CompletableFuture<T> done = new CompletableFuture<>();
+    // A latch rather than a future: on Java 7 JvmDowngrader rewrites `CompletableFuture` to a stub
+    // that only carries the static factories, so `new CompletableFuture<>()` does not survive the
+    // downgrade.
+    Object[] value = new Object[1];
+    Throwable[] failure = new Throwable[1];
+    CountDownLatch done = new CountDownLatch(1);
     pending.add(
         () -> {
           try {
-            done.complete(action.get());
+            value[0] = action.get();
           } catch (Throwable t) {
-            done.completeExceptionally(t);
+            failure[0] = t;
+          } finally {
+            done.countDown();
           }
         });
     try {
-      return done.get(WAIT_SECONDS, TimeUnit.SECONDS);
-    } catch (TimeoutException e) {
-      throw new IllegalStateException("the server did not reach the action in time", e);
+      if (!done.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the server did not reach the action in time");
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("interrupted while waiting for the server", e);
-    } catch (ExecutionException e) {
-      Throwable cause = e.getCause();
+    }
+    Throwable cause = failure[0];
+    if (cause != null) {
       if (cause instanceof RuntimeException) {
         throw (RuntimeException) cause;
       }
@@ -116,6 +122,9 @@ public class ForgeServerPlatform implements ServerPlatform {
       }
       throw new IllegalStateException(cause);
     }
+    @SuppressWarnings("unchecked")
+    T result = (T) value[0];
+    return result;
   }
 
   private WorldServer overworld() {
@@ -151,8 +160,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       return new NBTTagCompound();
     }
     try {
-      // This line's reader answers a generic tag; a command or fixture always writes a compound.
-      return (NBTTagCompound) JsonToNBT.func_150315_a(nbt);
+      return JsonToNbt.parse(nbt);
     } catch (Exception e) {
       throw new IllegalArgumentException("invalid NBT: " + e.getMessage(), e);
     }
@@ -161,33 +169,44 @@ public class ForgeServerPlatform implements ServerPlatform {
   @Override
   public int runCommand(String command) {
     return onServerThread(
-        () -> {
-          MinecraftServer s = requireServer();
-          String line =
-              LegacyCommandShim.translate(command.startsWith("/") ? command.substring(1) : command);
-          WorldServer world = s.worldServerForDimension(0);
-          Integer rule = LegacyCommandShim.gameruleValue(world, line);
-          if (rule != null) {
-            return rule;
-          }
-          Integer entity = LegacyCommandShim.executeIfEntity(world, line);
-          if (entity != null) {
-            return entity;
-          }
-          Integer data = LegacyCommandShim.dataGetEntity(world, line);
-          if (data != null) {
-            return data;
-          }
-          Integer tagged = LegacyCommandShim.tagCommand(world, line);
-          if (tagged != null) {
-            return tagged;
-          }
-          Integer conditional = LegacyCommandShim.executeIfBlock(world, line);
-          if (conditional != null) {
-            return conditional;
-          }
-          return s.getCommandManager().executeCommand(s, line);
-        });
+        (Supplier<Integer>)
+            () -> {
+              MinecraftServer s = requireServer();
+              String line =
+                  LegacyCommandShim.translate(
+                      command.startsWith("/") ? command.substring(1) : command);
+              WorldServer world = s.worldServerForDimension(0);
+              Integer given = LegacyCommandShim.give(world, line);
+              if (given != null) {
+                return given;
+              }
+              Integer rule = LegacyCommandShim.gameruleValue(world, line);
+              if (rule != null) {
+                return rule;
+              }
+              Integer entity = LegacyCommandShim.executeIfEntity(world, line);
+              if (entity != null) {
+                return entity;
+              }
+              Integer data = LegacyCommandShim.dataGetEntity(world, line);
+              if (data != null) {
+                return data;
+              }
+              Integer tagged = LegacyCommandShim.tagCommand(world, line);
+              if (tagged != null) {
+                return tagged;
+              }
+              Integer conditional = LegacyCommandShim.executeIfBlock(world, line);
+              if (conditional != null) {
+                return conditional;
+              }
+              // 1.4.7's command manager answers void, where the newer lines answer the result
+              // count;
+              // reaching here means the command was dispatched, which is the success this API
+              // reports.
+              s.getCommandManager().executeCommand(s, line);
+              return 1;
+            });
   }
 
   @Override
@@ -196,7 +215,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (s == null) {
       return false;
     }
-    return onServerThread(() -> s.getConfigurationManager().getPlayerByUsername(name) != null);
+    return onServerThread(() -> s.getConfigurationManager().getPlayerForUsername(name) != null);
   }
 
   @Override
@@ -205,11 +224,15 @@ public class ForgeServerPlatform implements ServerPlatform {
         () -> {
           WorldServer level = overworld();
           net.minecraft.world.GameRules rules = level.getGameRules();
-          // doWeatherCycle arrives in 1.11; this line knows no such rule and creates nothing for
-          // it.
-          // Weather is pinned by the run's own clock instead.
+          // The two rules this line's own game loop reads, and the two later lines add. The later
+          // pair changes no behaviour here — nothing reads them — but a fixture queries them, and a
+          // rule that does not exist reads as whatever the world saved: created as `false` the
+          // query answers what the run actually guarantees (weather and insomnia are pinned by the
+          // run's own clock).
           rules.setOrCreateGameRule("doMobSpawning", "false");
           rules.setOrCreateGameRule("doDaylightCycle", "false");
+          rules.setOrCreateGameRule("doWeatherCycle", "false");
+          rules.setOrCreateGameRule("doInsomnia", "false");
           return null;
         });
   }
@@ -228,11 +251,11 @@ public class ForgeServerPlatform implements ServerPlatform {
     Map<Integer, Entity> entities = new LinkedHashMap<>();
     for (Object o : level.loadedEntityList) {
       Entity entity = (Entity) o;
-      entities.put(entity.getEntityId(), entity);
+      entities.put(entity.entityId, entity);
     }
     for (Object o : level.playerEntities) {
       Entity entity = (Entity) o;
-      entities.put(entity.getEntityId(), entity);
+      entities.put(entity.entityId, entity);
     }
     for (Entity entity : entities.values()) {
       // A removed entity stays listed until the next tick; it is not something a client observes.
@@ -247,9 +270,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       if (tag != null && !tags.contains(tag)) {
         continue;
       }
-      out.add(
-          new EntityInfo(
-              entity.getEntityId(), actual, entity.posX, entity.posY, entity.posZ, tags));
+      out.add(new EntityInfo(entity.entityId, actual, entity.posX, entity.posY, entity.posZ, tags));
     }
     return Collections.unmodifiableList(out);
   }
@@ -350,8 +371,27 @@ public class ForgeServerPlatform implements ServerPlatform {
     // The template is read by this line's own type table, which keys on the CamelCase name, so the
     // id is translated before it reaches it.
     String legacy = MinecheckNames.legacyEntityId(location);
-    tag.setString("id", legacy == null ? location.substring(location.indexOf(':') + 1) : legacy);
-    Entity entity = EntityList.createEntityFromNBT(tag, level);
+    String name = legacy == null ? location.substring(location.indexOf(':') + 1) : legacy;
+    // This line's reader takes a *saved* entity, not a script's field list: it reads `Pos`,
+    // `Motion` and `Rotation` out of the tag without checking that they are there, so a tag of
+    // nothing but `NoAI` answered `IndexOutOfBoundsException: Index: 0, Size: 0` and the spawn
+    // failed. A blank instance of the type is written out first, and the script's fields are merged
+    // over the top of it — the same shape a chunk save would have produced.
+    Entity blank = EntityList.createEntityByName(name, level);
+    if (blank == null) {
+      throw new IllegalArgumentException("unknown entity type: " + id);
+    }
+    NBTTagCompound full = new NBTTagCompound();
+    // The public writer, which is the one chunk saving uses: it writes `Pos`, `Motion`,
+    // `Rotation` and the flags this line's reader expects, and delegates the type's own fields to
+    // the protected `writeEntityToNBT`.
+    blank.writeToNBT(full);
+    for (Object raw : tag.getTags()) {
+      NBTBase child = (NBTBase) raw;
+      full.setTag(child.getName(), child);
+    }
+    full.setString("id", name);
+    Entity entity = EntityList.createEntityFromNBT(full, level);
     if (entity == null) {
       throw new IllegalArgumentException("unknown entity type: " + id);
     }
@@ -362,7 +402,10 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (!level.spawnEntityInWorld(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
     }
-    return entity.getEntityId();
+    // A field the spawn declared that this line has no storage for stays readable through
+    // `data get entity` (see LegacyCommandShim#rememberSpawnTag).
+    LegacyCommandShim.rememberSpawnTag(entity.entityId, tag);
+    return entity.entityId;
   }
 
   @Override
@@ -373,7 +416,7 @@ public class ForgeServerPlatform implements ServerPlatform {
   private boolean spawnBlockOnServerThread(
       String id, int x, int y, int z, String nbt, boolean replace) {
     String location = parseId(id, "block");
-    Block block = Block.getBlockFromName(MinecheckNames.legacyId(location));
+    Block block = MinecheckNames.block(location);
     if (block == null) {
       throw new IllegalArgumentException("unknown block: " + id);
     }
@@ -383,12 +426,12 @@ public class ForgeServerPlatform implements ServerPlatform {
     }
     // 1.7.10 has no block states: a block is placed with its metadata, and every id a script names
     // is placed at metadata 0, which is what the newer lines' default state resolves to.
-    if (!level.setBlock(x, y, z, block, 0, 3)) {
+    if (!level.setBlockAndMetadataWithNotify(x, y, z, block.blockID, 0)) {
       return false;
     }
     NBTTagCompound tag = parseTag(nbt);
-    if (!tag.getKeySet().isEmpty()) {
-      TileEntity blockEntity = level.getTileEntity(x, y, z);
+    if (!tag.hasNoTags()) {
+      TileEntity blockEntity = level.getBlockTileEntity(x, y, z);
       if (blockEntity != null) {
         tag.setInteger("x", x);
         tag.setInteger("y", y);
@@ -407,14 +450,14 @@ public class ForgeServerPlatform implements ServerPlatform {
   private int spawnItemDropOnServerThread(
       String id, int count, double x, double y, double z, String nbt) {
     String location = parseId(id, "item");
-    Object registered = Item.itemRegistry.getObject(location);
-    if (!(registered instanceof Item)) {
+    Item registered = MinecheckNames.item(location);
+    if (registered == null) {
       throw new IllegalArgumentException("unknown item: " + id);
     }
     WorldServer level = overworld();
-    ItemStack stack = new ItemStack((Item) registered, count, 0);
+    ItemStack stack = new ItemStack(registered, count, 0);
     NBTTagCompound tag = parseTag(nbt);
-    if (!tag.getKeySet().isEmpty()) {
+    if (!tag.hasNoTags()) {
       stack.setTagCompound(tag);
     }
     EntityItem itemEntity = new EntityItem(level, x, y, z, stack);
@@ -422,7 +465,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (!level.spawnEntityInWorld(itemEntity)) {
       throw new IllegalStateException("failed to spawn item drop " + id);
     }
-    return itemEntity.getEntityId();
+    return itemEntity.entityId;
   }
 
   /**

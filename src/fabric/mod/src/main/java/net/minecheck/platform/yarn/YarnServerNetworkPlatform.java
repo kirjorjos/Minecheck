@@ -8,6 +8,7 @@ import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
+import net.minecheck.platform.api.net.NetworkPlatformBase;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.server.MinecraftServer;
@@ -23,7 +24,7 @@ import net.minecraft.util.PacketByteBuf;
  * {@code net.minecraft.client.*} is not on the classpath. The client counterpart is {@link
  * YarnClientNetworkPlatform}.
  */
-public class YarnServerNetworkPlatform implements NetworkPlatform {
+public class YarnServerNetworkPlatform extends NetworkPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
   private static final Identifier CHANNEL = new Identifier("minecheck", "main");

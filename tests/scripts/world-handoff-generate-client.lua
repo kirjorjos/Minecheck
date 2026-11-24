@@ -43,7 +43,9 @@ local function surfaceKnown()
   return height ~= nil and height ~= 0
 end
 minecheck.expect(minecheck.waitFor(surfaceKnown, 90), "the marker's surface is known")
-local MARKER_Y = SURFACE_Y + 160
+-- 1.4.7's world is 128 blocks tall, so a marker 160 above the surface would be outside it: this
+-- line's marker goes as high as its height allows and still sits above the heightmap's read.
+local MARKER_Y = SURFACE_Y + (minecheck.minecraftVersion():match("^1%.4%.") and 100 or 160)
 -- The values this phase measured, for the handoff baseline the suite compares against.
 minecheck.observe("surfaceY", SURFACE_Y)
 minecheck.observe("markerY", MARKER_Y)

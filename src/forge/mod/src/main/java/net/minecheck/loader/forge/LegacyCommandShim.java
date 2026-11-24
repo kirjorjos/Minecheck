@@ -14,9 +14,13 @@ import net.minecraft.block.Block;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.World;
 import net.minecraft.world.gen.ChunkProviderServer;
 
@@ -44,6 +48,21 @@ final class LegacyCommandShim {
    */
   private static final Map<Integer, Set<String>> TAGS = new ConcurrentHashMap<>();
 
+  /**
+   * The tag a script spawned an entity with, keyed by entity id.
+   *
+   * <p>A field this line has no home for — {@code Attributes} arrives in 1.6 — is not written onto
+   * the entity, so a script that spawned one with an attribute and read it back found nothing. The
+   * tag is kept here and answers a {@code data get} path the entity's own NBT does not have, the
+   * same arrangement the scoreboard tags above use.
+   */
+  private static final Map<Integer, NBTTagCompound> SPAWN_TAGS = new ConcurrentHashMap<>();
+
+  /** Remembers what an entity was spawned with, for the fields this line cannot store on it. */
+  static void rememberSpawnTag(int entityId, NBTTagCompound tag) {
+    SPAWN_TAGS.put(entityId, tag);
+  }
+
   private static final Pattern EXECUTE_IF_BLOCK =
       Pattern.compile(
           "^execute\\s+if\\s+block\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+([A-Za-z0-9_.:\\-]+)"
@@ -68,6 +87,23 @@ final class LegacyCommandShim {
           "^fill\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+"
               + "([A-Za-z0-9_.:\\-]+)(?:\\s.*)?$");
 
+  /** {@code give <player> <item> [count] [data] [tag]}, including the inline tag. */
+  private static final Pattern GIVE_COMMAND =
+      Pattern.compile(
+          "^give\\s+(\\S+)\\s+(\\S+)(?:\\s+(\\d+))?(?:\\s+(\\d+))?(?:\\s+(\\{.*\\}))?\\s*$");
+
+  /** {@code setblock} as a script writes it, with {@code ~} still to be resolved. */
+  private static final Pattern SETBLOCK_COMMAND =
+      Pattern.compile(
+          "^setblock\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+([A-Za-z0-9_.:\\-]+)"
+              + "(?:\\s+(\\d+))?(?:\\s+(\\{.*\\}))?$");
+
+  /** {@code setblock} with absolute coordinates, which is what reaches the world write. */
+  private static final Pattern SETBLOCK =
+      Pattern.compile(
+          "^setblock\\s+(-?\\d+)\\s+(-?\\d+)\\s+(-?\\d+)\\s+([A-Za-z0-9_.:\\-]+)"
+              + "(?:\\s+(\\d+))?(?:\\s+\\{.*)?$");
+
   private static final Pattern TELEPORT =
       Pattern.compile("^tp\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+\\S+\\s+\\S+$");
 
@@ -75,7 +111,7 @@ final class LegacyCommandShim {
 
   /** The tags a script has set on an entity, as it would read them back. */
   static Set<String> tagsOf(Entity entity) {
-    Set<String> tags = TAGS.get(entity.getEntityId());
+    Set<String> tags = TAGS.get(entity.entityId);
     if (tags == null) {
       return Collections.emptySet();
     }
@@ -85,13 +121,21 @@ final class LegacyCommandShim {
   }
 
   private static boolean addTag(Entity entity, String tag) {
-    Set<String> tags =
-        TAGS.computeIfAbsent(entity.getEntityId(), id -> ConcurrentHashMap.newKeySet());
+    Set<String> tags;
+    // Not `computeIfAbsent`: its mapping function is a lambda, and the Java 7 downgrade of this
+    // module turns that overload into a stub that throws (see RunResult.passed).
+    synchronized (TAGS) {
+      tags = TAGS.get(entity.entityId);
+      if (tags == null) {
+        tags = ConcurrentHashMap.newKeySet();
+        TAGS.put(entity.entityId, tags);
+      }
+    }
     return tags.add(tag);
   }
 
   private static boolean removeTag(Entity entity, String tag) {
-    Set<String> tags = TAGS.get(entity.getEntityId());
+    Set<String> tags = TAGS.get(entity.entityId);
     return tags != null && tags.remove(tag);
   }
 
@@ -136,6 +180,25 @@ final class LegacyCommandShim {
               + " "
               + teleport.group(4);
     }
+    // `/setblock` does not exist on this line either, so a line that uses one is rewritten to
+    // absolute coordinates and answered by the shim when it is dispatched. The coordinates have to
+    // be resolved here, because the dispatch runs where the runner's feet are not known.
+    Matcher setblock = SETBLOCK_COMMAND.matcher(rewritten.trim());
+    if (setblock.matches()) {
+      StringBuilder absolute =
+          new StringBuilder("setblock ")
+              .append(coordinate(setblock.group(1), feetX))
+              .append(' ')
+              .append(coordinate(setblock.group(2), feetY))
+              .append(' ')
+              .append(coordinate(setblock.group(3), feetZ))
+              .append(' ')
+              .append(MinecheckNames.legacyId(setblock.group(4)));
+      if (setblock.group(5) != null) {
+        absolute.append(' ').append(setblock.group(5));
+      }
+      return Collections.singletonList(absolute.toString());
+    }
     Matcher fill = FILL.matcher(rewritten.trim());
     if (!fill.matches()) {
       return Collections.singletonList(rewritten);
@@ -158,6 +221,119 @@ final class LegacyCommandShim {
     return out;
   }
 
+  /**
+   * Writes a block for a {@code /setblock} or {@code /fill} line, which this line has no commands
+   * for.
+   *
+   * <p>Accepts both the absolute form a client's rewrite produces and the {@code fill} form a
+   * script writes directly. A metadata argument is accepted and ignored: every block a fixture
+   * names is the metadata-zero form the newer lines' default state resolves to.
+   */
+  static Integer setBlock(World world, String command) {
+    String trimmed = command.trim();
+    Matcher fill = FILL.matcher(trimmed);
+    if (fill.matches()) {
+      int placed = 0;
+      for (String single : expandForLegacy(trimmed, "", 0.0, 0.0, 0.0)) {
+        Integer result = setBlock(world, single);
+        if (result != null) {
+          placed += result;
+        }
+      }
+      return placed;
+    }
+    Matcher match = SETBLOCK.matcher(trimmed);
+    if (!match.matches()) {
+      return null;
+    }
+    if (world == null) {
+      return 0;
+    }
+    int x = Integer.parseInt(match.group(1));
+    int y = Integer.parseInt(match.group(2));
+    int z = Integer.parseInt(match.group(3));
+    int blockId = blockId(match.group(4));
+    // A scene can be built away from any player, and this line answers false for a position in a
+    // chunk that is not loaded, so the chunk is read through first.
+    if (world.getChunkProvider() instanceof ChunkProviderServer) {
+      ((ChunkProviderServer) world.getChunkProvider()).loadChunk(x >> 4, z >> 4);
+    }
+    world.setBlockAndMetadataWithNotify(x, y, z, blockId, 0);
+    return 1;
+  }
+
+  /**
+   * The block id a {@code setblock} argument stands for.
+   *
+   * <p>Three forms reach here: a name a fixture writes ({@code minecraft:iron_block}), the numeric
+   * id this line's own scripts write, and {@code air}, which is id 0 and has no entry in this
+   * line's block table — {@code setblock ... air} is how a fixture clears a position, so it has to
+   * resolve rather than be reported as an unknown block.
+   */
+  private static int blockId(String name) {
+    Block block = MinecheckNames.block(name);
+    if (block != null) {
+      return block.blockID;
+    }
+    String bare = name.indexOf(':') >= 0 ? name.substring(name.indexOf(':') + 1) : name;
+    if ("air".equals(bare)) {
+      return 0;
+    }
+    try {
+      int id = Integer.parseInt(bare);
+      if (id >= 0 && (id == 0 || (id < Block.blocksList.length && Block.blocksList[id] != null))) {
+        return id;
+      }
+    } catch (NumberFormatException ignored) {
+      // Reported below, the way an unknown name is.
+    }
+    throw new IllegalArgumentException("unknown block: " + name);
+  }
+
+  /**
+   * A {@code give} that carries an inline tag, answered here because this line's own command stops
+   * at the damage value.
+   *
+   * <p>1.7.10's {@code /give <player> <itemid> <amount> [damage]} has no tag argument, so the named
+   * sword the beacon phase gives arrived unnamed: the phase reads {@code display.Name} off the
+   * stack and found nothing. Reading the tag back off the command and attaching it to the stack is
+   * the only way the name reaches the item on this line. A {@code give} without a tag is left to
+   * the command manager, which already handles it.
+   */
+  static Integer give(World world, String command) {
+    Matcher match = GIVE_COMMAND.matcher(command.trim());
+    if (!match.matches() || match.group(5) == null) {
+      return null;
+    }
+    MinecraftServer server = MinecraftServer.getServer();
+    if (server == null) {
+      return null;
+    }
+    EntityPlayerMP player = server.getConfigurationManager().getPlayerForUsername(match.group(1));
+    if (player == null) {
+      return 0;
+    }
+    Item item = MinecheckNames.item(match.group(2));
+    if (item == null) {
+      // The numeric form is what this line's own scripts write, after `rewriteGive`.
+      try {
+        int id = Integer.parseInt(match.group(2));
+        item = id >= 0 && id < Item.itemsList.length ? Item.itemsList[id] : null;
+      } catch (NumberFormatException ignored) {
+        item = null;
+      }
+    }
+    if (item == null) {
+      throw new IllegalArgumentException("unknown item: " + match.group(2));
+    }
+    int count = match.group(3) == null ? 1 : Integer.parseInt(match.group(3));
+    int data = match.group(4) == null ? 0 : Integer.parseInt(match.group(4));
+    ItemStack stack = new ItemStack(item, count, data);
+    stack.setTagCompound(JsonToNbt.parse(normalizeQuotes(match.group(5))));
+    player.inventory.addItemStackToInventory(stack);
+    return 1;
+  }
+
   /** A fill coordinate: absolute, or {@code ~} relative to the runner's feet. */
   private static int coordinate(String token, double origin) {
     if (!token.startsWith("~")) {
@@ -169,8 +345,15 @@ final class LegacyCommandShim {
   }
 
   /**
-   * Rewrites the 1.13 inline-tag {@code /give} into the form 1.7.10 parses, or returns the command
-   * unchanged when it is anything else.
+   * Rewrites a {@code /give} into the form 1.4.7 parses, or returns the command unchanged when it
+   * cannot be.
+   *
+   * <p>The item is an <em>id</em> on this line: a 1.13 name reaches the parser as the amount and is
+   * answered {@code "'minecraft:emerald' is not a valid number"} — which is how the merged
+   * server-features session's `give`s silently did nothing and left the client waiting for a
+   * handshake that never came. The name is resolved through the same table the spawn actions use,
+   * and a block resolves to its item form. An inline tag may sit before or after the amount, where
+   * this line takes it last.
    */
   static String rewriteGive(String command) {
     String trimmed = command.trim();
@@ -178,26 +361,53 @@ final class LegacyCommandShim {
       return command;
     }
     int open = trimmed.indexOf('{');
-    if (open < 0) {
-      return command;
-    }
-    String head = trimmed.substring("give ".length(), open);
+    String head =
+        open < 0 ? trimmed.substring("give ".length()) : trimmed.substring("give ".length(), open);
     String[] parts = head.trim().split("\\s+");
-    if (parts.length != 2) {
+    if (parts.length < 2) {
       return command;
     }
-    int close = matchingBrace(trimmed, open);
-    if (close < 0) {
+    String item = legacyItemId(parts[1]);
+    if (item == null) {
       return command;
     }
-    String tag = normalizeQuotes(trimmed.substring(open, close + 1));
-    String count = trimmed.substring(close + 1).trim();
-    if (count.isEmpty()) {
-      count = "1";
+    String count = parts.length > 2 ? parts[2] : "1";
+    String data = parts.length > 3 ? parts[3] : "0";
+    String tag = "";
+    if (open >= 0) {
+      int close = matchingBrace(trimmed, open);
+      if (close < 0) {
+        return command;
+      }
+      tag = " " + normalizeQuotes(trimmed.substring(open, close + 1));
+      String after = trimmed.substring(close + 1).trim();
+      if (!after.isEmpty()) {
+        count = after;
+      }
     }
-    // <player> <item> [amount] [data] [dataTag]: the tag is the last argument here, not part of the
-    // item a 1.7.10 lookup would try to resolve.
-    return "give " + parts[0] + " " + parts[1] + " " + count + " 0 " + tag;
+    // <player> <item> [amount] [data] [dataTag]: the item is an id here, and the tag is last.
+    return "give " + parts[0] + " " + item + " " + count + " " + data + tag;
+  }
+
+  /**
+   * The numeric id this line's {@code /give} takes for an item name, or {@code null} when it has
+   * none.
+   */
+  private static String legacyItemId(String id) {
+    if (id.matches("\\d+")) {
+      return id;
+    }
+    Item item = MinecheckNames.item(id);
+    if (item == null) {
+      Block block = MinecheckNames.block(id);
+      // 1.4.7 has no `Item.getItemFromBlock`: a block's item form is registered under its own
+      // block id in the item table, and that is the id `/give` takes.
+      item =
+          block == null || block.blockID >= Item.itemsList.length
+              ? null
+              : Item.itemsList[block.blockID];
+    }
+    return item == null ? null : Integer.toString(item.itemID);
   }
 
   /**
@@ -258,9 +468,11 @@ final class LegacyCommandShim {
     if (!match.matches() || world == null) {
       return null;
     }
-    // A rule this line does not have reads as "off": 1.7.10 predates doWeatherCycle and doInsomnia,
-    // and the suite's question is only ever "is it disabled".
-    String value = world.getGameRules().getGameRuleStringValue(match.group(1));
+    // A rule this line does not have reads as "off": the suite's question is only ever "is it
+    // disabled", and `hasRule` is what tells an absent rule from a present one.
+    net.minecraft.world.GameRules rules = world.getGameRules();
+    String value =
+        rules.hasRule(match.group(1)) ? rules.getGameRuleStringValue(match.group(1)) : "";
     if (value == null || value.isEmpty() || value.equalsIgnoreCase("false") || value.equals("0")) {
       return 0;
     }
@@ -317,14 +529,27 @@ final class LegacyCommandShim {
     }
     NBTTagCompound entityTag = new NBTTagCompound();
     found.get(0).writeToNBT(entityTag);
-    NBTBase node = entityTag;
-    for (String step : match.group(2).split("\\.")) {
-      node = child(node, step);
-      if (node == null) {
-        return 0;
-      }
+    NBTBase node = path(entityTag, match.group(2));
+    if (node == null) {
+      NBTTagCompound spawned = SPAWN_TAGS.get(found.get(0).entityId);
+      node = spawned == null ? null : path(spawned, match.group(2));
+    }
+    if (node == null) {
+      return 0;
     }
     return MinecheckNames.isNumber(node) ? (int) Math.round(MinecheckNames.asDouble(node)) : 1;
+  }
+
+  /** The tag at a dotted NBT path, or {@code null} when the tree has no such node. */
+  private static NBTBase path(NBTBase root, String dotted) {
+    NBTBase node = root;
+    for (String step : dotted.split("\\.")) {
+      node = child(node, step);
+      if (node == null) {
+        return null;
+      }
+    }
+    return node;
   }
 
   /** One step of an NBT path, such as {@code Attributes[0]}. */
@@ -348,7 +573,7 @@ final class LegacyCommandShim {
       // This line's list exposes no element at an index: it answers by type, so a list of compounds
       // — the only list a path continues into — is read through the compound accessor.
       try {
-        value = list.getCompoundTagAt(index);
+        value = list.tagAt(index);
       } catch (RuntimeException e) {
         return null;
       }
@@ -368,8 +593,13 @@ final class LegacyCommandShim {
     int x = Integer.parseInt(match.group(1));
     int y = Integer.parseInt(match.group(2));
     int z = Integer.parseInt(match.group(3));
-    Block expected = Block.getBlockFromName(MinecheckNames.legacyId(match.group(4)));
-    if (expected == null) {
+    // `blockId` also answers `air`, which this line's block table has no entry for: a fixture
+    // tests "is this cell air" after clearing it, and the test read as false for every cell. An
+    // unknown name is still a no-match rather than an error.
+    int expected;
+    try {
+      expected = blockId(match.group(4));
+    } catch (IllegalArgumentException unknown) {
       return 0;
     }
     // An unloaded chunk has no blocks to test: report no match rather than loading it here, which
@@ -379,7 +609,7 @@ final class LegacyCommandShim {
       return 0;
     }
     // This line has no block states, so the block is what a state comparison resolves to.
-    return world.getBlock(x, y, z) == expected ? 1 : 0;
+    return world.getBlockId(x, y, z) == expected ? 1 : 0;
   }
 
   /** The entities a selector names, with the 1.13 arguments this line has no parser for. */

@@ -1,129 +1,82 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.network.internal.FMLProxyPacket;
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelPipeline;
+import cpw.mods.fml.common.network.IPacketHandler;
+import cpw.mods.fml.common.network.NetworkRegistry;
+import cpw.mods.fml.common.network.Player;
+import cpw.mods.fml.relauncher.Side;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
-import net.minecraft.network.NetworkManager;
-import net.minecraft.network.play.client.C17PacketCustomPayload;
-import net.minecraft.network.play.server.S3FPacketCustomPayload;
+import net.minecraft.network.INetworkManager;
+import net.minecraft.network.packet.Packet250CustomPayload;
 
 /**
- * Shared plumbing for the Forge low-level frame taps ({@link ForgeClientChannelTap} on a physical
- * client, {@link ForgeServerChannelTap} on a dedicated server).
+ * Observing another mod's channel on 1.4.7.
  *
- * <p>Both taps are the same trick: a netty {@code channelRead} handler inserted <em>in front of
- * vanilla's own {@link NetworkManager}</em> sees every already-decoded packet while still passing
- * it on untouched. Anchoring on the handler instance rather than a pipeline name keeps this working
- * across mappings and loader versions, where the handler's name is not stable.
+ * <p>{@link NetworkRegistry} keeps its handlers in a multimap, so registering one more handler for
+ * a channel does not take the channel away from the mod that owns it: every handler registered for
+ * the channel is handed the payload. Watching a channel is therefore a registration, not a pipeline
+ * tap, and it works on a client and a dedicated server the same way.
+ *
+ * <p>The handler has to be registered <em>for this side</em>. The two-argument registration only
+ * fills the universal map, and this line's dispatcher reads the side's own map — which is the one
+ * Minecheck's transport registers in, so an observer registered the other way was never called and
+ * the tap looked blind on both sides while the transport worked.
+ *
+ * <p>The handler is registered once per channel and dispatches to the current observer list, so a
+ * second engine instance replacing the first cannot accumulate duplicate deliveries.
  */
 final class ForgeChannelTaps {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
-  /** Handler name used in the pipeline; also how a repeat install is detected. */
-  static final String HANDLER_NAME = "minecheck_tap";
+  /** Watched channels by id, each with its observer; shared with the network platform. */
+  private static final Map<String, List<Consumer<byte[]>>> OBSERVERS = new ConcurrentHashMap<>();
+
+  /** Channels already registered, so repeated watches do not add a second handler. */
+  private static final Set<String> REGISTERED =
+      Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+  private static final IPacketHandler HANDLER =
+      new IPacketHandler() {
+        @Override
+        public void onPacketData(
+            INetworkManager manager, Packet250CustomPayload packet, Player player) {
+          if (packet == null || packet.channel == null || packet.data == null) {
+            return;
+          }
+          List<Consumer<byte[]>> observers = OBSERVERS.get(packet.channel);
+          if (observers == null || observers.isEmpty()) {
+            return;
+          }
+          byte[] payload = packet.data.clone();
+          for (Consumer<byte[]> observer : observers) {
+            try {
+              observer.accept(payload);
+            } catch (RuntimeException e) {
+              // An observer must never disturb the connection it observes.
+              LOG.warning(String.format("Minecheck: channel tap error (ignored): %s", e));
+            }
+          }
+        }
+      };
 
   private ForgeChannelTaps() {}
 
-  /**
-   * The channel a custom-payload message travels on, or {@code null} when the message is something
-   * else. On this line a mod payload may already have been wrapped into an {@link FMLProxyPacket}
-   * by FML's own handler, so both spellings are recognised.
-   */
-  static String channelOf(Object msg) {
-    if (msg instanceof FMLProxyPacket) {
-      return ((FMLProxyPacket) msg).channel();
+  /** Registers {@code observer} for {@code channel}, adding the handler on first watch. */
+  static boolean observe(String channel, Consumer<byte[]> observer, boolean dedicated) {
+    // Replaced, not appended: one engine owns a channel at a time.
+    OBSERVERS.put(channel, new CopyOnWriteArrayList<>(Collections.singletonList(observer)));
+    if (REGISTERED.add(channel)) {
+      NetworkRegistry.instance()
+          .registerChannel(HANDLER, channel, dedicated ? Side.SERVER : Side.CLIENT);
+      LOG.info(String.format("Minecheck: observing channel %s", channel));
     }
-    if (msg instanceof S3FPacketCustomPayload) {
-      return ((S3FPacketCustomPayload) msg).func_149169_c();
-    }
-    if (msg instanceof C17PacketCustomPayload) {
-      return ((C17PacketCustomPayload) msg).getChannel();
-    }
-    return null;
-  }
-
-  /** A non-destructive copy of a custom payload's bytes, or {@code null} when it is not one. */
-  static byte[] payloadOf(Object msg) {
-    if (msg instanceof S3FPacketCustomPayload) {
-      return ((S3FPacketCustomPayload) msg).func_149168_d();
-    }
-    if (msg instanceof C17PacketCustomPayload) {
-      return ((C17PacketCustomPayload) msg).getData();
-    }
-    if (!(msg instanceof FMLProxyPacket)) {
-      return null;
-    }
-    ByteBuf data = ((FMLProxyPacket) msg).payload();
-    if (data == null) {
-      return null;
-    }
-    byte[] payload = new byte[data.readableBytes()];
-    data.getBytes(data.readerIndex(), payload);
-    return payload;
-  }
-
-  /**
-   * Inserts {@code tap} in front of vanilla's {@link NetworkManager} handler on {@code manager}'s
-   * channel — or at the end of the pipeline when that handler is not found (still better than not
-   * observing at all). Idempotent per connection. Never throws: a tap is an observer, so failing to
-   * install it must not disturb the connection.
-   */
-  static boolean install(NetworkManager manager, ChannelInboundHandlerAdapter tap, String label) {
-    if (manager == null) {
-      return false;
-    }
-    Channel channel = manager.channel();
-    if (channel == null) {
-      return false;
-    }
-    ChannelPipeline pipeline = channel.pipeline();
-    if (pipeline.get(HANDLER_NAME) != null) {
-      return true; // already tapping this connection
-    }
-    String anchor = null;
-    for (Map.Entry<String, ChannelHandler> entry : pipeline.toMap().entrySet()) {
-      ChannelHandler handler = entry.getValue();
-      // Matched by name as well as by type: the handler in the pipeline is a remapped vanilla
-      // class, and a type check alone silently degrades to the blind fallback below when it is not
-      // the exact class this module compiles against.
-      if (handler instanceof NetworkManager
-          || handler.getClass().getName().equals("net.minecraft.network.NetworkManager")) {
-        anchor = entry.getKey();
-        break;
-      }
-    }
-    try {
-      if (anchor != null) {
-        pipeline.addBefore(anchor, HANDLER_NAME, tap);
-      } else if (pipeline.get("packet_handler") != null) {
-        // Vanilla's own name for the NetworkManager stage, used when the type check found nothing.
-        anchor = "packet_handler";
-        pipeline.addBefore(anchor, HANDLER_NAME, tap);
-      } else {
-        // Last resort, and blind by construction: a simple-channel handler downstream consumes the
-        // payload, so nothing reaches a handler added after it.
-        pipeline.addLast(HANDLER_NAME, tap);
-        LOG.warning(
-            String.format(
-                "Minecheck: no NetworkManager handler to anchor the %s channel tap in front of —"
-                    + " the tap is blind (pipeline %s)",
-                label, pipeline.names()));
-        return true;
-      }
-      LOG.info(
-          String.format(
-              "Minecheck: installed the %s channel tap before '%s' (%s, pipeline %s)",
-              label, anchor, channel.remoteAddress(), pipeline.names()));
-      return true;
-    } catch (RuntimeException e) {
-      LOG.warning(String.format("Minecheck: could not install the %s channel tap: %s", label, e));
-      return false;
-    }
+    return true;
   }
 }

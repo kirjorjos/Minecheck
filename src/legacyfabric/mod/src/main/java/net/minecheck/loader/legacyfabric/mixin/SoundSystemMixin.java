@@ -1,8 +1,7 @@
 package net.minecheck.loader.legacyfabric.mixin;
 
 import net.minecheck.loader.legacyfabric.LegacySilentSound;
-import net.minecraft.client.sound.SoundInstance;
-import net.minecraft.client.sound.SoundManager;
+import net.minecraft.client.sound.SoundSystem;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -16,17 +15,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * instead, so this is the hook.
  *
  * <p>{@code require = 0}: a moved method disables silence rather than the client, and the device is
- * still closed on the first tick either way.
+ * still stopped on the first tick either way.
  */
-@Mixin(SoundManager.class)
-public class SoundManagerMixin {
+@Mixin(SoundSystem.class)
+public class SoundSystemMixin {
 
   @Inject(
-      method = "play(Lnet/minecraft/client/sound/SoundInstance;)V",
+      method = "playSound(Ljava/lang/String;FFFFF)V",
       at = @At("HEAD"),
       cancellable = true,
       require = 0)
-  private void minecheck$refuse(SoundInstance sound, CallbackInfo ci) {
+  private void minecheck$refuse(
+      String sound, float volume, float pitch, float x, float y, float z, CallbackInfo ci) {
     if (LegacySilentSound.refuse()) {
       ci.cancel();
     }

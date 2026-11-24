@@ -1,48 +1,49 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.common.eventhandler.SubscribeEvent;
-import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityClientPlayerMP;
 import net.minecraft.util.MovementInput;
-import net.minecraftforge.client.event.MouseEvent;
 import net.minecraftforge.client.event.sound.PlaySoundEvent;
+import net.minecraftforge.event.ForgeSubscribe;
+import org.lwjgl.input.Keyboard;
+import org.lwjgl.input.Mouse;
 
 /**
  * This line's client-only hooks.
  *
- * <p>1.7.10 ships no Mixin at all, so the hooks the newer lines carry as mixins are native Forge
- * events here. The camera's Ctrl+scroll shortcut is {@link MouseEvent} (which fires before the
- * notch becomes a hotbar change, so cancelling it keeps the hotbar still).
+ * <p>1.4.7 ships no Mixin and no tick event bus, so the hooks the newer lines carry as mixins are
+ * polled from the tick handler here:
  *
- * <p>The idle-player rule has no event of its own on this line — {@code InputUpdateEvent} arrives
- * with 1.8 — so it is applied at the start of the client tick instead: the input object vanilla is
- * about to read is cleared there, which is where the {@code Input#tick} injection sits on the newer
- * lines. A tick's start is before the player moves, so the body still never leaves the pose the
- * server last saw.
+ * <ul>
+ *   <li>the camera's F4 toggle and Ctrl+scroll shortcut, read from LWJGL directly because this line
+ *       has no key-binding registry and no mouse event;
+ *   <li>the idle-player rule, applied at the start of the client tick — the input object vanilla is
+ *       about to read is cleared there, which is where the {@code Input#tick} injection sits on the
+ *       newer lines.
+ * </ul>
  *
- * <p>Registered by {@link ForgeEntrypoint} only on a physical client, and kept in its own class on
- * purpose: these types name client-only classes, and a server that merely loads a class mentioning
- * them dies in Forge's dist cleaner.
+ * <p>Scroll cannot be cancelled on this line, so a camera speed change also moves the hotbar by the
+ * same notch. That is a difference the game imposes; the camera itself still answers.
  *
- * <p>The sound refusal lives here too, for the same reason: {@code PlaySoundEvent} names a
- * client-only sound class, and {@code muteAudio} is a client setting.
+ * <p>The sound refusal lives here too: {@code PlaySoundEvent} names a client-only sound class, and
+ * {@code muteAudio} is a client setting.
  */
 public final class ForgeClientHooks {
 
-  /**
-   * Forge's own "play nothing" answer, for {@code muteAudio}. Every sound passes through here
-   * before the engine mixes it, so refusing it is what makes a muted run silent.
-   */
-  @SubscribeEvent
+  /** Forge's own "play nothing" answer, for {@code muteAudio}. */
+  @ForgeSubscribe
   public void onPlaySound(PlaySoundEvent event) {
     ForgeSilentSound.refuse(event);
   }
 
-  /** Clears the movement input vanilla is about to tick, while the camera holds the body still. */
-  @SubscribeEvent
-  public void onClientTick(TickEvent.ClientTickEvent event) {
-    if (event.phase != TickEvent.Phase.START || !ForgeCameraPlatform.steering()) {
+  /** Polls the camera's input and clears the movement input vanilla is about to tick. */
+  static void tickStart() {
+    ForgeCameraPlatform.pollToggle(Keyboard.isKeyDown(Keyboard.KEY_F4));
+    int wheel = Mouse.getDWheel();
+    if (wheel != 0) {
+      ForgeCameraPlatform.handleScroll(wheel);
+    }
+    if (!ForgeCameraPlatform.steering()) {
       return;
     }
     EntityClientPlayerMP player = Minecraft.getMinecraft().thePlayer;
@@ -57,12 +58,5 @@ public final class ForgeClientHooks {
     input.moveStrafe = 0.0f;
     input.jump = false;
     input.sneak = false;
-  }
-
-  @SubscribeEvent
-  public void onMouseScroll(MouseEvent event) {
-    if (ForgeCameraPlatform.handleScroll(event.dwheel)) {
-      event.setCanceled(true);
-    }
   }
 }

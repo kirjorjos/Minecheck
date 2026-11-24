@@ -1,7 +1,7 @@
 package net.minecheck.loader.legacyfabric.mixin;
 
 import net.minecheck.loader.legacyfabric.LegacyFabricEntrypoint;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>{@code require = 1}: a moved tick method would silently stop every client script, and a client
  * that boots and never runs is worse than one that fails to start.
  */
-@Mixin(MinecraftClient.class)
+@Mixin(Minecraft.class)
 public class ClientTickMixin {
 
   @Inject(method = "tick", at = @At("HEAD"), require = 1)
