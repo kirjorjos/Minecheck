@@ -1,10 +1,10 @@
 package net.minecheck.common.bootstrap;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Iterator;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -148,20 +148,32 @@ public final class MinecheckBootstrap {
       return;
     }
     Files.createDirectories(runDir);
-    for (Iterator<Path> it = Files.walk(source).iterator(); it.hasNext(); ) {
-      Path p = it.next();
-      Path rel = source.relativize(p);
-      if (rel.getNameCount() == 0) {
-        continue;
-      }
-      Path target = runDir.resolve(rel.toString());
-      if (Files.isDirectory(p)) {
-        Files.createDirectories(target);
+    copyTree(source.toFile(), runDir.toFile());
+    LOG.info(String.format("Minecheck: staged server run dir from %s into %s", source, runDir));
+  }
+
+  /**
+   * Copies {@code source} over {@code target}, one directory at a time.
+   *
+   * <p>Plain recursion rather than {@code Files.walk}: this module ships as Java 7 bytecode (see
+   * {@code minecheck.downgradeTo}), and the downgrader's Java 8 stubs for the stream-returning
+   * methods have no body, so walking the tree that way crashed the dedicated server at preInit with
+   * {@code MissingStubError}. Files and directories are the only things it copies either way.
+   */
+  private static void copyTree(File source, File target) throws IOException {
+    File[] children = source.listFiles();
+    if (children == null) {
+      return;
+    }
+    for (File child : children) {
+      File destination = new File(target, child.getName());
+      if (child.isDirectory()) {
+        Files.createDirectories(destination.toPath());
+        copyTree(child, destination);
       } else {
-        Files.createDirectories(target.getParent());
-        Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING);
+        Files.createDirectories(destination.getParentFile().toPath());
+        Files.copy(child.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
       }
     }
-    LOG.info(String.format("Minecheck: staged server run dir from %s into %s", source, runDir));
   }
 }

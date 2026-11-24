@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
+import net.minecheck.platform.api.net.NetworkPlatformBase;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.client.MinecraftClient;
@@ -17,7 +18,7 @@ import net.minecraft.util.PacketByteBuf;
  * Client-side transport over {@code fabric-networking-api-v1}: sends to the connected server
  * (including the integrated server of a singleplayer world) and receives server → client packets.
  */
-public class YarnClientNetworkPlatform implements NetworkPlatform {
+public class YarnClientNetworkPlatform extends NetworkPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
   private static final Identifier CHANNEL = new Identifier("minecheck", "main");

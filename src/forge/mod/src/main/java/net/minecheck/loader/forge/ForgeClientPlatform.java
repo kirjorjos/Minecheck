@@ -9,6 +9,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.minecheck.common.config.GameWindowPolicy;
@@ -18,6 +22,7 @@ import net.minecheck.platform.api.BlockInfo;
 import net.minecheck.platform.api.BlockPosition;
 import net.minecheck.platform.api.CameraPlatform;
 import net.minecheck.platform.api.ClientPlatform;
+import net.minecheck.platform.api.ClientPlatformBase;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecheck.platform.api.EntityInfo;
 import net.minecheck.platform.api.InjectedInput;
@@ -36,35 +41,29 @@ import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiEditSign;
 import net.minecraft.client.multiplayer.GuiConnecting;
+import net.minecraft.client.multiplayer.NetClientHandler;
 import net.minecraft.client.multiplayer.WorldClient;
-import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.inventory.Slot;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.network.NetworkManager;
-import net.minecraft.network.play.client.C01PacketChatMessage;
+import net.minecraft.network.packet.Packet3Chat;
 import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.tileentity.TileEntitySign;
-import net.minecraft.util.IChatComponent;
 import net.minecraft.util.MovingObjectPosition;
-import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.Vec3;
-import net.minecraft.world.EnumDifficulty;
+import net.minecraft.world.EnumGameType;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.WorldType;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.DisplayMode;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL30;
 
 /**
  * The client-side half of the Legacy Fabric platform.
@@ -81,7 +80,7 @@ import org.lwjgl.opengl.GL30;
  * user-visible behaviour — world entry, input, commands, screens, slots, captures — is the same,
  * which is what the shared suites check.
  */
-public final class ForgeClientPlatform implements ClientPlatform {
+public final class ForgeClientPlatform extends ClientPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 
@@ -148,6 +147,22 @@ public final class ForgeClientPlatform implements ClientPlatform {
     return Minecraft.getMinecraft();
   }
 
+  /** The play connection's handler, or {@code null} when the client has no player yet. */
+  private static NetClientHandler netHandler(Minecraft client) {
+    return client.thePlayer == null ? null : client.thePlayer.sendQueue;
+  }
+
+  /** A button's width or height, which 1.4.7 keeps protected. */
+  private static int buttonSize(GuiButton button, String name, int fallback) {
+    try {
+      Field field = GuiButton.class.getDeclaredField(name);
+      field.setAccessible(true);
+      return field.getInt(button);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return fallback;
+    }
+  }
+
   /** Records that the client finished drawing a frame. */
   public static void notifyFrameDrawn() {
     markClientThread();
@@ -205,6 +220,32 @@ public final class ForgeClientPlatform implements ClientPlatform {
             + " window stays mapped (pause-on-focus-loss is still off)");
   }
 
+  /** Work scripts have queued for the client thread, drained at the start of every client tick. */
+  private static final Queue<Runnable> CLIENT_TASKS = new ConcurrentLinkedQueue<>();
+
+  /** How long a caller off the client thread waits for its work to run there. */
+  private static final long CLIENT_TASK_TIMEOUT_SECONDS = 30;
+
+  /** Runs the work queued for the client thread. The client tick calls this. */
+  static void drainClientTasks() {
+    Runnable task;
+    while ((task = CLIENT_TASKS.poll()) != null) {
+      task.run();
+    }
+    // A rotation a script asked for stays authoritative for a moment: the client's own frame and
+    // input handling write the angles too, and a script that looks and then rays in the same breath
+    // reads what it asked for only if the write is not overwritten first. Same window as the Legacy
+    // Fabric line, which is where the fixture's behaviour is pinned.
+    if (scriptedLookTicks > 0) {
+      Minecraft client = mc();
+      if (client != null && client.thePlayer != null) {
+        client.thePlayer.rotationPitch = scriptedPitch;
+        client.thePlayer.rotationYaw = scriptedYaw;
+      }
+      scriptedLookTicks--;
+    }
+  }
+
   private static void onClientThread(Runnable r) {
     Minecraft client = mc();
     if (client == null) {
@@ -212,12 +253,28 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     if (isClientThread()) {
       r.run();
-    } else {
-      client.addScheduledTask(
-          () -> {
+      return;
+    }
+    // 1.4.7 has no scheduled-task queue, and its client work has to run on the render thread: the
+    // script engine ticks on a worker (LuaJ refuses to yield the main thread), so a call it makes
+    // is handed to the client thread and waited for here. Running it inline instead reaches
+    // OpenGL from the worker and fails with "No OpenGL context found in the current thread".
+    CountDownLatch done = new CountDownLatch(1);
+    CLIENT_TASKS.add(
+        () -> {
+          try {
             r.run();
-            return null;
-          });
+          } finally {
+            done.countDown();
+          }
+        });
+    try {
+      if (!done.await(CLIENT_TASK_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("the client thread did not run the action in time");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while waiting for the client thread", e);
     }
   }
 
@@ -232,7 +289,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void reloadResources() {
     onClientThread(
         () -> {
-          mc().refreshResources();
+          mc().scheduleTexturePackRefresh();
           reloadTicksRemaining = 2;
         });
   }
@@ -255,8 +312,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
             mc().launchIntegratedServer(
                     worldName,
                     worldName,
-                    new WorldSettings(
-                        0L, WorldSettings.GameType.SURVIVAL, false, false, WorldType.DEFAULT)));
+                    new WorldSettings(0L, EnumGameType.SURVIVAL, false, false, WorldType.DEFAULT)));
   }
 
   @Override
@@ -318,8 +374,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
         () -> {
           Minecraft client = mc();
           armHandshakeLatch();
-          client.displayGuiScreen(
-              new GuiConnecting(client.currentScreen, client, finalHost, finalPort));
+          client.displayGuiScreen(new GuiConnecting(client, finalHost, finalPort));
           LOG.info(String.format("joinServer: GuiConnecting(%s:%s)", finalHost, finalPort));
         });
   }
@@ -465,29 +520,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (client.thePlayer != null) {
       return false;
     }
-    NetHandlerPlayClient handler = client.getNetHandler();
-    if (handler == null) {
-      return false;
-    }
-    NetworkManager connection = connectionOf(handler);
-    return connection != null && connection.isChannelOpen();
-  }
-
-  /** The play handler's connection, found by type: the field name is mapping-dependent. */
-  private static NetworkManager connectionOf(NetHandlerPlayClient handler) {
-    for (Class<?> type = handler.getClass(); type != null; type = type.getSuperclass()) {
-      for (Field field : type.getDeclaredFields()) {
-        if (NetworkManager.class.isAssignableFrom(field.getType())) {
-          try {
-            field.setAccessible(true);
-            return (NetworkManager) field.get(handler);
-          } catch (ReflectiveOperationException | RuntimeException e) {
-            return null;
-          }
-        }
-      }
-    }
-    return null;
+    // 1.4.7's play handler has no channel-open query, and a login always installs one before it
+    // installs the player; a handler with no player is therefore a login in progress.
+    return netHandler(client) != null;
   }
 
   @Override
@@ -526,6 +561,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public boolean keyDown(String key) {
+    if (key.startsWith("key.hotbar.")) {
+      onClientThread(() -> InjectedInput.run(() -> selectHotbarSlot(key)));
+      return true;
+    }
     int code = resolveKey(key);
     if (code == Keyboard.KEY_NONE) {
       return false;
@@ -558,24 +597,25 @@ public final class ForgeClientPlatform implements ClientPlatform {
                     if (code == Keyboard.KEY_RETURN && screen instanceof GuiChat) {
                       GuiTextField field = findTextField(screen);
                       String text = field == null ? "" : field.getText();
-                      if (!text.isEmpty()
-                          && mc().thePlayer != null
-                          && mc().getNetHandler() != null) {
+                      if (!text.isEmpty() && mc().thePlayer != null && netHandler(mc()) != null) {
                         // A typed command goes through the same rewrite as a scripted one: `@s` and
                         // `/fill` are not syntax this line has, wherever the command came from.
                         EntityPlayer player = mc().thePlayer;
                         for (String line :
                             text.startsWith("/")
                                 ? LegacyCommandShim.expandForLegacy(
-                                    text.substring(1),
+                                    // The same rewrites a scripted command gets: a name where this
+                                    // line's `/give` wants an id is rejected outright, so a typed
+                                    // `/give @s minecraft:diamond 2` gave nothing at all.
+                                    LegacyCommandShim.translate(text.substring(1)),
                                     player.getCommandSenderName(),
                                     player.posX,
                                     feetY(player),
                                     player.posZ)
                                 : java.util.Collections.singletonList(text)) {
-                          mc().getNetHandler()
+                          netHandler(mc())
                               .addToSendQueue(
-                                  new C01PacketChatMessage(line.equals(text) ? line : "/" + line));
+                                  new Packet3Chat(line.equals(text) ? line : "/" + line));
                         }
                       }
                       mc().displayGuiScreen(null);
@@ -610,6 +650,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void keyUp(String key) {
+    if (key.startsWith("key.hotbar.")) {
+      // Selecting a slot is a state change, not a held key: there is nothing to release.
+      return;
+    }
     int code = resolveKey(key);
     if (code == Keyboard.KEY_NONE) {
       return;
@@ -657,8 +701,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
   /** The code bound to a binding id, or {@code Keyboard.KEY_NONE} when nothing is bound to it. */
   private static int keyCodeNamed(String id) {
     for (KeyBinding binding : keyBindings(mc().gameSettings)) {
-      if (id.equals(binding.getKeyDescription())) {
-        return binding.getKeyCode();
+      if (id.equals(binding.keyDescription)) {
+        return binding.keyCode;
       }
     }
     return Keyboard.KEY_NONE;
@@ -728,7 +772,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     for (KeyBinding binding : keyBindings(mc().gameSettings)) {
-      if (binding.getKeyCode() != code) {
+      if (binding.keyCode != code) {
         continue;
       }
       try {
@@ -739,17 +783,84 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
   }
 
+  /**
+   * Selects a hotbar slot from a script's {@code key.hotbar.N}.
+   *
+   * <p>This line has no hotbar bindings: 1.4.7 switches slots from the number-key events in its own
+   * key loop, which an injected press never reaches (so {@code key.hotbar.1} resolved to nothing at
+   * all). The slot is selected the way that loop would: set the selected index, then let the
+   * controller tell the server — a place step spends the *server's* selected slot, so a selection
+   * the server never heard about leaves the hand holding something else.
+   */
+  private static void selectHotbarSlot(String key) {
+    Minecraft client = mc();
+    if (client.thePlayer == null || client.playerController == null) {
+      return;
+    }
+    int slot;
+    try {
+      slot = Integer.parseInt(key.substring("key.hotbar.".length())) - 1;
+    } catch (NumberFormatException e) {
+      LOG.warning(String.format("keyDown: no hotbar slot in '%s'", key));
+      return;
+    }
+    if (slot < 0 || slot > 8) {
+      LOG.warning(String.format("keyDown: no such hotbar slot in '%s'", key));
+      return;
+    }
+    client.thePlayer.inventory.currentItem = slot;
+    try {
+      Method sync = client.playerController.getClass().getDeclaredMethod("syncCurrentPlayItem");
+      sync.setAccessible(true);
+      sync.invoke(client.playerController);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.warning(String.format("keyDown: could not sync the selected slot: %s", e));
+    }
+  }
+
   private static void pressMouseCode(int button, boolean down) {
     int code = -100 + button;
     KeyBinding.setKeyBindState(code, down);
     if (down) {
       KeyBinding.onTick(code);
+      // Same reason as pressKeyCode: the client's own mouse handling is what normally advances a
+      // binding's press time, and it never sees an injected button. Without it the pick-block
+      // binding (a middle click's code) reads as un-pressed and the middle click did nothing.
+      setKeyPressTime(code, 1);
+    }
+  }
+
+  /**
+   * Runs a middle click's action.
+   *
+   * <p>1.4.7 handles pick block inside its own LWJGL mouse loop rather than from a binding this
+   * module can press, so an injected middle button never reached it and the pick did nothing (the
+   * binding state alone is not enough: {@code clickMiddleMouseButton} is what reads the crosshair
+   * and puts the block in the hotbar). Calling it is the same entry point a real middle click
+   * takes.
+   */
+  private static void pickBlock() {
+    Minecraft client = mc();
+    try {
+      Method method = Minecraft.class.getDeclaredMethod("clickMiddleMouseButton");
+      method.setAccessible(true);
+      method.invoke(client);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.warning(String.format("mouseDown: the middle click could not pick a block: %s", e));
     }
   }
 
   @Override
   public boolean mouseDown(int button) {
-    onClientThread(() -> InjectedInput.run(() -> pressMouseCode(button, true)));
+    onClientThread(
+        () ->
+            InjectedInput.run(
+                () -> {
+                  pressMouseCode(button, true);
+                  if (button == 2) {
+                    pickBlock();
+                  }
+                }));
     return true;
   }
 
@@ -765,8 +876,19 @@ public final class ForgeClientPlatform implements ClientPlatform {
   private static int resolveKey(String key) {
     if (key.startsWith("key.")) {
       for (KeyBinding binding : keyBindings(mc().gameSettings)) {
-        if (key.equals(binding.getKeyDescription())) {
-          return binding.getKeyCode();
+        if (key.equals(binding.keyDescription)) {
+          return binding.keyCode;
+        }
+      }
+      // This line spells the hotbar bindings `key.hotbar1` where the newer lines write
+      // `key.hotbar.1`. Comparing without punctuation lets one script name resolve on both, which
+      // a fixture needs when it selects a hotbar slot by number (a middle click's pick lands in
+      // the hotbar and the script then has to select that slot).
+      String loose = key.replace(".", "");
+      for (KeyBinding binding : keyBindings(mc().gameSettings)) {
+        if (binding.keyDescription != null
+            && binding.keyDescription.replace(".", "").equals(loose)) {
+          return binding.keyCode;
         }
       }
       LOG.warning(String.format("keyDown: unknown binding '%s'", key));
@@ -786,8 +908,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
   /** The key code of the client's own inventory binding, or {@code -1} when it cannot be read. */
   private static int inventoryKeyCode() {
     for (KeyBinding binding : keyBindings(mc().gameSettings)) {
-      if ("key.inventory".equals(binding.getKeyDescription())) {
-        return binding.getKeyCode();
+      if ("key.inventory".equals(binding.keyDescription)) {
+        return binding.keyCode;
       }
     }
     return -1;
@@ -877,8 +999,21 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
   }
 
+  /** How many client ticks a scripted rotation stays authoritative. */
+  private static final int SCRIPTED_LOOK_TICKS = 40;
+
+  /** The rotation a script last asked for, and the ticks it remains authoritative. */
+  private static volatile float scriptedPitch;
+
+  private static volatile float scriptedYaw;
+
+  private static volatile int scriptedLookTicks;
+
   @Override
   public void setLook(float pitch, float yaw) {
+    scriptedPitch = pitch;
+    scriptedYaw = yaw;
+    scriptedLookTicks = SCRIPTED_LOOK_TICKS;
     onClientThread(
         () -> {
           EntityPlayer player = mc().thePlayer;
@@ -898,12 +1033,15 @@ public final class ForgeClientPlatform implements ClientPlatform {
             return;
           }
           double dx = x - player.posX;
-          // posY is already the eye position on this line.
-          double dy = y - player.posY;
+          // From the eye, which is posY plus the eye height on this line — posY is the feet.
+          double dy = y - (player.posY + player.getEyeHeight());
           double dz = z - player.posZ;
           double horizontal = Math.sqrt(dx * dx + dz * dz);
           player.rotationYaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
           player.rotationPitch = (float) -(Math.atan2(dy, horizontal) * 180.0 / Math.PI);
+          scriptedPitch = player.rotationPitch;
+          scriptedYaw = player.rotationYaw;
+          scriptedLookTicks = SCRIPTED_LOOK_TICKS;
         });
   }
 
@@ -931,13 +1069,15 @@ public final class ForgeClientPlatform implements ClientPlatform {
     // turned the player — before the next frame — so the pick is made here, from the look the
     // player has now, at the reach vanilla gives the crosshair.
     EntityPlayer player = client.thePlayer;
-    // posY is already the eye position on this line, which is where the crosshair starts.
-    Vec3 start = Vec3.createVectorHelper(player.posX, player.posY, player.posZ);
+    // From the eye, not posY: on this line posY is the feet, and a ray started a block and a half
+    // below them begins inside the very block the script is pointing at and misses it.
+    Vec3 start =
+        Vec3.createVectorHelper(player.posX, player.posY + player.getEyeHeight(), player.posZ);
     Vec3 direction = directionOf(player);
     Vec3 end =
         start.addVector(direction.xCoord * 5.0, direction.yCoord * 5.0, direction.zCoord * 5.0);
     MovingObjectPosition hit = client.theWorld.rayTraceBlocks(start, end);
-    if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
+    if (hit == null || hit.typeOfHit != net.minecraft.util.EnumMovingObjectType.TILE) {
       return null;
     }
     return new BlockPosition(hit.blockX, hit.blockY, hit.blockZ);
@@ -945,8 +1085,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   /** The unit vector a player is looking along; this line has no accessor for it. */
   private static Vec3 directionOf(EntityPlayer player) {
-    float pitch = (float) Math.toRadians(player.rotationPitch);
-    float yaw = (float) Math.toRadians(player.rotationYaw);
+    // A rotation a script just set wins while it is still authoritative: the game may not have
+    // copied it into the player yet when the pick is made in the same breath.
+    float pitchDegrees = scriptedLookTicks > 0 ? scriptedPitch : player.rotationPitch;
+    float yawDegrees = scriptedLookTicks > 0 ? scriptedYaw : player.rotationYaw;
+    float pitch = (float) Math.toRadians(pitchDegrees);
+    float yaw = (float) Math.toRadians(yawDegrees);
     return Vec3.createVectorHelper(
         -Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
@@ -958,8 +1102,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (level == null) {
       return java.util.Collections.emptyList();
     }
-    ResourceLocation typeId =
-        type == null ? null : new ResourceLocation(type.toLowerCase(Locale.ROOT));
+    String typeId = type == null ? null : type.toLowerCase(Locale.ROOT);
     List<EntityInfo> out = new ArrayList<>();
     for (Object candidate : level.loadedEntityList) {
       Entity entity = (Entity) candidate;
@@ -968,7 +1111,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       if (entity.isDead) {
         continue;
       }
-      ResourceLocation actual = entityTypeId(entity);
+      String actual = entityTypeId(entity);
       if (typeId != null && !typeId.equals(actual)) {
         continue;
       }
@@ -976,8 +1119,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       // a faithful copy of what the client actually knows.
       out.add(
           new EntityInfo(
-              entity.getEntityId(),
-              actual == null ? "" : actual.toString(),
+              entity.entityId,
+              actual == null ? "" : actual,
               entity.posX,
               entity.posY,
               entity.posZ,
@@ -987,11 +1130,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
   }
 
   /** The 1.13-style id of a client-side entity, from this line's CamelCase type name. */
-  private static ResourceLocation entityTypeId(Entity entity) {
+  private static String entityTypeId(Entity entity) {
     String legacy = EntityList.getEntityString(entity);
-    return legacy == null
-        ? new ResourceLocation("minecraft", "player")
-        : new ResourceLocation(MinecheckNames.modernEntityId(legacy));
+    return legacy == null ? "minecraft:player" : MinecheckNames.modernEntityId(legacy);
   }
 
   // ------------------------------------------------------------ commands and use
@@ -1000,7 +1141,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
   public void runCommand(String command) {
     Minecraft client = mc();
     EntityPlayer player = client.thePlayer;
-    if (player == null || client.getNetHandler() == null) {
+    if (player == null || netHandler(client) == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
     // `@s` and `/fill` are 1.8 syntax, so a command that uses either becomes the commands this
@@ -1016,10 +1157,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
     EntityPlayerMP self =
         server == null
             ? null
-            : server.getConfigurationManager().getPlayerByUsername(player.getCommandSenderName());
+            : server.getConfigurationManager().getPlayerForUsername(player.getCommandSenderName());
     if (self == null) {
       for (String line : lines) {
-        client.getNetHandler().addToSendQueue(new C01PacketChatMessage("/" + line));
+        netHandler(client).addToSendQueue(new Packet3Chat("/" + line));
       }
       return;
     }
@@ -1038,6 +1179,10 @@ public final class ForgeClientPlatform implements ClientPlatform {
   private static void runIntegratedCommand(
       net.minecraft.server.MinecraftServer server, EntityPlayerMP self, String cmd) {
     net.minecraft.world.WorldServer world = server.worldServerForDimension(0);
+    Integer given = LegacyCommandShim.give(world, cmd);
+    if (given != null) {
+      return;
+    }
     Integer rule = LegacyCommandShim.gameruleValue(world, cmd);
     Integer entity = rule == null ? LegacyCommandShim.executeIfEntity(world, cmd) : null;
     Integer data =
@@ -1062,7 +1207,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       throw new IllegalStateException("not in a world");
     }
     MovingObjectPosition hit = client.objectMouseOver;
-    if (hit == null || hit.typeOfHit != MovingObjectPosition.MovingObjectType.BLOCK) {
+    if (hit == null || hit.typeOfHit != net.minecraft.util.EnumMovingObjectType.TILE) {
       return;
     }
     // This line has one hand and an int side: the held stack and the side the hit reports are what
@@ -1084,7 +1229,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (client.theWorld == null) {
       throw new IllegalStateException("not in a world");
     }
-    TileEntity blockEntity = client.theWorld.getTileEntity(pos.x(), pos.y(), pos.z());
+    TileEntity blockEntity = client.theWorld.getBlockTileEntity(pos.x(), pos.y(), pos.z());
     if (!(blockEntity instanceof TileEntitySign)) {
       return false;
     }
@@ -1135,8 +1280,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return false;
     }
     GuiButton target = matches.get(at);
-    int clickX = target.xPosition + target.width / 2;
-    int clickY = target.yPosition + target.height / 2;
+    int clickX = target.xPosition + buttonSize(target, "width", 200) / 2;
+    int clickY = target.yPosition + buttonSize(target, "height", 20) / 2;
     // A press alone leaves the button down: this line runs a button's action on release, so the
     // screen is given the whole click the way a real one arrives.
     invokeScreen(
@@ -1200,13 +1345,12 @@ public final class ForgeClientPlatform implements ClientPlatform {
         // This line's buttons keep their label in a plain String field (`displayString`, from
         // before `message`), while the newer lines hold a Text; both are read, and only the
         // label-looking names are trusted so an unrelated string field cannot answer as the label.
-        boolean isText = IChatComponent.class.isAssignableFrom(field.getType());
         boolean isLabelString =
             field.getType() == String.class
                 && (field.getName().equals("displayString")
                     || field.getName().equals("message")
                     || field.getName().equals("label"));
-        if (!isText && !isLabelString) {
+        if (!isLabelString) {
           continue;
         }
         try {
@@ -1470,7 +1614,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return new SlotInfo(true, null, 0, null);
     }
     // Its registry answers a name string here, not an identifier.
-    String itemId = Item.itemRegistry.getNameForObject(stack.getItem());
+    String itemId = MinecheckNames.itemId(stack);
     NBTTagCompound nbt = stack.getTagCompound();
     return new SlotInfo(
         false,
@@ -1492,9 +1636,9 @@ public final class ForgeClientPlatform implements ClientPlatform {
     }
     // No block states here: the block, placed with its metadata, is what the newer lines' state
     // resolves to, and the id a script reads is the block's own.
-    Block block = client.theWorld.getBlock(pos.x(), pos.y(), pos.z());
-    TileEntity blockEntity = client.theWorld.getTileEntity(pos.x(), pos.y(), pos.z());
-    String blockId = Block.blockRegistry.getNameForObject(block);
+    Block block = Block.blocksList[client.theWorld.getBlockId(pos.x(), pos.y(), pos.z())];
+    TileEntity blockEntity = client.theWorld.getBlockTileEntity(pos.x(), pos.y(), pos.z());
+    String blockId = block == null ? "minecraft:air" : MinecheckNames.blockId(block);
     NBTTagCompound blockEntityTag = new NBTTagCompound();
     if (blockEntity != null) {
       // This line writes a block entity's NBT into a compound and answers nothing.
@@ -1592,31 +1736,32 @@ public final class ForgeClientPlatform implements ClientPlatform {
     server.setDifficultyForAllWorlds(difficulty(options.difficulty()));
   }
 
-  private static WorldSettings.GameType gameMode(String name) {
+  private static EnumGameType gameMode(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "survival":
-        return WorldSettings.GameType.SURVIVAL;
+        return EnumGameType.SURVIVAL;
       case "adventure":
-        return WorldSettings.GameType.ADVENTURE;
+        return EnumGameType.ADVENTURE;
       case "spectator":
-        // 1.7.10 predates spectator mode; adventure is the closest mode it has — no flight and no
+        // 1.4.7 predates spectator mode; adventure is the closest mode it has — no flight and no
         // ability to place blocks, which is what a spectator fixture relies on.
-        return WorldSettings.GameType.ADVENTURE;
+        return EnumGameType.ADVENTURE;
       default:
-        return WorldSettings.GameType.CREATIVE;
+        return EnumGameType.CREATIVE;
     }
   }
 
-  private static EnumDifficulty difficulty(String name) {
+  /** 1.4.7 spells difficulty as the protocol number: 0 peaceful, 1 easy, 2 normal, 3 hard. */
+  private static int difficulty(String name) {
     switch (name == null ? "" : name.toLowerCase(Locale.ROOT)) {
       case "peaceful":
-        return EnumDifficulty.PEACEFUL;
+        return 0;
       case "easy":
-        return EnumDifficulty.EASY;
+        return 1;
       case "hard":
-        return EnumDifficulty.HARD;
+        return 3;
       default:
-        return EnumDifficulty.NORMAL;
+        return 2;
     }
   }
 
@@ -1627,32 +1772,46 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void pinRenderTickDelta() {
-    if (vanillaCameraRestored || renderTickDeltaPinned || renderTickDeltaUnavailable) {
+    if (vanillaCameraRestored) {
       return;
     }
-    try {
-      for (Field field : Minecraft.class.getDeclaredFields()) {
-        if (!field.getType().getSimpleName().equals("ClientTickTracker")) {
-          continue;
-        }
-        field.setAccessible(true);
-        Object tracker = field.get(mc());
-        for (Field inner : tracker.getClass().getDeclaredFields()) {
-          if (inner.getType() != float.class) {
-            continue;
-          }
-          inner.setAccessible(true);
-          inner.setFloat(tracker, 1.0f);
-          renderTickDeltaPinned = true;
-          LOG.info("Minecheck: pinned the render tick delta to 1");
-          return;
-        }
+    // Re-pinned on every render tick, not once: this line's timer recomputes the partial tick from
+    // the wall clock at the top of each frame, so a value written once would be overwritten before
+    // the frame that reads it and every capture would straddle two ticks.
+    net.minecraft.util.Timer timer = renderTimer;
+    if (timer == null) {
+      timer = findRenderTimer();
+      renderTimer = timer;
+    }
+    if (timer == null) {
+      if (!renderTickDeltaUnavailable) {
+        renderTickDeltaUnavailable = true;
+        LOG.warning("Minecheck: no render tick tracker — captures keep the vanilla partial tick");
       }
-      renderTickDeltaUnavailable = true;
-      LOG.warning("Minecheck: no render tick tracker — captures keep the vanilla partial tick");
+      return;
+    }
+    timer.renderPartialTicks = 1.0f;
+    if (!renderTickDeltaPinned) {
+      renderTickDeltaPinned = true;
+      LOG.info("Minecheck: pinned the render tick delta to 1");
+    }
+  }
+
+  /** The client's tick timer, which is where 1.4.7 keeps the partial tick. */
+  private static volatile net.minecraft.util.Timer renderTimer;
+
+  /** The client's tick timer, read through its private field, or {@code null} when it is absent. */
+  private static net.minecraft.util.Timer findRenderTimer() {
+    try {
+      Field field = Minecraft.class.getDeclaredField("timer");
+      if (field.getType() != net.minecraft.util.Timer.class) {
+        return null;
+      }
+      field.setAccessible(true);
+      return (net.minecraft.util.Timer) field.get(mc());
     } catch (ReflectiveOperationException | RuntimeException e) {
-      renderTickDeltaUnavailable = true;
-      LOG.log(Level.WARNING, "Minecheck: could not pin the render tick delta", e);
+      LOG.log(Level.WARNING, "Minecheck: could not read the client's tick timer", e);
+      return null;
     }
   }
 
@@ -1685,9 +1844,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       return;
     }
     try {
-      Framebuffer framebuffer = mc().getFramebuffer();
-      int width = framebuffer.framebufferTextureWidth;
-      int height = framebuffer.framebufferTextureHeight;
+      int width = mc().displayWidth;
+      int height = mc().displayHeight;
       if (width <= 0 || height <= 0) {
         return;
       }
@@ -1722,18 +1880,13 @@ public final class ForgeClientPlatform implements ClientPlatform {
    * them (GL's origin is the bottom-left).
    */
   private static int[] readFramebuffer() {
-    Framebuffer framebuffer = mc().getFramebuffer();
-    int width = framebuffer.framebufferTextureWidth;
-    int height = framebuffer.framebufferTextureHeight;
+    // 1.4.7 draws straight into the default framebuffer; there is no render target to bind.
+    int width = mc().displayWidth;
+    int height = mc().displayHeight;
     ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(width * height * 4);
-    int previous = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
-    GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer.framebufferObject);
-    try {
-      GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
-      GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
-    } finally {
-      GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, previous);
-    }
+    GL11.glReadBuffer(GL11.GL_BACK);
+    GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
+    GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
     int[] argb = new int[width * height];
     for (int row = 0; row < height; row++) {
       int from = (height - 1 - row) * width * 4; // GL's origin is the bottom-left
@@ -1788,7 +1941,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
     Minecraft client = mc();
     boolean clearChat = !request.chatVisible() && client.theWorld != null;
     if (clearChat && !request.prepared()) {
-      client.ingameGUI.getChatGUI().clearChatMessages();
+      // 1.4.7's clear method never got an MCP name; this is GuiNewChat#clearChatMessages.
+      client.ingameGUI.getChatGUI().func_73761_a();
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");
@@ -1798,9 +1952,8 @@ public final class ForgeClientPlatform implements ClientPlatform {
       request.retry("waiting for the first frame drawn after the chat was cleared");
       return;
     }
-    Framebuffer framebuffer = client.getFramebuffer();
-    int frameWidth = framebuffer.framebufferTextureWidth;
-    int frameHeight = framebuffer.framebufferTextureHeight;
+    int frameWidth = client.displayWidth;
+    int frameHeight = client.displayHeight;
     if (frameWidth <= 0 || frameHeight <= 0) {
       request.fail("no client framebuffer — is the client in a world?");
       return;
@@ -1827,7 +1980,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
     int guiScale =
         new net.minecraft.client.gui.ScaledResolution(
-                client, Display.getWidth(), Display.getHeight())
+                client.gameSettings, Display.getWidth(), Display.getHeight())
             .getScaleFactor();
     int x = 0;
     int y = 0;

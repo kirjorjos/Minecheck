@@ -102,7 +102,14 @@ public final class PacketChannel {
 
   /** Registers an {@code onPacket} handler. Several handlers may watch the same name. */
   public void onPacket(String name, LuaValue handler) {
-    handlers.computeIfAbsent(name, k -> new ArrayList<>()).add(handler);
+    // Not `computeIfAbsent`: its mapping function is a lambda, and this module is downgraded to
+    // Java 7 bytecode for FML's ASM 4.0, where that overload reaches a stub that throws.
+    List<LuaValue> watching = handlers.get(name);
+    if (watching == null) {
+      watching = new ArrayList<>();
+      handlers.put(name, watching);
+    }
+    watching.add(handler);
   }
 
   /** Registers the decoder used for an observed foreign channel. */

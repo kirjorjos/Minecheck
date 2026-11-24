@@ -48,8 +48,23 @@ public record RunResult(
     this(script, finished, failed, failureMessage, expects, null);
   }
 
+  /**
+   * How many of the recorded checks passed.
+   *
+   * <p>A plain loop, not {@code expects.stream()...}: this module is downgraded to Java 7 bytecode
+   * for FML's ASM 4.0, and the downgrade turns {@code Collection.stream()} into a stub whose body
+   * does not exist. Calling it threw {@code "Missing stub body ... J_U_Collection.stream"} from
+   * inside the result write — which skipped the run's {@code failMode=exit} teardown and left the
+   * client and server both running until the harness gave up on them.
+   */
   public long passed() {
-    return expects.stream().filter(ExpectRecord::ok).count();
+    long count = 0;
+    for (ExpectRecord record : expects) {
+      if (record.ok()) {
+        count++;
+      }
+    }
+    return count;
   }
 
   public long total() {

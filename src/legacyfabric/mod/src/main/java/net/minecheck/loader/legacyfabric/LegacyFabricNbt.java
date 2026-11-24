@@ -2,7 +2,6 @@ package net.minecheck.loader.legacyfabric;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -40,12 +39,16 @@ final class LegacyFabricNbt {
   private static final Map<String, String> MODERN_IDS = new HashMap<>();
 
   static {
-    LEGACY_IDS.put("minecraft:oak_sign", "minecraft:standing_sign");
-    LEGACY_IDS.put("minecraft:oak_wall_sign", "minecraft:wall_sign");
+    // 1.4.7 has one sign block, named "Sign": the newer lines' standing and wall forms both
+    // resolve to it, and it reads back as the oak sign a fixture names.
+    LEGACY_IDS.put("minecraft:oak_sign", "minecraft:sign");
+    LEGACY_IDS.put("minecraft:oak_wall_sign", "minecraft:sign");
     LEGACY_IDS.put("minecraft:oak_planks", "minecraft:planks");
-    MODERN_IDS.put("minecraft:standing_sign", "minecraft:oak_sign");
-    MODERN_IDS.put("minecraft:wall_sign", "minecraft:oak_wall_sign");
+    // This line's item name is "Wooden Planks", so a stack of planks reads back under that name.
+    LEGACY_IDS.put("minecraft:wooden_planks", "minecraft:planks");
+    MODERN_IDS.put("minecraft:sign", "minecraft:oak_sign");
     MODERN_IDS.put("minecraft:planks", "minecraft:oak_planks");
+    MODERN_IDS.put("minecraft:wooden_planks", "minecraft:oak_planks");
   }
 
   private LegacyFabricNbt() {}
@@ -178,7 +181,7 @@ final class LegacyFabricNbt {
   static Map<String, Object> toMap(NbtCompound compound) {
     Map<String, Object> out = new HashMap<>();
     // This line's key set is raw: it is read as objects and each is used as the string it is.
-    for (Object rawKey : compound.getKeys()) {
+    for (Object rawKey : keys(compound)) {
       String key = (String) rawKey;
       NbtElement element = compound.get(key);
       // A string is read through the compound, because this line's string tag keeps its value
@@ -190,6 +193,18 @@ final class LegacyFabricNbt {
       out.put(key, value(element));
     }
     return out;
+  }
+
+  /** A compound's keys, from the map it keeps them in. */
+  private static java.util.Set<?> keys(NbtCompound compound) {
+    try {
+      Field field = NbtCompound.class.getDeclaredField("data");
+      field.setAccessible(true);
+      Object data = field.get(compound);
+      return data instanceof Map ? ((Map<?, ?>) data).keySet() : java.util.Collections.emptySet();
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return java.util.Collections.emptySet();
+    }
   }
 
   private static Object value(NbtElement element) {
@@ -218,26 +233,13 @@ final class LegacyFabricNbt {
 
   /** A numeric tag's value at its own width, so a byte reads back as a byte. */
   private static Object numericValue(NbtElement element) {
-    String accessor;
-    if (element instanceof NbtByte) {
-      accessor = "byteValue";
-    } else if (element instanceof NbtShort) {
-      accessor = "shortValue";
-    } else if (element instanceof NbtInt) {
-      accessor = "intValue";
-    } else if (element instanceof NbtLong) {
-      accessor = "longValue";
-    } else if (element instanceof NbtFloat) {
-      accessor = "floatValue";
-    } else if (element instanceof NbtDouble) {
-      accessor = "doubleValue";
-    } else {
+    if (!isNumber(element)) {
       return null;
     }
+    // This line's numeric tags keep the value in a public field of the tag's own width type, and
+    // expose no accessor method for it.
     try {
-      Method method = element.getClass().getMethod(accessor);
-      method.setAccessible(true);
-      return method.invoke(element);
+      return element.getClass().getField("value").get(element);
     } catch (ReflectiveOperationException | RuntimeException e) {
       return null;
     }

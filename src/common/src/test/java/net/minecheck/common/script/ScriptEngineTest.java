@@ -15,13 +15,15 @@ import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.result.ExpectRecord;
 import net.minecheck.common.result.RunResult;
 import net.minecheck.platform.api.ClientPlatform;
+import net.minecheck.platform.api.ClientPlatformBase;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecheck.platform.api.RecipeViewers;
-import net.minecheck.platform.api.ServerPlatform;
+import net.minecheck.platform.api.ServerPlatformBase;
 import net.minecheck.platform.api.plugin.MinecheckPlugin;
 import net.minecheck.platform.api.plugin.MinecheckRegistry;
 import net.minecheck.platform.api.plugin.PluginStep;
@@ -33,7 +35,7 @@ class ScriptEngineTest {
   @TempDir Path tempDir;
 
   /** Fake client: a join completes after {@code joinTicks} isInWorld() calls. */
-  static final class FakeClient implements ClientPlatform {
+  static final class FakeClient extends ClientPlatformBase {
     Integer groundY = 64;
     String groundArgs;
 
@@ -552,7 +554,7 @@ class ScriptEngineTest {
   }
 
   /** Fake server: an online player can be added/removed by the test. */
-  static final class FakeServer implements ServerPlatform {
+  static final class FakeServer extends ServerPlatformBase {
     Integer groundY = 64;
     String groundArgs;
 
@@ -668,7 +670,7 @@ class ScriptEngineTest {
 
   /** Services with a real (dedicated) server and no client. */
   private PlatformServices serverServices(FakeServer server) {
-    return new PlatformServices() {
+    return new PlatformServicesBase() {
       @Override
       public String minecraftVersion() {
         return "1.19.2";
@@ -708,7 +710,7 @@ class ScriptEngineTest {
 
   /** Services with a mock client and no server. */
   private PlatformServices clientServices(FakeClient client) {
-    return new PlatformServices() {
+    return new PlatformServicesBase() {
       @Override
       public String minecraftVersion() {
         return "1.19.2";
@@ -741,7 +743,7 @@ class ScriptEngineTest {
     Path scriptFile = tempDir.resolve("script.lua");
     Files.writeString(scriptFile, script);
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return "1.21.1";
@@ -775,7 +777,7 @@ class ScriptEngineTest {
     Path scriptFile = tempDir.resolve("script.lua");
     Files.writeString(scriptFile, script);
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return "1.21.1";
@@ -816,7 +818,7 @@ class ScriptEngineTest {
     Path scriptFile = tempDir.resolve("script.lua");
     Files.writeString(scriptFile, script);
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return "1.19.2";

@@ -1,42 +1,33 @@
 package net.minecheck.loader.legacyfabric;
 
 import net.minecraft.network.packet.c2s.play.CustomPayloadC2SPacket;
-import net.minecraft.network.packet.s2c.play.CustomPayloadS2CPacket;
-import net.minecraft.util.PacketByteBuf;
 
 /**
- * The custom-payload packets the mod's channel travels in on this line.
+ * The custom-payload packet the mod's channel travels in on this line.
  *
- * <p>1.12.2's payload packets take a channel name and a byte buffer, which is exactly the wire
- * shape the encoded {@link net.minecheck.platform.api.net.MinecheckPacket} needs. Both directions
- * are built here so the channel name lives in one place.
+ * <p>1.4.7 predates the split into C2S and S2C custom payloads: there is one packet class, and the
+ * same class is sent in both directions. It carries the channel name and the raw bytes, which is
+ * exactly the wire shape the encoded {@link net.minecheck.platform.api.net.MinecheckPacket} needs.
  */
 final class LegacyPayloads {
 
   private LegacyPayloads() {}
 
   static CustomPayloadC2SPacket toServer(byte[] payload) {
-    return new CustomPayloadC2SPacket(LegacyFabricNetworkPlatform.CHANNEL_NAME, buffer(payload));
+    return new CustomPayloadC2SPacket(LegacyFabricNetworkPlatform.CHANNEL_NAME, payload);
   }
 
-  static CustomPayloadS2CPacket toClient(byte[] payload) {
-    return new CustomPayloadS2CPacket(LegacyFabricNetworkPlatform.CHANNEL_NAME, buffer(payload));
+  static CustomPayloadC2SPacket toClient(byte[] payload) {
+    return new CustomPayloadC2SPacket(LegacyFabricNetworkPlatform.CHANNEL_NAME, payload);
   }
 
-  private static PacketByteBuf buffer(byte[] payload) {
-    PacketByteBuf buf =
-        new PacketByteBuf(io.netty.buffer.Unpooled.buffer(Math.max(1, payload.length)));
-    buf.writeBytes(payload);
-    return buf;
+  /** The packet's channel, or {@code null} when the packet carries none. */
+  static String channelOf(CustomPayloadC2SPacket packet) {
+    return packet == null ? null : packet.channel;
   }
 
-  /** A non-destructive copy of a payload's bytes, or {@code null} when the buffer is gone. */
-  static byte[] bytesOf(PacketByteBuf buf) {
-    if (buf == null) {
-      return null;
-    }
-    byte[] out = new byte[buf.readableBytes()];
-    buf.getBytes(buf.readerIndex(), out);
-    return out;
+  /** The packet's bytes, or {@code null} when the packet carries none. */
+  static byte[] bytesOf(CustomPayloadC2SPacket packet) {
+    return packet == null ? null : packet.field_2455;
   }
 }

@@ -9,12 +9,14 @@ import java.util.logging.Logger;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.loader.api.ModContainer;
 import net.minecheck.common.bootstrap.MinecheckBootstrap;
 import net.minecheck.common.script.ScriptEngine;
 import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecheck.platform.api.RecipeViewers;
 import net.minecheck.platform.api.ServerPlatform;
@@ -57,19 +59,26 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
   public void onInitialize() {
     instance = this;
 
-    FabricLoader loader = FabricLoader.getInstance();
+    FabricLoader loader = LegacyFabricLoaders.get();
     // Absolute, because this loader answers with a relative `config` on this line: a relative
     // config dir makes the run directory derived from it relative too, so the dedicated server's
     // staged save was copied beside the config instead of into the run directory and the server
     // generated a world of its own.
     Path configDir = loader.getConfigDir().toAbsolutePath().normalize();
     // Read from the loader rather than a constant: a hardcoded version silently reports the wrong
-    // one the moment this build supports another Minecraft version.
-    String mcVersion =
-        loader
-            .getModContainer("minecraft")
-            .map(container -> container.getMetadata().getVersion().getFriendlyString())
-            .orElse("1.12.2");
+    // one the moment this build supports another Minecraft version. Walked rather than asked for by
+    // id: `getModContainer` answers with an `Optional`, and this line's downgrade rewrites that
+    // call to the stub `Optional` while the loader's own jar still returns `java.util.Optional` —
+    // the runtime then dies with NoSuchMethodError on the erasure (the boot arm found exactly
+    // that). `getAllMods` has no newer-than-Java-7 type in its signature.
+    String found = "1.12.2";
+    for (ModContainer container : loader.getAllMods()) {
+      if ("minecraft".equals(container.getMetadata().getId())) {
+        found = container.getMetadata().getVersion().getFriendlyString();
+        break;
+      }
+    }
+    final String mcVersion = found;
 
     dedicated = loader.getEnvironmentType() == EnvType.SERVER;
     // Both sides have a server platform: a dedicated server answers every server-side action with
@@ -85,7 +94,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     final List<RecipeViewer> viewers = new ArrayList<>();
 
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return mcVersion;
@@ -128,7 +137,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
 
           @Override
           public boolean isModLoaded(String modId) {
-            return FabricLoader.getInstance().isModLoaded(modId);
+            return LegacyFabricLoaders.get().isModLoaded(modId);
           }
         };
 
@@ -170,6 +179,7 @@ public final class LegacyFabricEntrypoint implements ModInitializer {
     }
     // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
     // queues a client task and waits for it, which cannot happen while that queue is draining.
+    LegacyFabricClientPlatform.drainClientTasks();
     entrypoint.client.applyPendingLeave();
     // Same reason, and the same place: a quit has to drop the world from the tick so the integrated
     // server writes its save before the client stops.

@@ -69,6 +69,18 @@ public final class InjectedInput {
 
   /** Clears one raise of the marker. */
   public static void end() {
-    DEPTH.updateAndGet(depth -> depth > 0 ? depth - 1 : 0);
+    // A compare-and-set loop, not `updateAndGet`: that method takes a lambda, and this module is
+    // downgraded to Java 7 bytecode where its argument type is a jvmdg stub. The call threw
+    // NoSuchMethodError from inside the client's own input dispatch, which dropped the client's
+    // connection mid-run.
+    while (true) {
+      int depth = DEPTH.get();
+      if (depth <= 0) {
+        return;
+      }
+      if (DEPTH.compareAndSet(depth, depth - 1)) {
+        return;
+      }
+    }
   }
 }

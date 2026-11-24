@@ -3,6 +3,7 @@ package net.minecheck.platform.yarn;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.function.Supplier;
 import net.minecheck.platform.api.ServerPlatform;
+import net.minecheck.platform.api.ServerPlatformBase;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.Entity;
@@ -23,7 +24,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.registry.Registry;
 
-public class YarnServerPlatform implements ServerPlatform {
+public class YarnServerPlatform extends ServerPlatformBase {
 
   private volatile MinecraftServer server;
 

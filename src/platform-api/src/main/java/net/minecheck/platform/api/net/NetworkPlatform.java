@@ -25,9 +25,7 @@ public interface NetworkPlatform {
    * loader's networking is missing or registration failed; {@code minecheck.sendPacket} then
    * returns false instead of pretending to have sent something.
    */
-  default boolean isAvailable() {
-    return false;
-  }
+  boolean isAvailable();
 
   /**
    * Sends a packet to the other side: client → server, or server → every connected player. Returns
@@ -39,9 +37,7 @@ public interface NetworkPlatform {
    * Server-only: sends a packet to one named player. Returns false when that player is not online
    * (or on the client, where there is no player list to address).
    */
-  default boolean sendTo(String playerName, String name, List<PacketValue> args) {
-    return false;
-  }
+  boolean sendTo(String playerName, String name, List<PacketValue> args);
 
   /**
    * Installs the receiver invoked for every decoded Minecheck packet, on the game thread. Called
@@ -61,7 +57,5 @@ public interface NetworkPlatform {
    * check the live connection rather than report "installed" for a handler that is shadowed and
    * would never run. Scripts assert on the return value rather than assuming coverage.
    */
-  default boolean observeChannel(String channel, Consumer<byte[]> receiver) {
-    return false;
-  }
+  boolean observeChannel(String channel, Consumer<byte[]> receiver);
 }

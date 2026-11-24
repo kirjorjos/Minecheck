@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.ClientPlatform;
+import net.minecheck.platform.api.ClientPlatformBase;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecraft.client.Keyboard;
 import net.minecraft.client.MinecraftClient;
@@ -34,7 +35,7 @@ import net.minecraft.world.level.LevelGeneratorType;
 import net.minecraft.world.level.LevelInfo;
 import net.minecraft.world.level.storage.LevelStorage;
 
-public class YarnClientPlatform implements ClientPlatform {
+public class YarnClientPlatform extends ClientPlatformBase {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
 

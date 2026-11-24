@@ -24,9 +24,7 @@ public interface ClientPlatform {
    * happened inline. Used by the script engine to route client-mutating actions (see the threading
    * note above).
    */
-  default void runOnClientThread(Runnable action) {
-    action.run();
-  }
+  void runOnClientThread(Runnable action);
 
   /** Start joining an existing local (singleplayer) world by name. */
   void joinLocalWorld(String worldName);
@@ -50,28 +48,7 @@ public interface ClientPlatform {
    * <p>Kept on the platform (rather than in the scripting layer) so a test client can answer it
    * without a real listening socket.
    */
-  default boolean canReachServer(String address) {
-    String host = address;
-    int port = 25565;
-    int colon = address.lastIndexOf(':');
-    if (colon > 0) {
-      host = address.substring(0, colon);
-      try {
-        port = Integer.parseInt(address.substring(colon + 1));
-      } catch (NumberFormatException e) {
-        return false;
-      }
-    }
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.substring(1, host.length() - 1); // bracketed IPv6 literal
-    }
-    try (java.net.Socket socket = new java.net.Socket()) {
-      socket.connect(new java.net.InetSocketAddress(host, port), 250);
-      return true;
-    } catch (java.io.IOException | RuntimeException e) {
-      return false;
-    }
-  }
+  boolean canReachServer(String address);
 
   /** Leave the current world/server and return to the title screen. */
   void leaveWorld();
@@ -104,9 +81,7 @@ public interface ClientPlatform {
    * keeps the client without a player for a while afterwards (Forge's registry handshake takes over
    * a second here), and on Forge no screen is up for part of that window either.
    */
-  default boolean isConnecting() {
-    return false;
-  }
+  boolean isConnecting();
 
   /**
    * True when the client holds a live connection to a server but has no player yet — the login has
@@ -118,9 +93,7 @@ public interface ClientPlatform {
    * another attempt on top of it. A screen cannot be used as the signal: the login shows no screen
    * of its own, and what is on screen meanwhile belongs to whatever the client was doing before.
    */
-  default boolean isLoggingIn() {
-    return false;
-  }
+  boolean isLoggingIn();
 
   /**
    * True when the client is showing a "could not connect" / "disconnected" screen — the visible end
@@ -128,9 +101,7 @@ public interface ClientPlatform {
    * state from which {@code joinServer} starts an attempt, because it is the only state that proves
    * the previous attempt is over.
    */
-  default boolean isConnectFailed() {
-    return false;
-  }
+  boolean isConnectFailed();
 
   /**
    * True once the client has finished booting (startup splash / resource reload done) and is safe
@@ -138,9 +109,7 @@ public interface ClientPlatform {
    * (createWorld/joinLocalWorld) drive the integrated-server loading screen synchronously and
    * deadlock if the SplashOverlay is still up.
    */
-  default boolean isBootComplete() {
-    return true;
-  }
+  boolean isBootComplete();
 
   /**
    * A number that moves while a world load is progressing, or {@code -1} when there is nothing to
@@ -157,9 +126,7 @@ public interface ClientPlatform {
    * signal" (not loading, or this platform cannot see one) and leaves the wait on its plain
    * deadline.
    */
-  default float worldLoadProgress() {
-    return -1f;
-  }
+  float worldLoadProgress();
 
   /**
    * True once world chunk generation has settled and it is safe to leave the current world (e.g.
@@ -182,9 +149,7 @@ public interface ClientPlatform {
    * Called on the client (render) thread from the script's wait loop; treat it as a fresh poll
    * every tick.
    */
-  default boolean isWorldGenSettled() {
-    return true;
-  }
+  boolean isWorldGenSettled();
 
   /**
    * Press a key down. {@code key} is either a key binding id (e.g. {@code "key.jump"}) or a key
@@ -359,7 +324,7 @@ public interface ClientPlatform {
    * because there is no authoritative value here to re-assert and stepping a remote world's sky is
    * not this mod's business.
    */
-  default void pinClientClock() {}
+  void pinClientClock();
 
   /**
    * Draw every frame at a render delta of 1 instead of the wall-clock fraction into the tick.
@@ -376,7 +341,7 @@ public interface ClientPlatform {
    * be reached (no render loop), in which case captures keep the vanilla fraction. Called from the
    * loader entrypoint next to {@link #pinClientClock()}.
    */
-  default void pinRenderTickDelta() {}
+  void pinRenderTickDelta();
 
   /**
    * The sentence every capture fails with while {@code restoreVanillaCamera} is on. One constant so
@@ -399,16 +364,14 @@ public interface ClientPlatform {
    *
    * <p>Called before any script action can run, so a platform may cache it.
    */
-  default void setVanillaCameraRestored(boolean restored) {}
+  void setVanillaCameraRestored(boolean restored);
 
   /**
    * The camera, or {@link CameraPlatform#NONE} when this platform has none. A client whose {@code
    * cameraMode} is {@code off} answers {@link CameraPlatform#NONE} as well, so a caller asks "is it
    * active" rather than branching on the mode first.
    */
-  default CameraPlatform camera() {
-    return CameraPlatform.NONE;
-  }
+  CameraPlatform camera();
 
   /**
    * Attach the run's window (see {@link ViewWindow}) — {@code viewWindow} was on and one was
@@ -416,7 +379,7 @@ public interface ClientPlatform {
    * #pumpViewWindow()} and routes its keys to {@link #virtualKey(int, boolean)}; a window is never
    * required for a run to work.
    */
-  default void setViewWindow(ViewWindow window) {}
+  void setViewWindow(ViewWindow window);
 
   /**
    * Push the client's latest frame to the attached view window, if there is one. Called once per
@@ -426,7 +389,7 @@ public interface ClientPlatform {
    * human to watch cannot be allowed to fail a run. Implementations read at a reduced rate and
    * simply skip ticks — the window shows the newest frame it was given.
    */
-  default void pumpViewWindow() {}
+  void pumpViewWindow();
 
   /**
    * Dispatch a key typed into the view window, as {@link ViewWindow.KeySink} defines it: {@code
@@ -437,7 +400,7 @@ public interface ClientPlatform {
    * the run's one window, so it drives whatever view that window is drawing, exactly as the
    * keyboard would. Called from the AWT event thread.
    */
-  default void virtualKey(int glfwKey, boolean down) {}
+  void virtualKey(int glfwKey, boolean down);
 
   /**
    * Queue a capture of the client's next rendered frame. The platform schedules the GL readback on
@@ -451,12 +414,11 @@ public interface ClientPlatform {
    * change that has to be in the picture — chat emptied out of the HUD — needs a rendered frame
    * rather than a tick, since the client ticks more than once per frame when it falls behind.
    *
-   * <p>The default fails the request rather than doing nothing, so a platform without a screenshot
-   * implementation surfaces as a clear Lua error instead of a file that never appears.
+   * <p>{@link ClientPlatformBase} fails the request rather than doing nothing, so a platform
+   * without a screenshot implementation surfaces as a clear Lua error instead of a file that never
+   * appears.
    */
-  default void requestScreenshot(ScreenshotRequest request) {
-    request.fail("screenshots are not supported by this platform");
-  }
+  void requestScreenshot(ScreenshotRequest request);
 
   /**
    * Capture the client's next rendered frame into memory, without encoding or writing a PNG.
@@ -466,12 +428,11 @@ public interface ClientPlatform {
    * {@link ScreenshotRequest.State#DONE} the request holds the pixels and their digest instead of a
    * path, which is what a loop asking "did the picture change?" should pay for.
    *
-   * <p>The default fails the request rather than doing nothing, so a platform without an in-memory
-   * path surfaces as a clear Lua error instead of a capture that never completes.
+   * <p>{@link ClientPlatformBase} fails the request rather than doing nothing, so a platform
+   * without an in-memory path surfaces as a clear Lua error instead of a capture that never
+   * completes.
    */
-  default void requestFrame(ScreenshotRequest request) {
-    request.fail("in-memory frame capture is not supported by this platform");
-  }
+  void requestFrame(ScreenshotRequest request);
 
   /**
    * Encode and write a frame captured in memory — a request built with {@link
@@ -481,11 +442,9 @@ public interface ClientPlatform {
    * <p>No framebuffer is read: the pixels <em>are</em> the picture, so the work is the encode and
    * the file, done off the render thread like any other capture.
    *
-   * <p>The default fails the request.
+   * <p>{@link ClientPlatformBase} fails the request.
    */
-  default void writeFrame(ScreenshotRequest request) {
-    request.fail("writing an in-memory frame is not supported by this platform");
-  }
+  void writeFrame(ScreenshotRequest request);
 
   /**
    * Open the chat screen on the client thread, dispatched asynchronously (see {@link

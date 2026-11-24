@@ -519,7 +519,13 @@ val profileScale =
 val profileChat =
   providers.gradleProperty("minecheck.screenshot.chat").map(String::toBoolean).orElse(false)
 
-fun registerScreenshotsLifecycle(taskName: String, loader: String) {
+fun registerScreenshotsLifecycle(
+  taskName: String,
+  loader: String,
+  // The UI language the capture profile pins. 1.4.7 names its language file `en_US.lang`, so that
+  // line has to ask for the older spelling; the newer lines use the lowercase code.
+  language: String = "en_us",
+) {
   val runRoot = "src/$loader/mod"
   val runTask = "run${taskName.removePrefix("test")}"
 
@@ -542,6 +548,7 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
     screenshotGuiScale.set(profileGuiScale)
     screenshotScale.set(profileScale)
     screenshotChatVisible.set(profileChat)
+    languageName.set(language)
 
     resultFile.set(
       layout.projectDirectory.file("$runRoot/run/client/config/minecheck/run-result.json")
@@ -583,7 +590,7 @@ fun registerScreenshotsLifecycle(taskName: String, loader: String) {
 
 registerScreenshotsLifecycle("testLegacyfabricShots", "legacyfabric")
 
-registerScreenshotsLifecycle("testForgeShots", "forge")
+registerScreenshotsLifecycle("testForgeShots", "forge", language = "en_US")
 
 /**
  * The server-backed suites, as phases of one session: one client boot and one dedicated-server boot
@@ -809,17 +816,25 @@ subprojects {
       extensions.getByType(JavaPluginExtension::class.java).sourceSets.getByName("main")
     val bundleDir = layout.buildDirectory.dir("minecheck/downgrade")
 
-    // The stubs the downgraded code links against, taken from the published jar for the target
-    // version: left to itself the plugin generates one for the JVM running Gradle, which on a Java
-    // 25 daemon is class file 69 and cannot be shaded down.
+    // The stubs the downgraded code links against, taken from a jar for the target version: left to
+    // itself the plugin generates one for the JVM running Gradle, which on a Java 25 daemon is
+    // class file 69 and cannot be shaded down. Upstream publishes 8 and above, so a 7 target uses
+    // the 51-level jar vendored in `libs/` instead — `libs/README.md` says how it is produced.
     val jvmdgApi by
       configurations.creating {
         isCanBeConsumed = false
         isCanBeResolved = true
       }
+    val vendoredApi =
+      rootProject.layout.projectDirectory.file(
+        "libs/jvmdowngrader-java-api-2.0.1-downgraded-${target.majorVersion}.jar"
+      )
     dependencies.add(
       jvmdgApi.name,
-      "xyz.wagyourtail.jvmdowngrader:jvmdowngrader-java-api:2.0.1:downgraded-" + target.majorVersion,
+      if (vendoredApi.asFile.isFile) files(vendoredApi)
+      else
+        "xyz.wagyourtail.jvmdowngrader:jvmdowngrader-java-api:2.0.1:downgraded-" +
+          target.majorVersion,
     )
 
     val classesBundle by

@@ -1,16 +1,18 @@
 package net.minecheck.loader.forge;
 
 import cpw.mods.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.ITickHandler;
 import cpw.mods.fml.common.Loader;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.ModContainer;
+import cpw.mods.fml.common.TickType;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
-import cpw.mods.fml.common.eventhandler.SubscribeEvent;
-import cpw.mods.fml.common.gameevent.PlayerEvent;
-import cpw.mods.fml.common.gameevent.TickEvent;
+import cpw.mods.fml.common.registry.TickRegistry;
+import cpw.mods.fml.relauncher.Side;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,27 +21,58 @@ import net.minecheck.common.script.ScriptEngine;
 import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecheck.platform.api.RecipeViewers;
 import net.minecheck.platform.api.net.NetworkPlatform;
-import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.server.MinecraftServer;
 import net.minecraftforge.common.MinecraftForge;
 
 /**
- * The Forge 1.7.10 entrypoint.
+ * The Forge 1.4.7 entrypoint.
  *
- * <p>This line is loaded by FML: the mod class is constructed by Forge and its lifecycle arrives as
- * {@code @Mod.EventHandler} methods. There is no mod event bus, so every hook is a {@link
- * MinecraftForge#EVENT_BUS} listener and the client ones live in {@link ForgeClientHooks} for the
- * same reason as on the newer lines: loading that class on a dedicated server would name
- * client-only types.
+ * <p>This line predates FML's event bus: the mod class is constructed by Forge, its lifecycle
+ * arrives as {@code @Mod.EventHandler}-style annotation methods, and ticks are an {@link
+ * ITickHandler} registered with {@link TickRegistry}. The only event bus 1.4.7 has is Forge's
+ * gameplay bus, which is where the client's sound refusal is registered.
+ *
+ * <p>Client-only types live in {@link ForgeClientHooks} for the same reason as on the newer lines:
+ * loading that class on a dedicated server would name client classes.
  */
-@Mod(modid = "minecheck", name = "Minecheck", acceptableRemoteVersions = "*")
+@Mod(modid = "minecheck", name = "Minecheck", acceptedMinecraftVersions = "*")
 public class ForgeEntrypoint {
 
   private static final java.util.logging.Logger LOG =
       java.util.logging.Logger.getLogger("Minecheck");
+
+  /**
+   * Makes this process's Minecheck log lines reach the console.
+   *
+   * <p>1.4.7's FML installs handlers for the loggers it knows by name and leaves the root logger
+   * without one, so a {@code java.util.logging} logger of the mod's own wrote nowhere: the run
+   * looked silent even while it was failing, which is exactly when the lines matter. Installed only
+   * when nothing above this logger would print, so a launcher that already routes it keeps its own
+   * formatting.
+   */
+  private static void ensureLogVisible() {
+    for (java.util.logging.Logger logger = LOG; logger != null; logger = logger.getParent()) {
+      if (logger.getHandlers().length > 0) {
+        return;
+      }
+    }
+    java.util.logging.ConsoleHandler handler = new java.util.logging.ConsoleHandler();
+    handler.setFormatter(
+        new java.util.logging.Formatter() {
+          @Override
+          public String format(java.util.logging.LogRecord record) {
+            return String.format(
+                "[%1$tT] [Minecheck/%2$s] %3$s%n",
+                new java.util.Date(record.getMillis()), record.getLevel(), formatMessage(record));
+          }
+        });
+    LOG.addHandler(handler);
+    LOG.setUseParentHandlers(false);
+  }
 
   /** The process's one entrypoint; the platform reaches it through this. */
   private static volatile ForgeEntrypoint instance;
@@ -48,9 +81,9 @@ public class ForgeEntrypoint {
   private ForgeClientPlatform client;
 
   /**
-   * The client-only event hooks, held for the run's lifetime. Forge's event bus keeps no strong
-   * reference of its own to a registered listener object, so an inline {@code new
-   * ForgeClientHooks()} could be collected and would then silently stop receiving events.
+   * The client-only hooks, held for the run's lifetime: the 1.4.7 event bus keeps no strong
+   * reference of its own to a registered listener, so an inline instance could be collected and
+   * then silently stop receiving events.
    */
   private ForgeClientHooks clientHooks;
 
@@ -65,9 +98,49 @@ public class ForgeEntrypoint {
   private final AtomicBoolean clientTickRunning = new AtomicBoolean();
   private final AtomicBoolean rulesApplied = new AtomicBoolean();
 
-  @Mod.EventHandler
+  private final ITickHandler ticker =
+      new ITickHandler() {
+        @Override
+        public void tickStart(EnumSet<TickType> types, Object... data) {
+          if (types.contains(TickType.CLIENT)) {
+            tickClientStart();
+          }
+          if (types.contains(TickType.SERVER)) {
+            TickClock.get().awaitTick();
+          }
+          if (types.contains(TickType.RENDER) && client != null) {
+            client.pinRenderTickDelta();
+          }
+        }
+
+        @Override
+        public void tickEnd(EnumSet<TickType> types, Object... data) {
+          if (types.contains(TickType.SERVER)) {
+            tickServerEnd();
+          }
+          if (types.contains(TickType.CLIENT)) {
+            tickClientEnd();
+          }
+          if (types.contains(TickType.RENDER) && client != null && engine != null) {
+            ForgeClientPlatform.notifyFrameDrawn();
+          }
+        }
+
+        @Override
+        public EnumSet<TickType> ticks() {
+          return EnumSet.of(TickType.CLIENT, TickType.SERVER, TickType.RENDER);
+        }
+
+        @Override
+        public String getLabel() {
+          return "Minecheck";
+        }
+      };
+
+  @Mod.PreInit
   public void preInit(FMLPreInitializationEvent event) {
     instance = this;
+    ensureLogVisible();
     Path configDir = Loader.instance().getConfigDir().toPath();
     // Read from the loader rather than a constant: a hardcoded version silently reports the wrong
     // one the moment this build supports another Minecraft version.
@@ -77,17 +150,16 @@ public class ForgeEntrypoint {
     client = dedicated ? null : new ForgeClientPlatform(configDir);
     clientHooks = dedicated ? null : new ForgeClientHooks();
     // Both sides have one. A dedicated server needs it to answer every server-side script action,
-    // and a client needs it to query its integrated server; leaving it null when dedicated made the
-    // server tick return early, so a server script never started and the process hung until killed.
+    // and a client needs it to query its integrated server.
     serverPlatform = new ForgeServerPlatform();
     network = new ForgeNetworkPlatform(dedicated);
 
-    // No recipe viewer is bridged on 1.7.10: EMI and REI do not exist for it, and JEI's 1.x line
+    // No recipe viewer is bridged on 1.4.7: EMI and REI do not exist for it, and JEI's 1.x line
     // predates the API these bridges were written against. The Lua API is unchanged.
     final List<RecipeViewer> viewers = new ArrayList<>();
 
     PlatformServices services =
-        new PlatformServices() {
+        new PlatformServicesBase() {
           @Override
           public String minecraftVersion() {
             return mcVersion;
@@ -131,8 +203,7 @@ public class ForgeEntrypoint {
           @Override
           public boolean isModLoaded(String modId) {
             // Case-insensitively, because this line's own ids are not the lowercase ones the Lua
-            // API documents: Forge registers itself as "Forge", and a script asking about
-            // "forge" (the id every other line answers to) would otherwise be told it is absent.
+            // API documents: Forge registers itself as "Forge".
             if (Loader.isModLoaded(modId)) {
               return true;
             }
@@ -148,27 +219,17 @@ public class ForgeEntrypoint {
     TickClock.get().bind("forge");
 
     MinecheckBootstrap.init(services, engine -> this.engine = engine);
-    // Registered whether or not a script is configured: the client tick hook is where per-frame
-    // client work lives, and every handler below still gates its work on the engine.
-    //
-    // 1.7.10 has two buses: gameplay events are posted to MinecraftForge.EVENT_BUS, while the FML
-    // lifecycle and tick events (TickEvent, PlayerEvent) are posted to FMLCommonHandler's bus. A
-    // listener has to be registered on the one its events are posted to, and an event is posted to
-    // exactly one, so registering on both handles nothing twice. With only the Forge bus the client
-    // tick never ran: no camera tick, no script engine, and no silent-sound teardown.
-    MinecraftForge.EVENT_BUS.register(this);
-    FMLCommonHandler.instance().bus().register(this);
+    // Ticks arrive through FML's tick registry on 1.4.7: one handler instance on each side, so the
+    // shared fields are updated from whichever side is ticking.
+    TickRegistry.registerTickHandler(ticker, Side.SERVER);
     if (!dedicated) {
+      TickRegistry.registerTickHandler(ticker, Side.CLIENT);
       MinecraftForge.EVENT_BUS.register(clientHooks);
-      FMLCommonHandler.instance().bus().register(clientHooks);
     }
   }
 
-  /**
-   * Client setup: the options list key bindings register into exists by init, and on 1.7.10 there
-   * is no separate client-setup event from the mod's own point of view.
-   */
-  @Mod.EventHandler
+  /** Client setup: this line has no key-binding registry, so the camera toggle is polled. */
+  @Mod.Init
   public void init(FMLInitializationEvent event) {
     if (!dedicated && client != null) {
       client.installCameraBindings();
@@ -176,42 +237,25 @@ public class ForgeEntrypoint {
     }
   }
 
-  /**
-   * Per-frame hook for the screenshot suite: a capture must read a frame drawn after it cleared the
-   * chat, and a render tick is the only thing that says "a frame was drawn" (a client tick is not —
-   * the client can tick several times between two frames).
-   */
-  @SubscribeEvent
-  public void onRenderTick(TickEvent.RenderTickEvent event) {
-    if (event.phase == TickEvent.Phase.START && client != null) {
-      // On 1.7.10 the render delta is recomputed at the top of every frame, so pinning it here is
-      // what makes a capture a function of the script alone.
-      client.pinRenderTickDelta();
+  private void tickClientStart() {
+    if (client == null) {
       return;
     }
-    if (event.phase == TickEvent.Phase.END && client != null && engine != null) {
-      ForgeClientPlatform.notifyFrameDrawn();
-    }
+    ForgeClientPlatform.markClientThread();
+    // Script calls arrive on the engine's worker thread; the work that touches the game runs here.
+    ForgeClientPlatform.drainClientTasks();
+    // A leave a script asked for runs here, not on a scheduled-task queue: the world teardown
+    // queues a client task and waits for it, which cannot happen while that queue is draining.
+    ForgeClientPlatform.applyPendingInput();
+    client.applyPendingLeave();
+    client.applyPendingQuit();
+    ForgeSilentSound.shutDownDevice();
+    client.camera().tick();
+    ForgeClientHooks.tickStart();
   }
 
-  @SubscribeEvent
-  public void onClientTick(TickEvent.ClientTickEvent event) {
-    if (event.phase == TickEvent.Phase.START) {
-      if (client != null) {
-        // A leave a script asked for runs here, not on the scheduled-task queue: the world teardown
-        // queues a client task and waits for it, which cannot happen while that queue is draining.
-        ForgeClientPlatform.applyPendingInput();
-        client.applyPendingLeave();
-        client.applyPendingQuit();
-        // The camera runs before the player does: it holds the body's rotation at the value the
-        // server last saw, and doing that after the player ticked would be after the packet that
-        // carries the change.
-        ForgeSilentSound.shutDownDevice();
-        client.camera().tick();
-      }
-      return;
-    }
-    if (event.phase != TickEvent.Phase.END || client == null) {
+  private void tickClientEnd() {
+    if (client == null) {
       return;
     }
     client.hideWindowIfConfigured();
@@ -223,10 +267,9 @@ public class ForgeEntrypoint {
     client.pumpViewWindow();
     if (client.isBootComplete()) {
       client.allowUnfocusedPlay();
-      // Not inline: on 1.7.10 the client tick runs on the JVM's main thread, and LuaJ refuses to
-      // yield a coroutine resumed there ("cannot yield main thread") — which every waitFor does.
-      // Hand the tick to a worker like the server path does, one at a time so a slow script step
-      // cannot overlap itself.
+      // Not inline: the client tick runs on the JVM's main thread, and LuaJ refuses to yield a
+      // coroutine resumed there ("cannot yield main thread") — which every waitFor does. Hand the
+      // tick to a worker like the server path does, one at a time.
       if (clientTickRunning.compareAndSet(false, true)) {
         CompletableFuture.runAsync(
             () -> {
@@ -240,56 +283,28 @@ public class ForgeEntrypoint {
     }
   }
 
-  /** The running server, or {@code null} before one exists. */
-  public static MinecraftServer server() {
-    ForgeEntrypoint entrypoint = instance;
-    return entrypoint == null ? null : entrypoint.server;
-  }
-
-  /**
-   * Installs the server-side channel tap on each player connection as it appears, so a script that
-   * started watching a channel before the client joined still sees that client's payloads.
-   */
-  @SubscribeEvent
-  public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
-    if (engine == null || dedicated && serverPlatform == null) {
-      return;
-    }
-    if (event.player instanceof EntityPlayerMP) {
-      ForgeServerChannelTap.installFor((EntityPlayerMP) event.player);
-    }
-  }
-
-  @SubscribeEvent
-  public void onServerTick(TickEvent.ServerTickEvent event) {
-    if (event.phase == TickEvent.Phase.START) {
-      // Before this tick's world work: a held clock parks the server thread here, which is what
-      // keeps the world from advancing between two captures.
-      TickClock.get().awaitTick();
-      return;
-    }
-    if (event.phase != TickEvent.Phase.END) {
-      return;
-    }
+  private void tickServerEnd() {
     TickClock.get().countTick();
     if (serverPlatform == null) {
       return;
     }
-    // 1.7.10's ServerTickEvent carries no server reference: ask the loader for the running one.
-    MinecraftServer s = FMLCommonHandler.instance().getMinecraftServerInstance();
+    MinecraftServer s = MinecraftServer.getServer();
     if (s == null) {
       return;
     }
     this.server = s;
     serverPlatform.setServer(s);
-    // Payloads arrive on a netty thread; this is the tick boundary they are handed over at.
+    // `/setblock` and `/fill` are not commands this line has; they are registered once the server
+    // exists so a client's chat commands reach them. Idempotent, so ticking is harmless.
+    LegacyBlockCommands.register(s);
+    // Payloads can arrive on a network thread during login; this is the tick boundary they are
+    // handed over at.
     ForgeNetworkPlatform.drainServerTasks();
     if (rulesApplied.compareAndSet(false, true)) {
       serverPlatform.applyDeterministicRules();
     }
-    // A client runs an integrated server too, and its ServerTickEvent fires as well; ticking the
-    // engine from both would resume one coroutine from two threads at once ("cannot resume
-    // non-suspended coroutine"). The client tick is the single driver there, as on the other lines.
+    // A client runs an integrated server too; ticking the engine from both would resume one
+    // coroutine from two threads at once. The client tick is the single driver there.
     if (!dedicated) {
       return;
     }
@@ -307,5 +322,11 @@ public class ForgeEntrypoint {
             }
           });
     }
+  }
+
+  /** The running server, or {@code null} before one exists. */
+  public static MinecraftServer server() {
+    ForgeEntrypoint entrypoint = instance;
+    return entrypoint == null ? null : entrypoint.server;
   }
 }

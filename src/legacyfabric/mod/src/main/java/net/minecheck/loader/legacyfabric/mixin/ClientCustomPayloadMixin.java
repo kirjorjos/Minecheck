@@ -1,8 +1,8 @@
 package net.minecheck.loader.legacyfabric.mixin;
 
 import net.minecheck.loader.legacyfabric.LegacyFabricNetworkPlatform;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.network.packet.s2c.play.CustomPayloadS2CPacket;
+import net.minecraft.client.network.ClientLoopbackPlayNetworkHandler;
+import net.minecraft.network.packet.c2s.play.CustomPayloadC2SPacket;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -19,11 +19,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * a payload on a channel that is also registered by another mod must be observed whether or not
  * that mod's handler consumes it.
  */
-@Mixin(ClientPlayNetworkHandler.class)
+@Mixin(ClientLoopbackPlayNetworkHandler.class)
 public class ClientCustomPayloadMixin {
 
   @Inject(method = "onCustomPayload", at = @At("HEAD"), require = 1)
-  private void minecheck$payload(CustomPayloadS2CPacket packet, CallbackInfo ci) {
+  private void minecheck$payload(CustomPayloadC2SPacket packet, CallbackInfo ci) {
     LegacyFabricNetworkPlatform.onClientPayload(packet);
   }
 }

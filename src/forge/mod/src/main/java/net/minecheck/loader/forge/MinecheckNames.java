@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.block.Block;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagByteArray;
 import net.minecraft.nbt.NBTTagCompound;
@@ -18,9 +21,10 @@ import net.minecraft.nbt.NBTTagString;
  * maps, and arrays as lists of numbers — so a fixture's {@code nbt} reads are the same on every
  * loader.
  *
- * <p>This is the same table the Legacy Fabric module carries: 1.7.10 is one game, and a script that
- * names {@code minecraft:oak_sign} or {@code minecraft:zombie} has to resolve to the same block and
- * the same entity on both loaders.
+ * <p>The 1.13 names are the ones every line shares, so a script writes one spelling of a block; the
+ * legacy side of the table is this line's own, and it is not 1.7.10's: 1.4.7 has one {@code sign}
+ * block rather than {@code standing_sign}/{@code wall_sign}, and calls the plank block {@code
+ * wood}.
  */
 final class MinecheckNames {
 
@@ -31,12 +35,16 @@ final class MinecheckNames {
   private static final Map<String, String> MODERN_IDS = new HashMap<>();
 
   static {
-    LEGACY_IDS.put("minecraft:oak_sign", "minecraft:standing_sign");
-    LEGACY_IDS.put("minecraft:oak_wall_sign", "minecraft:wall_sign");
-    LEGACY_IDS.put("minecraft:oak_planks", "minecraft:planks");
-    MODERN_IDS.put("minecraft:standing_sign", "minecraft:oak_sign");
-    MODERN_IDS.put("minecraft:wall_sign", "minecraft:oak_wall_sign");
-    MODERN_IDS.put("minecraft:planks", "minecraft:oak_planks");
+    // One sign block stands for both, and the plank block is `wood`.
+    LEGACY_IDS.put("minecraft:oak_sign", "minecraft:sign");
+    LEGACY_IDS.put("minecraft:oak_wall_sign", "minecraft:sign");
+    LEGACY_IDS.put("minecraft:oak_planks", "minecraft:wood");
+    // The crafting table is `workbench` here, and a block a script names has to resolve or the
+    // `/setblock` that places it silently leaves air behind.
+    LEGACY_IDS.put("minecraft:crafting_table", "minecraft:workbench");
+    MODERN_IDS.put("minecraft:sign", "minecraft:oak_sign");
+    MODERN_IDS.put("minecraft:wood", "minecraft:oak_planks");
+    MODERN_IDS.put("minecraft:workbench", "minecraft:crafting_table");
   }
 
   /**
@@ -132,7 +140,156 @@ final class MinecheckNames {
 
   /** The name the newer lines use, so one fixture can name a block and read it back. */
   static String modernId(String id) {
-    return MODERN_IDS.getOrDefault(id, id);
+    String mapped = MODERN_IDS.get(id);
+    if (mapped != null) {
+      return mapped;
+    }
+    // This line names a thing in reverse word order (`blockIron`, `swordIron`, `helmetDiamond`),
+    // where the newer lines write the words in order in snake_case. A one-word name is already its
+    // own id, so only the multi-word ones are rewritten — without this a fixture that placed an
+    // iron block read back `blockIron` and compared it against `minecraft:iron_block`.
+    String bare = id.indexOf(':') >= 0 ? id.substring(id.indexOf(':') + 1) : id;
+    String[] words = bare.replaceAll("([a-z0-9])([A-Z])", "$1 $2").trim().split("\\s+");
+    if (words.length < 2) {
+      return id;
+    }
+    StringBuilder out = new StringBuilder("minecraft:");
+    for (int i = words.length - 1; i >= 0; i--) {
+      if (out.length() > "minecraft:".length()) {
+        out.append('_');
+      }
+      out.append(words[i].toLowerCase(java.util.Locale.ROOT));
+    }
+    return out.toString();
+  }
+
+  /** This line's block for a legacy id, or {@code null} when it has none. */
+  static Block block(String id) {
+    String wanted = legacyId(id);
+    for (Block block : Block.blocksList) {
+      if (block != null && gameId(block.getBlockName()).equals(wanted)) {
+        return block;
+      }
+    }
+    return blocksByName().get(normalized(wanted));
+  }
+
+  /** This line's item for a legacy id, or {@code null} when it has none. */
+  static Item item(String id) {
+    String wanted = legacyId(id);
+    for (Item item : Item.itemsList) {
+      if (item != null && gameId(item.getItemName()).equals(wanted)) {
+        return item;
+      }
+    }
+    return itemsByName().get(normalized(wanted));
+  }
+
+  /**
+   * Every block, by the spellings its name can be written in.
+   *
+   * <p>This line names a thing in <em>reverse</em> word order — {@code swordIron}, {@code
+   * blockIron}, {@code helmetDiamond} — where a script names it the way 1.13 does: {@code
+   * minecraft:iron_sword}. An exact match therefore misses most items, which is what made a `/give`
+   * of a named sword reach 1.4.7's parser and be answered "is not a valid number". Built on first
+   * use, after every block and item has been registered.
+   */
+  private static Map<String, Block> blocksByName;
+
+  private static Map<String, Item> itemsByName;
+
+  private static Map<String, Block> blocksByName() {
+    synchronized (MinecheckNames.class) {
+      if (blocksByName == null) {
+        Map<String, Block> index = new HashMap<>();
+        for (Block block : Block.blocksList) {
+          if (block != null) {
+            spellings(index, gameId(block.getBlockName()), block);
+          }
+        }
+        blocksByName = index;
+      }
+      return blocksByName;
+    }
+  }
+
+  private static Map<String, Item> itemsByName() {
+    synchronized (MinecheckNames.class) {
+      if (itemsByName == null) {
+        Map<String, Item> index = new HashMap<>();
+        for (Item item : Item.itemsList) {
+          if (item != null) {
+            spellings(index, gameId(item.getItemName()), item);
+          }
+        }
+        itemsByName = index;
+      }
+      return itemsByName;
+    }
+  }
+
+  /** Puts a value under both spellings a name can be written in. */
+  private static <T> void spellings(Map<String, T> index, String id, T value) {
+    // No `putIfAbsent`: this module is downgraded to Java 7 bytecode, where that Map method is a
+    // stub (see RunResult.passed).
+    put(index, normalized(id), value);
+    String bare = id.indexOf(':') >= 0 ? id.substring(id.indexOf(':') + 1) : id;
+    String[] words =
+        bare.replaceAll("([a-z0-9])([A-Z])", "$1 $2").replace('_', ' ').trim().split("\\s+");
+    StringBuilder reversed = new StringBuilder(bare.length());
+    for (int i = words.length - 1; i >= 0; i--) {
+      reversed.append(words[i]);
+    }
+    put(index, normalized(reversed.toString()), value);
+  }
+
+  private static <T> void put(Map<String, T> index, String key, T value) {
+    if (!index.containsKey(key)) {
+      index.put(key, value);
+    }
+  }
+
+  /**
+   * A name with its namespace, punctuation and case removed: {@code minecraft:iron_sword}, {@code
+   * swordIron} and {@code Iron Sword} all answer {@code ironsword}.
+   */
+  private static String normalized(String id) {
+    String bare = id.indexOf(':') >= 0 ? id.substring(id.indexOf(':') + 1) : id;
+    StringBuilder out = new StringBuilder(bare.length());
+    for (int i = 0; i < bare.length(); i++) {
+      char c = bare.charAt(i);
+      if (Character.isLetterOrDigit(c)) {
+        out.append(Character.toLowerCase(c));
+      }
+    }
+    return out.toString();
+  }
+
+  /** The modern id of a block, from this line's name for it. */
+  static String blockId(Block block) {
+    return modernId(gameId(block.getBlockName()));
+  }
+
+  /** The modern id of an item stack, from this line's name for its item. */
+  static String itemId(ItemStack stack) {
+    return modernId(gameId(stack.getItem().getItemName()));
+  }
+
+  /**
+   * This line's unlocalized name as an id: {@code tile.stone} and {@code item.apple} both drop the
+   * prefix, and both become {@code minecraft:}-namespaced (the pre-1.6 id space is one namespace).
+   */
+  private static String gameId(String name) {
+    // Some of this line's items answer no name at all (a music disc is the one that does), and the
+    // id tables are walked in full to resolve a name — so a null here used to be a
+    // NullPointerException out of `/give`, answered to the script as "runCommand:
+    // NullPointerException" with nothing in it about the item. No name matches nothing.
+    if (name == null) {
+      return "";
+    }
+    int dot = name.indexOf('.');
+    String bare = dot >= 0 ? name.substring(dot + 1) : name;
+    return bare.indexOf(':') >= 0 ? bare : "minecraft:" + bare;
   }
 
   /** The name this line's entity type table knows an id by, or {@code null} when it has none. */
@@ -156,15 +313,37 @@ final class MinecheckNames {
 
   /** A numeric tag's value, or {@code 0} for anything else. */
   static double asDouble(NBTBase base) {
-    return base instanceof NBTBase.NBTPrimitive ? ((NBTBase.NBTPrimitive) base).getDouble() : 0.0;
+    if (base instanceof net.minecraft.nbt.NBTTagByte) {
+      return ((net.minecraft.nbt.NBTTagByte) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagShort) {
+      return ((net.minecraft.nbt.NBTTagShort) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagInt) {
+      return ((net.minecraft.nbt.NBTTagInt) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagLong) {
+      return ((net.minecraft.nbt.NBTTagLong) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagFloat) {
+      return ((net.minecraft.nbt.NBTTagFloat) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagDouble) {
+      return ((net.minecraft.nbt.NBTTagDouble) base).data;
+    }
+    return 0.0;
   }
 
   /** A compound as the documented map shape. */
   static Map<String, Object> toMap(NBTTagCompound compound) {
     Map<String, Object> out = new HashMap<>();
-    for (Object rawKey : compound.getKeySet()) {
-      String key = (String) rawKey;
-      out.put(key, value(compound.getTag(key)));
+    // This line's `getTags` hands back the tags themselves rather than their keys, which the newer
+    // lines' same-named method returns: reading a key off the collection was a cast of a numeric
+    // tag to String (the beacon's levels) and took the whole `getBlock` call down. Each tag carries
+    // its own name, so the key comes from the tag.
+    for (Object raw : compound.getTags()) {
+      NBTBase tag = (NBTBase) raw;
+      out.put(tag.getName(), value(tag));
     }
     return out;
   }
@@ -173,32 +352,40 @@ final class MinecheckNames {
     if (base == null) {
       return null;
     }
-    switch (base.getId()) {
-      case 1:
-        return ((NBTBase.NBTPrimitive) base).getByte();
-      case 2:
-        return ((NBTBase.NBTPrimitive) base).getShort();
-      case 3:
-        return ((NBTBase.NBTPrimitive) base).getInt();
-      case 4:
-        return ((NBTBase.NBTPrimitive) base).getLong();
-      case 5:
-        return ((NBTBase.NBTPrimitive) base).getFloat();
-      case 6:
-        return ((NBTBase.NBTPrimitive) base).getDouble();
-      case 7:
-        return numbers(((NBTTagByteArray) base).getByteArray());
-      case 8:
-        return ((NBTTagString) base).getString();
-      case 9:
-        return listValues((NBTTagList) base);
-      case 10:
-        return toMap((NBTTagCompound) base);
-      case 11:
-        return numbers(((NBTTagIntArray) base).getIntArray());
-      default:
-        return null;
+    if (base instanceof net.minecraft.nbt.NBTTagByte) {
+      return ((net.minecraft.nbt.NBTTagByte) base).data;
     }
+    if (base instanceof net.minecraft.nbt.NBTTagShort) {
+      return ((net.minecraft.nbt.NBTTagShort) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagInt) {
+      return ((net.minecraft.nbt.NBTTagInt) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagLong) {
+      return ((net.minecraft.nbt.NBTTagLong) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagFloat) {
+      return ((net.minecraft.nbt.NBTTagFloat) base).data;
+    }
+    if (base instanceof net.minecraft.nbt.NBTTagDouble) {
+      return ((net.minecraft.nbt.NBTTagDouble) base).data;
+    }
+    if (base instanceof NBTTagByteArray) {
+      return numbers(((NBTTagByteArray) base).byteArray);
+    }
+    if (base instanceof NBTTagString) {
+      return ((NBTTagString) base).data;
+    }
+    if (base instanceof NBTTagList) {
+      return listValues((NBTTagList) base);
+    }
+    if (base instanceof NBTTagCompound) {
+      return toMap((NBTTagCompound) base);
+    }
+    if (base instanceof NBTTagIntArray) {
+      return numbers(((NBTTagIntArray) base).intArray);
+    }
+    return null;
   }
 
   private static List<Object> listValues(NBTTagList list) {
@@ -209,30 +396,9 @@ final class MinecheckNames {
     return out;
   }
 
-  /**
-   * The element at an index of a list tag.
-   *
-   * <p>This line's list exposes no untyped index accessor — it answers by type — so the element is
-   * read out of the list's own backing list field, which is found by its type rather than by a name
-   * that a mapping can change.
-   */
+  /** The element at an index of a list tag. */
   private static NBTBase elementAt(NBTTagList list, int index) {
-    try {
-      for (java.lang.reflect.Field field : NBTTagList.class.getDeclaredFields()) {
-        if (!java.util.List.class.isAssignableFrom(field.getType())) {
-          continue;
-        }
-        field.setAccessible(true);
-        Object values = field.get(list);
-        if (values instanceof List && index < ((List<?>) values).size()) {
-          Object element = ((List<?>) values).get(index);
-          return element instanceof NBTBase ? (NBTBase) element : null;
-        }
-      }
-    } catch (ReflectiveOperationException | RuntimeException e) {
-      return null;
-    }
-    return null;
+    return list.tagAt(index);
   }
 
   private static List<Object> numbers(byte[] values) {

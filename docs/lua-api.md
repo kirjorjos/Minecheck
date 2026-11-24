@@ -1761,6 +1761,30 @@ carries the same Lua API this document describes, with the differences the game 
 - `rename`-free stacks carry a `count` field, item ids are strings, and GUI screens are
   `HandledScreen`s.
 
+### 1.4.7 (Forge)
+
+This line runs Forge only — 1.4.7 predates the Fabric family, and its Forge userdev artifact is the
+one this module builds against — and it carries the same Lua API this document describes, with the
+differences the game itself imposes:
+
+- `spawnStructure` is unsupported: 1.4.7 ships no structure templates (its villages are generated in
+  code), so the call fails with that reason rather than placing something else.
+- No recipe viewer is bridged: EMI and REI do not exist for 1.4.7, and JEI's 1.x line predates the
+  API these bridges were written against. `recipeViewer()` reports no viewer and every other action
+  is unchanged.
+- Content the line predates is refused by its registry: `minecraft:vex` arrived in 1.8 and
+  `minecraft:igloo/top` in 1.9, so neither resolves here.
+- Commands take the 1.4.7 forms: `/tp` takes a position but no yaw or pitch, `@s` is expanded to the
+  runner's name, and `/fill` is expanded into one `/setblock` per block.
+- Block states, scoreboard tags and spectator mode do not exist, so `getBlock` reports a block with
+  its metadata, the entity tag filter reads Minecheck's own tag store, and spectator becomes
+  adventure.
+- `muteAudio` unloads the sound manager rather than closing the audio device: on this line the
+  device's own teardown also drops the engine's command thread, which the next frame's listener
+  update dereferences. Sound plays are refused either way.
+- `hideGameWindow` cannot hide the window (LWJGL 2 has none), so the game window stays mapped and
+  only pause-on-focus-loss is turned off.
+
 Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.

@@ -243,7 +243,15 @@ public final class ScriptEngine {
         String.format(
             "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));
     closeLive();
-    writeResult();
+    try {
+      writeResult();
+    } catch (RuntimeException | Error e) {
+      // The result file is the best-effort half of the CI contract; the teardown below is not. An
+      // error escaping the writer must not leave the game running after the script has ended. It
+      // did exactly that: the file was written and then its log line threw, so neither the client
+      // nor the server ever ran the failMode=exit path and the harness waited out its timeouts.
+      LOG.log(Level.SEVERE, "Minecheck: could not finish writing the run result", e);
+    }
     if (failed && config.exitOnFail()) {
       if (client != null) {
         LOG.severe("failMode=exit — stopping client");

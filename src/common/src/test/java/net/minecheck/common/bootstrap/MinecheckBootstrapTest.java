@@ -13,6 +13,7 @@ import net.minecheck.common.script.ScriptEngine;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.PlatformServices;
+import net.minecheck.platform.api.PlatformServicesBase;
 import net.minecheck.platform.api.ServerPlatform;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -54,7 +55,7 @@ class MinecheckBootstrapTest {
   }
 
   private PlatformServices services(boolean dedicated) {
-    return new PlatformServices() {
+    return new PlatformServicesBase() {
       @Override
       public String minecraftVersion() {
         return "1.19.2";

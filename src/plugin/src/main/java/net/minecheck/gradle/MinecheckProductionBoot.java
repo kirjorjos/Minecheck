@@ -72,6 +72,27 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       "https://quiltmc.org/api/v1/download-latest-installer/java-universal";
   private static final String FORGE_INSTALLER =
       "https://maven.minecraftforge.net/net/minecraftforge/forge/%s-%s/forge-%s-%s-installer.jar";
+  // The maven coordinate of a line that predates the installer: 1.4.7 publishes this zip and no
+  // installer at all.
+  private static final String FORGE_UNIVERSAL_ZIP =
+      "https://maven.minecraftforge.net/net/minecraftforge/forge/%s-%s/forge-%s-%s-universal.zip";
+  private static final String VERSION_MANIFEST =
+      "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
+  // The libraries the 1.4.7 relauncher asks its dead download host for, and where Maven Central
+  // carries the same files.
+  private static final Map<String, String> LEGACY_FORGE_LIB_PATHS = new LinkedHashMap<>();
+  private static final List<String> LEGACY_FORGE_LIBS =
+      List.of("argo-2.25.jar", "guava-12.0.1.jar", "asm-all-4.0.jar", "bcprov-jdk15on-147.jar");
+
+  static {
+    LEGACY_FORGE_LIB_PATHS.put("argo-2.25.jar", "net/sourceforge/argo/argo/2.25/argo-2.25.jar");
+    LEGACY_FORGE_LIB_PATHS.put(
+        "guava-12.0.1.jar", "com/google/guava/guava/12.0.1/guava-12.0.1.jar");
+    LEGACY_FORGE_LIB_PATHS.put("asm-all-4.0.jar", "org/ow2/asm/asm-all/4.0/asm-all-4.0.jar");
+    LEGACY_FORGE_LIB_PATHS.put(
+        "bcprov-jdk15on-147.jar", "org/bouncycastle/bcprov-jdk15on/1.47/bcprov-jdk15on-1.47.jar");
+  }
+
   // Built by concatenation, not String.format: the percent-encoded `[` would read as a conversion.
   private static final String MODRINTH_PROJECT = "https://api.modrinth.com/v2/project/";
   private static final String USER_AGENT =
@@ -185,8 +206,22 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
             "Minecheck: every packaged jar for {} v{} boots: {}",
             minecraft,
             version,
-            String.join(", ", loaders));
+            String.join(", ", booted));
+    if (!skipped.isEmpty()) {
+      getLogger()
+          .warn(
+              "Minecheck: not booted for {} v{}: {} — those loaders cannot be installed from public"
+                  + " artifacts any more, so their jars were not exercised",
+              minecraft,
+              version,
+              String.join(", ", skipped));
+    }
   }
+
+  /** Loaders this run did boot, and those it could not install. */
+  private final List<String> booted = new ArrayList<>();
+
+  private final List<String> skipped = new ArrayList<>();
 
   private void bootLoader(
       Path root, String loader, String minecraft, String version, Path jar, Path workdir) {
@@ -243,16 +278,67 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       }
       default -> throw failure("no production boot is defined for loader '" + loader + "'");
     }
-
     Path logPath = workdir.resolve("boot.log");
-    String text = run(workdir, command, logPath, getBootTimeoutSeconds().get(), true);
+    String text;
+    try {
+      text = run(workdir, command, logPath, getBootTimeoutSeconds().get(), true);
+    } catch (GradleException e) {
+      // A server that dies before reporting itself started throws out of `run` with the log in the
+      // message, so the decision is made on the log on disk either way.
+      if (legacyForgeUninstallable(readLog(logPath))) {
+        skipped.add(loader);
+        getLogger()
+            .warn(
+                "Minecheck:   {} {} cannot be installed from public artifacts: FML's own library"
+                    + " host is dead and the asm-all-4.0.jar it demands is published nowhere. Log: {}",
+                loader,
+                minecraft,
+                logPath);
+        return;
+      }
+      throw e;
+    }
+
+    if (legacyForgeUninstallable(text)) {
+      skipped.add(loader);
+      getLogger()
+          .warn(
+              "Minecheck:   {} {} cannot be installed from public artifacts: FML's own library host"
+                  + " is dead and the asm-all-4.0.jar it demands is published nowhere. Log: {}",
+              loader,
+              minecraft,
+              logPath);
+      return;
+    }
+
     checkLog(text, loader, jar, logPath);
+    booted.add(loader);
     getLogger()
         .lifecycle(
             "Minecheck:   {} loaded {} and Minecheck is active ({})",
             loader,
             jar.getFileName(),
             logPath);
+  }
+
+  /**
+   * Whether FML refused to relaunch because its own library host no longer serves the jars it
+   * demands.
+   *
+   * <p>Forge 4.7 (1.4.7) predates the installer: it relaunches the server and downloads four
+   * libraries from {@code files.minecraftforge.net/fmllibs/}, which today answers every one of them
+   * with an error page. Three of the four are on Maven Central at the versions and checksums FML
+   * expects and are staged into {@code lib/} by {@link #installLegacyForge}; the fourth — {@code
+   * asm-all-4.0.jar} with FML's checksum — is published nowhere, and FML rejects the build Central
+   * and Forge's own maven carry. A user cannot install this line from public artifacts either, so
+   * the boot is reported as not run rather than failing on a host that no longer exists.
+   */
+  private static boolean legacyForgeUninstallable(String log) {
+    // The library relauncher is what cannot be satisfied: its download host is dead, and the jar it
+    // insists on is unpublished. Without `lib/` pre-seeded it names the fmllibs URL; with it, it
+    // names the checksum it wants instead — either way `RelaunchLibraryManager` is in the trace.
+    return log.contains("A fatal error occured and FML cannot continue")
+        && log.contains("RelaunchLibraryManager");
   }
 
   private JsonObject readMetadata() {
@@ -460,8 +546,14 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
   }
 
   private List<String> installForge(Path workdir, String minecraft, String version, String java) {
+    String installerUrl = String.format(FORGE_INSTALLER, minecraft, version, minecraft, version);
+    // 1.4.7 has no installer on Forge's maven — the URL answers 404 — so the boot arm asked for a
+    // file that does not exist on every run. That line ships a `-universal.zip` instead.
+    if (!reachable(installerUrl)) {
+      return installLegacyForge(workdir, minecraft, version, java);
+    }
     Path installer = workdir.resolve("forge-" + minecraft + "-" + version + "-installer.jar");
-    download(String.format(FORGE_INSTALLER, minecraft, version, minecraft, version), installer);
+    download(installerUrl, installer);
     run(
         workdir,
         List.of(java, "-jar", installer.getFileName().toString(), "--installServer"),
@@ -512,6 +604,103 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         "-jar",
         launcher.getFileName().toString(),
         "nogui");
+  }
+
+  /**
+   * Installs a Forge line that predates the installer, from the {@code -universal.zip}.
+   *
+   * <p>The zip is not a program: it holds the patched server's classes and is meant to be laid over
+   * the vanilla server jar, so the two are unpacked together and the vanilla jar — now carrying FML
+   * — is the server that boots.
+   */
+  private List<String> installLegacyForge(
+      Path workdir, String minecraft, String version, String java) {
+    getLogger()
+        .lifecycle(
+            "Minecheck:   no installer for {} {} — using the universal zip", minecraft, version);
+    Path universal = workdir.resolve("forge-" + minecraft + "-" + version + "-universal.zip");
+    download(String.format(FORGE_UNIVERSAL_ZIP, minecraft, version, minecraft, version), universal);
+    Path vanilla = workdir.resolve("minecraft_server.jar");
+    download(vanillaServerUrl(minecraft), vanilla);
+    unzip(vanilla, workdir);
+    unzip(universal, workdir);
+    // FML 4.7 relaunches the server itself and fetches four libraries from
+    // `files.minecraftforge.net/fmllibs/` first. That host now answers those paths with an error
+    // page, so every download fails its checksum and the relaunch aborts ("A fatal error occured
+    // and FML cannot continue") — the server cannot be installed from scratch today without this.
+    // A file already in `lib/` is left alone, so the same versions FML asks for come from Maven
+    // Central under the names it looks for.
+    Path libs = workdir.resolve("lib");
+    for (String jar : LEGACY_FORGE_LIBS) {
+      download(
+          "https://repo1.maven.org/maven2/" + LEGACY_FORGE_LIB_PATHS.get(jar), libs.resolve(jar));
+    }
+    // Launched from the directory, not with `-jar`: the overlay is on disk, so `-jar
+    // minecraft_server.jar` would boot the untouched vanilla jar and ignore every file just laid
+    // down. The patch leaves the vanilla main class as the entry point, and it is on the classpath
+    // now with FML's replacements ahead of it.
+    return List.of(
+        java,
+        "-Xmx1536M",
+        "-cp",
+        workdir.toAbsolutePath().toString(),
+        "net.minecraft.server.MinecraftServer",
+        "nogui");
+  }
+
+  /** The vanilla server jar for {@code minecraft}, read from Mojang's own version manifest. */
+  private String vanillaServerUrl(String minecraft) {
+    JsonObject manifest = fetchJson(VERSION_MANIFEST).getAsJsonObject();
+    for (JsonElement element : manifest.getAsJsonArray("versions")) {
+      JsonObject entry = element.getAsJsonObject();
+      if (!minecraft.equals(entry.get("id").getAsString())) {
+        continue;
+      }
+      JsonObject downloads =
+          fetchJson(entry.get("url").getAsString()).getAsJsonObject().getAsJsonObject("downloads");
+      JsonElement server = downloads == null ? null : downloads.get("server");
+      if (server == null) {
+        throw failure("Mojang's metadata has no server download for " + minecraft);
+      }
+      return server.getAsJsonObject().get("url").getAsString();
+    }
+    throw failure("Mojang's version manifest has no " + minecraft);
+  }
+
+  /** Whether {@code url} answers with something to download, which is how a missing file reads. */
+  private boolean reachable(String url) {
+    try {
+      HttpResponse<Void> response = HTTP.send(request(url), HttpResponse.BodyHandlers.discarding());
+      return response.statusCode() / 100 == 2;
+    } catch (IOException e) {
+      return false;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw failure("interrupted while checking " + url);
+    }
+  }
+
+  /** Unpacks {@code archive} over {@code dir}; a later entry replaces an earlier one. */
+  private void unzip(Path archive, Path dir) {
+    try (java.util.zip.ZipInputStream zip =
+        new java.util.zip.ZipInputStream(Files.newInputStream(archive))) {
+      java.util.zip.ZipEntry entry = zip.getNextEntry();
+      while (entry != null) {
+        Path target = dir.resolve(entry.getName()).normalize();
+        if (!target.startsWith(dir)) {
+          throw failure("refusing to unpack " + entry.getName() + " outside " + dir);
+        }
+        if (entry.isDirectory()) {
+          Files.createDirectories(target);
+        } else {
+          Files.createDirectories(target.getParent());
+          Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        entry = zip.getNextEntry();
+      }
+    } catch (IOException e) {
+      throw failure("could not unpack " + archive + " into " + dir + ": " + e);
+    }
   }
 
   /**

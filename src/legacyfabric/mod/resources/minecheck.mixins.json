@@ -5,14 +5,16 @@
   "compatibilityLevel": "JAVA_8",
   "mixins": [
     "ServerTickMixin",
-    "ServerCustomPayloadMixin"
+    "ServerCustomPayloadMixin",
+    "ServerCommandMixin"
   ],
   "client": [
     "ClientTickMixin",
+    "LanguageCodeMixin",
     "ClientCustomPayloadMixin",
     "FrameDrawnMixin",
     "MovementInputMixin",
-    "SoundManagerMixin"
+    "SoundSystemMixin"
   ],
   "injectors": {
     "defaultRequire": 1

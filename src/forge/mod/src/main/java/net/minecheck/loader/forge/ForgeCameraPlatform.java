@@ -1,6 +1,5 @@
 package net.minecheck.loader.forge;
 
-import cpw.mods.fml.client.registry.ClientRegistry;
 import cpw.mods.fml.common.Loader;
 import java.nio.file.Path;
 import java.util.logging.Level;
@@ -16,7 +15,6 @@ import net.minecheck.platform.api.CameraPlatform;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityClientPlayerMP;
 import net.minecraft.client.multiplayer.WorldClient;
-import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.MathHelper;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.Display;
@@ -53,7 +51,9 @@ public final class ForgeCameraPlatform implements CameraPlatform {
   private final CameraMode mode;
   private final CameraController controller;
 
-  private KeyBinding toggleKey;
+  /** Whether F4 was held last tick, for the polled toggle's rising edge. */
+  private boolean toggleHeld;
+
   private MinecheckCameraEntity camera;
 
   /**
@@ -115,14 +115,23 @@ public final class ForgeCameraPlatform implements CameraPlatform {
     return true;
   }
 
+  /**
+   * Nothing to register: 1.4.7 has no key-binding registry. The toggle is polled from the client
+   * tick instead, so the F4 press has the same edge behaviour a binding would give it.
+   */
   @Override
-  public void registerBindings() {
-    if (!mode.enabled() || toggleKey != null) {
+  public void registerBindings() {}
+
+  /** Applies the polled F4 toggle's rising edge. Called once per client tick. */
+  static void pollToggle(boolean down) {
+    ForgeCameraPlatform platform = current;
+    if (platform == null) {
       return;
     }
-    toggleKey =
-        new KeyBinding("key.minecheck.camera.toggle", Keyboard.KEY_F4, "key.categories.minecheck");
-    ClientRegistry.registerKeyBinding(toggleKey);
+    if (down && !platform.toggleHeld && platform.humanInputAllowed()) {
+      platform.toggle();
+    }
+    platform.toggleHeld = down;
   }
 
   /**
@@ -165,13 +174,6 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     boolean allowed = humanInputAllowed();
-    if (toggleKey != null) {
-      while (toggleKey.isPressed()) {
-        if (allowed) {
-          toggle();
-        }
-      }
-    }
     if (camera == null) {
       return;
     }
@@ -335,13 +337,14 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return CameraMovement.Inputs.none();
     }
     return new CameraMovement.Inputs(
-        mc.gameSettings.keyBindForward.getIsKeyPressed(),
-        mc.gameSettings.keyBindBack.getIsKeyPressed(),
-        mc.gameSettings.keyBindLeft.getIsKeyPressed(),
-        mc.gameSettings.keyBindRight.getIsKeyPressed(),
-        mc.gameSettings.keyBindJump.getIsKeyPressed(),
-        mc.gameSettings.keyBindSneak.getIsKeyPressed(),
-        mc.gameSettings.keyBindSprint.getIsKeyPressed());
+        mc.gameSettings.keyBindForward.pressed,
+        mc.gameSettings.keyBindBack.pressed,
+        mc.gameSettings.keyBindLeft.pressed,
+        mc.gameSettings.keyBindRight.pressed,
+        mc.gameSettings.keyBindJump.pressed,
+        mc.gameSettings.keyBindSneak.pressed,
+        // Sprint has no key of its own before 1.7; Ctrl is what a human uses for it here.
+        Keyboard.isKeyDown(Keyboard.KEY_LCONTROL));
   }
 
   private static Minecraft mc() {
