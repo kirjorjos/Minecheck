@@ -183,6 +183,12 @@ minecheck.expect(
 )
 minecheck.sleep(8)
 
+-- The clock is pinned twice over: each scene sets the time, and the day cycle is stopped so the
+-- server cannot carry it on between a scene's settle and its capture. With the cycle running, the
+-- night frame moved by a single star pixel between two captures of the same scene, which is a
+-- different digest for a picture nothing in the script changed.
+command("gamerule doDaylightCycle false")
+
 -- 1. The world at noon, looking down: ground, the pinned HUD and the held-block highlight in one
 -- frame, with the sky's light at the flat top of its curve.
 command("time set 6000")
