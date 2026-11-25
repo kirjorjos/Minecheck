@@ -82,7 +82,7 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (player == null) {
       return false;
     }
-    Connection connection = player.connection == null ? null : player.connection.getConnection();
+    Connection connection = player.connection == null ? null : player.connection.connection;
     return ForgeChannelTaps.install(connection, INSTANCE, "server");
   }
 

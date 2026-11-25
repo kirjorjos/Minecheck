@@ -1303,7 +1303,7 @@ public class ForgeClientPlatform implements ClientPlatform {
       return typed;
     }
     if (screen.getFocused() != field) {
-      screen.setInitialFocus(field);
+      screen.setFocused(field);
     }
     if (kind.equals("command") && !field.getValue().startsWith("/")) {
       field.setValue("/" + field.getValue());

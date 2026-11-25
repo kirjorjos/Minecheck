@@ -1114,7 +1114,7 @@ public class YarnClientPlatform implements ClientPlatform {
               entity.getX(),
               entity.getY(),
               entity.getZ(),
-              new java.util.HashSet<>(entity.getScoreboardTags())));
+              new java.util.HashSet<>(entity.getCommandTags())));
     }
     return java.util.List.copyOf(out);
   }
@@ -1285,7 +1285,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return typed;
     }
     if (screen.getFocused() != field) {
-      screen.setInitialFocus(field);
+      screen.setFocused(field);
     }
     if (kind.equals("command") && !field.getText().startsWith("/")) {
       field.setText("/" + field.getText());

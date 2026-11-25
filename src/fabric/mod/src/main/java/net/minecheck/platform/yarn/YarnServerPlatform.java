@@ -125,7 +125,7 @@ public class YarnServerPlatform implements ServerPlatform {
       if (typeId != null && !Registries.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) {
         continue;
       }
-      if (tag != null && !entity.getScoreboardTags().contains(tag)) {
+      if (tag != null && !entity.getCommandTags().contains(tag)) {
         continue;
       }
       out.add(
@@ -135,7 +135,7 @@ public class YarnServerPlatform implements ServerPlatform {
               entity.getX(),
               entity.getY(),
               entity.getZ(),
-              new java.util.HashSet<>(entity.getScoreboardTags())));
+              new java.util.HashSet<>(entity.getCommandTags())));
     }
     return java.util.List.copyOf(out);
   }
