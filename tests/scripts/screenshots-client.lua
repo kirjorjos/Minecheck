@@ -161,6 +161,28 @@ end
 -- twenty-a-second floor. The captures themselves are still taken on a held clock.
 minecheck.uncappedTicks()
 
+-- 1.4.7 opens on its tutorial card ("Press 'E' to open your inventory.") and queues it again on
+-- every tick until the step is done, so it sits over every frame a scene captures. It is not an
+-- options entry on that line (its GameSettings has no tutorial field at all) and it cannot be
+-- cleared from the client object, so the step is completed here instead: the inventory is opened
+-- and closed once, and the card that the step was waiting on is given its few seconds to fade
+-- before the first capture.
+minecheck.press("e")
+minecheck.expect(
+  minecheck.waitFor(function()
+    return minecheck.isScreenOpen(nil)
+  end, 5),
+  "the inventory opened"
+)
+minecheck.press("escape")
+minecheck.expect(
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen(nil)
+  end, 5),
+  "the inventory closed"
+)
+minecheck.sleep(8)
+
 -- 1. The world at noon, looking down: ground, the pinned HUD and the held-block highlight in one
 -- frame, with the sky's light at the flat top of its curve.
 command("time set 6000")
