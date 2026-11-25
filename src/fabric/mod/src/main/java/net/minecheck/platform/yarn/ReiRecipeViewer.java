@@ -17,8 +17,8 @@ import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
-import net.minecraft.registry.Registry;
 
 /**
  * REI-backed {@link RecipeViewer}.
@@ -88,12 +88,15 @@ public final class ReiRecipeViewer implements RecipeViewer {
       TransferHandlerRegistry.getInstance().forEach(handlers::add);
       // "higher priorities will be called first" (TransferHandler#getPriority).
       handlers.sort(Comparator.comparingDouble(TransferHandler::getPriority).reversed());
+      // REI 10 has no separate applicability probe: a handler answers with a not-applicable result
+      // when the open menu is not one it handles, so the first applicable answer is the one that
+      // counts.
       for (TransferHandler handler : handlers) {
-        if (!handler.checkApplicable(context).isApplicable()) {
+        TransferHandler.Result result = handler.handle(context);
+        if (result == null || !result.isApplicable()) {
           continue;
         }
-        TransferHandler.Result result = handler.handle(context);
-        return result != null && result.isSuccessful();
+        return result.isSuccessful();
       }
       return false;
     } catch (Throwable t) {
@@ -152,7 +155,7 @@ public final class ReiRecipeViewer implements RecipeViewer {
       if (!(value instanceof ItemStack item) || item.isEmpty()) {
         continue;
       }
-      Identifier id = Registry.ITEM.getId(item.getItem());
+      Identifier id = Registries.ITEM.getId(item.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

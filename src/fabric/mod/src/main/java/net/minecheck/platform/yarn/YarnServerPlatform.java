@@ -14,6 +14,8 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtHelper;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.StructurePlacementData;
@@ -21,7 +23,6 @@ import net.minecraft.structure.StructureTemplate;
 import net.minecraft.structure.StructureTemplateManager;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.registry.Registry;
 
 public class YarnServerPlatform implements ServerPlatform {
 
@@ -121,7 +122,7 @@ public class YarnServerPlatform implements ServerPlatform {
     ServerWorld world = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (Entity entity : world.iterateEntities()) {
-      if (typeId != null && !Registry.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) {
+      if (typeId != null && !Registries.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) {
         continue;
       }
       if (tag != null && !entity.getScoreboardTags().contains(tag)) {
@@ -130,7 +131,7 @@ public class YarnServerPlatform implements ServerPlatform {
       out.add(
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
-              Registry.ENTITY_TYPE.getId(entity.getType()).toString(),
+              Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
               entity.getX(),
               entity.getY(),
               entity.getZ(),
@@ -196,7 +197,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (identifier == null) {
       throw new IllegalArgumentException("invalid entity id: " + id);
     }
-    requireRegistryEntry(Registry.ENTITY_TYPE, identifier, "entity type");
+    requireRegistryEntry(Registries.ENTITY_TYPE, identifier, "entity type");
     ServerWorld world = overworld();
     NbtCompound compound = parseNbt(nbt);
     compound.putString("id", identifier.toString());
@@ -232,7 +233,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (identifier == null) {
       throw new IllegalArgumentException("invalid block id: " + id);
     }
-    net.minecraft.block.Block block = requireRegistryEntry(Registry.BLOCK, identifier, "block");
+    net.minecraft.block.Block block = requireRegistryEntry(Registries.BLOCK, identifier, "block");
     ServerWorld world = overworld();
     BlockPos pos = new BlockPos(x, y, z);
     if (!replace && !world.getBlockState(pos).isAir()) {
@@ -263,7 +264,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (identifier == null) {
       throw new IllegalArgumentException("invalid item id: " + id);
     }
-    Item item = requireRegistryEntry(Registry.ITEM, identifier, "item");
+    Item item = requireRegistryEntry(Registries.ITEM, identifier, "item");
     ServerWorld world = overworld();
     ItemStack stack = new ItemStack(item);
     stack.setCount(count);

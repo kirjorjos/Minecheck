@@ -16,21 +16,19 @@ import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
-import net.minecraft.core.Registry;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
-import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
-import net.minecraft.world.level.levelgen.WorldGenSettings;
+import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPreset;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
-import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 public class ForgeClientPlatform implements ClientPlatform {
 
@@ -752,7 +750,7 @@ public class ForgeClientPlatform implements ClientPlatform {
           && proceed.equals(widget.getMessage())) {
         LOG.info("joinLocalWorld: confirming the world's experimental settings (Proceed)");
         widget.mouseClicked(
-            widget.x + widget.getWidth() / 2.0, widget.y + widget.getHeight() / 2.0, 0);
+            widget.getX() + widget.getWidth() / 2.0, widget.getY() + widget.getHeight() / 2.0, 0);
         return;
       }
     }
@@ -781,32 +779,36 @@ public class ForgeClientPlatform implements ClientPlatform {
             difficulty(options.difficulty()),
             options.allowCheats(),
             rules,
-            DataPackConfig.DEFAULT);
+            WorldDataConfiguration.DEFAULT);
     Minecraft mc = mc();
     onClientThread(
-        () -> {
-          RegistryAccess.Frozen registryAccess = RegistryAccess.BUILTIN.get();
-          // The flat preset supplies the seed, the structure flag and the dimension set; its
-          // overworld generator is replaced with one built from the shared declaration in
-          // tests/flat-world.json, which the harness also gives the dedicated server as
-          // `generator-settings`, so both sides build the same surface.
-          Registry<Biome> biomes = registryAccess.registryOrThrow(Registry.BIOME_REGISTRY);
-          Registry<StructureSet> structureSets =
-              registryAccess.registryOrThrow(Registry.STRUCTURE_SET_REGISTRY);
-          FlatLevelSource flat =
-              new FlatLevelSource(structureSets, FlatWorldSettings.settings(biomes, structureSets));
-          WorldPreset preset =
-              registryAccess
-                  .registryOrThrow(Registry.WORLD_PRESET_REGISTRY)
-                  .getOrThrow(WorldPresets.FLAT);
-          WorldGenSettings generatorOptions =
-              WorldGenSettings.replaceOverworldGenerator(
-                  registryAccess,
-                  preset.createWorldGenSettings(options.seed(), options.structures(), false),
-                  flat);
-          mc.createWorldOpenFlows()
-              .createFreshLevel(options.name(), levelSettings, registryAccess, generatorOptions);
-        });
+        () ->
+            // The flat preset supplies the dimension set; its overworld generator is replaced with
+            // one built from the shared declaration in tests/flat-world.json, which the harness
+            // also
+            // gives the dedicated server as `generator-settings`, so both sides build the same
+            // surface. The registries arrive already loaded by the world loader, which is why the
+            // dimensions are supplied as a function rather than built up front.
+            mc.createWorldOpenFlows()
+                .createFreshLevel(
+                    options.name(),
+                    levelSettings,
+                    new WorldOptions(options.seed(), options.structures(), false),
+                    registryAccess -> {
+                      WorldPreset preset =
+                          registryAccess
+                              .registryOrThrow(Registries.WORLD_PRESET)
+                              .getOrThrow(WorldPresets.FLAT);
+                      FlatLevelSource flat =
+                          new FlatLevelSource(
+                              FlatWorldSettings.settings(
+                                  registryAccess.lookupOrThrow(Registries.BIOME),
+                                  registryAccess.lookupOrThrow(Registries.STRUCTURE_SET),
+                                  registryAccess.lookupOrThrow(Registries.PLACED_FEATURE)));
+                      return preset
+                          .createWorldDimensions()
+                          .replaceOverworldGenerator(registryAccess, flat);
+                    }));
   }
 
   @Override
@@ -1112,7 +1114,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (net.minecraft.world.entity.Entity entity : level.entitiesForRendering()) {
       net.minecraft.resources.ResourceLocation actual =
-          Registry.ENTITY_TYPE.getKey(entity.getType());
+          BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
       if (typeId != null && !actual.equals(typeId)) {
         continue;
       }
@@ -1148,7 +1150,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     java.util.Map<String, Object> nbt =
         blockEntity == null ? null : nbtToMap(blockEntity.saveWithoutMetadata());
     return new net.minecheck.platform.api.BlockInfo(
-        net.minecraft.core.Registry.BLOCK.getKey(state.getBlock()).toString(), nbt);
+        BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
 
   @Override
@@ -1266,7 +1268,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     net.minecraft.client.gui.components.AbstractWidget target = matches.get(at);
     // The centre is inside the widget, so its own isMouseOver/clicked check passes.
     target.mouseClicked(
-        target.x + target.getWidth() / 2.0, target.y + target.getHeight() / 2.0, button);
+        target.getX() + target.getWidth() / 2.0, target.getY() + target.getHeight() / 2.0, button);
     return true;
   }
 
@@ -1276,7 +1278,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getConnection() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.commandUnsigned(command);
+    mc.getConnection().sendCommand(command);
   }
 
   @Override
@@ -1412,7 +1414,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     net.minecraft.nbt.CompoundTag nbt = stack.getTag();
     return new net.minecheck.platform.api.SlotInfo(
         false,
-        net.minecraft.core.Registry.ITEM.getKey(stack.getItem()).toString(),
+        BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(),
         stack.getCount(),
         nbt == null ? null : nbtToMap(nbt));
   }

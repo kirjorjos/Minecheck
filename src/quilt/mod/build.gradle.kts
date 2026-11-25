@@ -19,7 +19,16 @@ unimined.minecraft {
   version(mcVersion)
   mappings { yarn(5) }
   quilt { loader("0.30.2") }
-  mods { modImplementation {} }
+  mods {
+    modImplementation {
+      // QFAPI's 1.19.3 modules ship their access wideners in the `named` (yarn) namespace instead
+      // of intermediary, so unimined's intermediary->yarn pass has nothing to convert and refuses
+      // the jar outright. Quilt Loader remaps an access widener from the namespace its header
+      // declares, so passing it through untouched is correct in the dev runtime (the game is
+      // already named there) and in production alike.
+      catchAWNamespaceAssertion()
+    }
+  }
   defaultRemapJar = false
 }
 

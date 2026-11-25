@@ -21,9 +21,9 @@ import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.util.Identifier;
-import net.minecraft.registry.Registry;
 
 /**
  * JEI-backed {@link RecipeViewer}.
@@ -230,7 +230,7 @@ public final class JeiRecipeViewer implements RecipeViewer {
       if (stack.isEmpty()) {
         continue;
       }
-      Identifier id = Registry.ITEM.getId(stack.getItem());
+      Identifier id = Registries.ITEM.getId(stack.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

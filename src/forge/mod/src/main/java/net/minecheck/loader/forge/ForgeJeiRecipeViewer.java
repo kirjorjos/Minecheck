@@ -20,7 +20,7 @@ import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.Minecraft;
-import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
@@ -229,7 +229,7 @@ public final class ForgeJeiRecipeViewer implements RecipeViewer {
       if (stack.isEmpty()) {
         continue;
       }
-      ResourceLocation id = Registry.ITEM.getKey(stack.getItem());
+      ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

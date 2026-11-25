@@ -1,7 +1,6 @@
 package net.minecheck.loader.forge;
 
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.protocol.Packet;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.Level;
@@ -24,16 +23,6 @@ final class MinecheckCameraEntity extends Entity {
 
   @Override
   public void tick() {}
-
-  /**
-   * Never sent anywhere: the camera exists on one client and has no server counterpart. Vanilla
-   * declares this abstract on {@code Entity}, so it has to be answered even when the answer is
-   * "impossible".
-   */
-  @Override
-  public Packet<?> getAddEntityPacket() {
-    throw new UnsupportedOperationException("the camera entity is client-only");
-  }
 
   @Override
   protected void defineSynchedData() {}

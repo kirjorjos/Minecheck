@@ -136,35 +136,6 @@ public class ForgeEntrypoint {
     client.installCameraBindings(event);
   }
 
-  private final AtomicBoolean builtinWarmed = new AtomicBoolean();
-
-  /**
-   * Materialises {@link net.minecraft.core.RegistryAccess#BUILTIN} before any world or server join.
-   *
-   * <p>That value is a lazily built, memoised copy of the builtin (datapack) registries. On 1.19.2
-   * the Forge client first touches it from {@code ClientPacketListener}'s field initialiser, which
-   * runs <em>after</em> the login registry snapshot has been applied: built from that post-sync
-   * state, encoding fails to resolve even {@code minecraft:air} ("Unknown registry element in
-   * minecraft:block: Block{minecraft:air}") and the join never completes — the server logs the
-   * player in, then the client drops the connection about a second later, with no world and no
-   * client-side error. Building it at boot, while the registries are still pristine, is the state
-   * the value is meant to hold, so the login path finds it already there.
-   */
-  private void warmBuiltinRegistryAccess() {
-    long start = System.nanoTime();
-    try {
-      net.minecraft.core.RegistryAccess.BUILTIN.get();
-      java.util.logging.Logger.getLogger("Minecheck")
-          .info(
-              String.format(
-                  "built the builtin registry copy in %d ms, before any world join",
-                  (System.nanoTime() - start) / 1_000_000));
-    } catch (RuntimeException e) {
-      java.util.logging.Logger.getLogger("Minecheck")
-          .warning(String.format("could not build the builtin registry copy: %s", e));
-    }
-  }
-
   /**
    * Per-frame hook for the screenshot suite: a capture must read a frame drawn after it cleared the
    * chat, and a render tick is the only thing that says "a frame was drawn" (a client tick is not —
@@ -194,9 +165,6 @@ public class ForgeEntrypoint {
     ScriptEngine e = engine;
     if (e == null || e.isFinished()) {
       return;
-    }
-    if (client.isBootComplete() && builtinWarmed.compareAndSet(false, true)) {
-      warmBuiltinRegistryAccess();
     }
     client.pinClientClock();
     client.pinRenderTickDelta();
