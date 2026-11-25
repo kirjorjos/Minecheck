@@ -1,6 +1,4 @@
 package net.minecheck.platform.yarn;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
 
 import java.lang.reflect.Method;
 import java.util.Locale;
@@ -18,19 +16,19 @@ import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKeys;
 import net.minecraft.resource.DataConfiguration;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.integrated.IntegratedServerLoader;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.structure.StructureSet;
-import net.minecraft.registry.DynamicRegistryManager;
-import net.minecraft.registry.Registry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
-import net.minecraft.world.biome.Biome;
-import net.minecraft.world.dimension.DimensionOptions;
+import net.minecraft.world.dimension.DimensionOptionsRegistryHolder;
+import net.minecraft.world.dimension.DimensionType;
 import net.minecraft.world.gen.GeneratorOptions;
 import net.minecraft.world.gen.WorldPreset;
 import net.minecraft.world.gen.WorldPresets;
@@ -766,32 +764,35 @@ public class YarnClientPlatform implements ClientPlatform {
             DataConfiguration.SAFE_MODE);
     MinecraftClient mc = mc();
     onClientThread(
-        () -> {
-          DynamicRegistryManager.Immutable registryManager =
-              DynamicRegistryManager.createAndLoad().toImmutable();
-          // The flat preset supplies the seed, the structure flag and the dimension set; its
-          // overworld generator is replaced with one built from the shared declaration in
-          // tests/flat-world.json, which the harness also gives the dedicated server as
-          // `generator-settings`, so both sides build the same surface.
-          Registry<Biome> biomes = registryManager.get(RegistryKeys.BIOME);
-          Registry<StructureSet> structureSets = registryManager.get(RegistryKeys.STRUCTURE_SET);
-          FlatChunkGenerator flat =
-              new FlatChunkGenerator(
-                  structureSets, FlatWorldSettings.config(biomes, structureSets));
-          WorldPreset preset =
-              registryManager.get(RegistryKeys.WORLD_PRESET).getOrThrow(WorldPresets.FLAT);
-          Registry<DimensionOptions> dimensions =
-              GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
-                  registryManager.get(RegistryKeys.DIMENSION_TYPE),
-                  preset
-                      .createGeneratorOptions(options.seed(), options.structures(), false)
-                      .getDimensions(),
-                  flat);
-          GeneratorOptions generatorOptions =
-              new GeneratorOptions(options.seed(), options.structures(), false, dimensions);
-          mc.createIntegratedServerLoader()
-              .createAndStart(options.name(), levelInfo, registryManager, generatorOptions);
-        });
+        () ->
+            // The flat preset supplies the dimension set; its overworld generator is replaced with
+            // one built from the shared declaration in tests/flat-world.json, which the harness
+            // also
+            // gives the dedicated server as `generator-settings`, so both sides build the same
+            // surface. The registries arrive already loaded by the server loader, which is why the
+            // dimensions are supplied as a function rather than built up front.
+            mc.createIntegratedServerLoader()
+                .createAndStart(
+                    options.name(),
+                    levelInfo,
+                    new GeneratorOptions(options.seed(), options.structures(), false),
+                    registries -> {
+                      Registry<DimensionType> dimensionTypes =
+                          registries.get(RegistryKeys.DIMENSION_TYPE);
+                      WorldPreset preset =
+                          registries.get(RegistryKeys.WORLD_PRESET).getOrThrow(WorldPresets.FLAT);
+                      FlatChunkGenerator flat =
+                          new FlatChunkGenerator(
+                              FlatWorldSettings.config(
+                                  registries.getWrapperOrThrow(RegistryKeys.BIOME),
+                                  registries.getWrapperOrThrow(RegistryKeys.STRUCTURE_SET),
+                                  registries.getWrapperOrThrow(RegistryKeys.PLACED_FEATURE)));
+                      return new DimensionOptionsRegistryHolder(
+                          DimensionOptionsRegistryHolder.createRegistry(
+                              dimensionTypes,
+                              preset.createDimensionsRegistryHolder().dimensions(),
+                              flat));
+                    }));
   }
 
   @Override
@@ -1257,7 +1258,9 @@ public class YarnClientPlatform implements ClientPlatform {
     if (mc.player == null || mc.getNetworkHandler() == null) {
       throw new IllegalStateException("not connected to a world/server");
     }
-    mc.player.sendCommand(command, net.minecraft.text.Text.empty());
+    // The command is sent without a leading slash: the packet carries it that way and the server
+    // prefixes it back before dispatch.
+    mc.getNetworkHandler().sendChatCommand(command);
   }
 
   @Override

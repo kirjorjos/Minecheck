@@ -1,5 +1,4 @@
 package net.minecheck.platform.yarn;
-import net.minecraft.registry.Registries;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -18,8 +17,8 @@ import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
-import net.minecraft.registry.Registry;
 
 /**
  * REI-backed {@link RecipeViewer}.
@@ -89,12 +88,15 @@ public final class ReiRecipeViewer implements RecipeViewer {
       TransferHandlerRegistry.getInstance().forEach(handlers::add);
       // "higher priorities will be called first" (TransferHandler#getPriority).
       handlers.sort(Comparator.comparingDouble(TransferHandler::getPriority).reversed());
+      // REI 10 has no separate applicability probe: a handler answers with a not-applicable result
+      // when the open menu is not one it handles, so the first applicable answer is the one that
+      // counts.
       for (TransferHandler handler : handlers) {
-        if (!handler.checkApplicable(context).isApplicable()) {
+        TransferHandler.Result result = handler.handle(context);
+        if (result == null || !result.isApplicable()) {
           continue;
         }
-        TransferHandler.Result result = handler.handle(context);
-        return result != null && result.isSuccessful();
+        return result.isSuccessful();
       }
       return false;
     } catch (Throwable t) {

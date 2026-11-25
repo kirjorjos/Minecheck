@@ -16,7 +16,7 @@ import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
@@ -88,12 +88,15 @@ public final class ForgeReiRecipeViewer implements RecipeViewer {
       TransferHandlerRegistry.getInstance().forEach(handlers::add);
       // "higher priorities will be called first" (TransferHandler#getPriority).
       handlers.sort(Comparator.comparingDouble(TransferHandler::getPriority).reversed());
+      // REI 10 has no separate applicability probe: a handler answers with a not-applicable result
+      // when the open menu is not one it handles, so the first applicable answer is the one that
+      // counts.
       for (TransferHandler handler : handlers) {
-        if (!handler.checkApplicable(context).isApplicable()) {
+        TransferHandler.Result result = handler.handle(context);
+        if (result == null || !result.isApplicable()) {
           continue;
         }
-        TransferHandler.Result result = handler.handle(context);
-        return result != null && result.isSuccessful();
+        return result.isSuccessful();
       }
       return false;
     } catch (Throwable t) {
@@ -152,7 +155,7 @@ public final class ForgeReiRecipeViewer implements RecipeViewer {
       if (!(value instanceof ItemStack item) || item.isEmpty()) {
         continue;
       }
-      ResourceLocation id = Registry.ITEM.getKey(item.getItem());
+      ResourceLocation id = BuiltInRegistries.ITEM.getKey(item.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

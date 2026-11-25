@@ -1,5 +1,4 @@
 package net.minecheck.platform.yarn;
-import net.minecraft.registry.Registries;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.function.Supplier;
@@ -15,6 +14,8 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtHelper;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.StructurePlacementData;
@@ -22,7 +23,6 @@ import net.minecraft.structure.StructureTemplate;
 import net.minecraft.structure.StructureTemplateManager;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.registry.Registry;
 
 public class YarnServerPlatform implements ServerPlatform {
 

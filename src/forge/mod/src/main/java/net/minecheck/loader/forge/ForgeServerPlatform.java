@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 import net.minecheck.platform.api.ServerPlatform;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.TagParser;
 import net.minecraft.resources.ResourceLocation;
@@ -131,7 +132,8 @@ public class ForgeServerPlatform implements ServerPlatform {
     ServerLevel level = overworld();
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (Entity entity : level.getAllEntities()) {
-      if (typeId != null && !Registry.ENTITY_TYPE.getKey(entity.getType()).equals(typeId)) {
+      if (typeId != null
+          && !BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).equals(typeId)) {
         continue;
       }
       if (tag != null && !entity.getTags().contains(tag)) {
@@ -140,7 +142,7 @@ public class ForgeServerPlatform implements ServerPlatform {
       out.add(
           new net.minecheck.platform.api.EntityInfo(
               entity.getId(),
-              Registry.ENTITY_TYPE.getKey(entity.getType()).toString(),
+              BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString(),
               entity.getX(),
               entity.getY(),
               entity.getZ(),
@@ -209,7 +211,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (location == null) {
       throw new IllegalArgumentException("invalid entity id: " + id);
     }
-    requireRegistryEntry(Registry.ENTITY_TYPE, location, "entity type");
+    requireRegistryEntry(BuiltInRegistries.ENTITY_TYPE, location, "entity type");
     ServerLevel level = overworld();
     CompoundTag tag = parseTag(nbt);
     tag.putString("id", location.toString());
@@ -249,7 +251,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (location == null) {
       throw new IllegalArgumentException("invalid block id: " + id);
     }
-    Block block = requireRegistryEntry(Registry.BLOCK, location, "block");
+    Block block = requireRegistryEntry(BuiltInRegistries.BLOCK, location, "block");
     ServerLevel level = overworld();
     BlockPos pos = new BlockPos(x, y, z);
     if (!replace && !level.getBlockState(pos).isAir()) {
@@ -280,7 +282,7 @@ public class ForgeServerPlatform implements ServerPlatform {
     if (location == null) {
       throw new IllegalArgumentException("invalid item id: " + id);
     }
-    Item item = requireRegistryEntry(Registry.ITEM, location, "item");
+    Item item = requireRegistryEntry(BuiltInRegistries.ITEM, location, "item");
     ServerLevel level = overworld();
     ItemStack stack = new ItemStack(item);
     stack.setCount(count);

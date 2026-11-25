@@ -89,6 +89,7 @@ final class FlatWorldSettings {
     RegistryEntry<Biome> biome =
         biomes
             .getOptional(RegistryKey.of(RegistryKeys.BIOME, new Identifier(declared.biome)))
+            .<RegistryEntry<Biome>>map(entry -> entry)
             .orElseGet(base::getBiome);
     // No structure overrides: the declaration describes bare ground, and the suites place the
     // structures they assert on themselves.

@@ -1,5 +1,4 @@
 package net.minecheck.platform.yarn;
-import net.minecraft.registry.Registries;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -22,9 +21,9 @@ import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.util.Identifier;
-import net.minecraft.registry.Registry;
 
 /**
  * JEI-backed {@link RecipeViewer}.

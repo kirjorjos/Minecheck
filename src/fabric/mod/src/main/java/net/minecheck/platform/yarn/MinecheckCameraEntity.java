@@ -3,7 +3,6 @@ package net.minecheck.platform.yarn;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.network.Packet;
 import net.minecraft.world.World;
 
 /**
@@ -25,16 +24,6 @@ final class MinecheckCameraEntity extends Entity {
 
   @Override
   public void tick() {}
-
-  /**
-   * Never sent anywhere: the camera exists on one client and has no server counterpart. Vanilla
-   * declares this abstract on {@code Entity}, so it has to be answered even when the answer is
-   * "impossible".
-   */
-  @Override
-  public Packet<?> createSpawnPacket() {
-    throw new UnsupportedOperationException("the camera entity is client-only");
-  }
 
   /** Nothing worth saving: the pose lives in the platform and is rebuilt on attach. */
   @Override

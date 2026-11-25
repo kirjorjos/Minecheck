@@ -9,13 +9,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import net.minecraft.core.Registry;
+import net.minecraft.core.Holder;
+import net.minecraft.core.HolderGetter;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.levelgen.flat.FlatLayerInfo;
 import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
+import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 /**
@@ -69,23 +73,26 @@ final class FlatWorldSettings {
 
   /** The declared world, laid over the preset this version would build so nothing else shifts. */
   static FlatLevelGeneratorSettings settings(
-      Registry<Biome> biomes, Registry<StructureSet> structureSets) {
+      HolderGetter<Biome> biomes,
+      HolderGetter<StructureSet> structureSets,
+      HolderGetter<PlacedFeature> placedFeatures) {
     Declaration declared = declaration();
     List<FlatLayerInfo> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
-      Block block = Registry.BLOCK.get(new ResourceLocation(layer.block));
+      Block block = BuiltInRegistries.BLOCK.get(new ResourceLocation(layer.block));
       layers.add(new FlatLayerInfo(layer.height, block));
     }
-    FlatLevelGeneratorSettings base = FlatLevelGeneratorSettings.getDefault(biomes, structureSets);
-    // No structure overrides: the declaration describes bare ground, and the suites place the
-    // structures they assert on themselves.
-    FlatLevelGeneratorSettings settings = base.withLayers(layers, Optional.empty());
+    FlatLevelGeneratorSettings base =
+        FlatLevelGeneratorSettings.getDefault(biomes, structureSets, placedFeatures);
     // A registry-backed holder, not Holder.direct: a direct holder is not a registry element, and
     // the game refuses to write a level whose flat settings name one.
-    biomes
-        .getHolder(
-            ResourceKey.create(Registry.BIOME_REGISTRY, new ResourceLocation(declared.biome)))
-        .ifPresent(settings::setBiome);
-    return settings;
+    Holder<Biome> biome =
+        biomes
+            .get(ResourceKey.create(Registries.BIOME, new ResourceLocation(declared.biome)))
+            .<Holder<Biome>>map(holder -> holder)
+            .orElseGet(base::getBiome);
+    // No structure overrides: the declaration describes bare ground, and the suites place the
+    // structures they assert on themselves.
+    return base.withBiomeAndLayers(layers, Optional.empty(), biome);
   }
 }
