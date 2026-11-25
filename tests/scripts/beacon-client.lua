@@ -37,22 +37,10 @@ local py0 = p0.pos.y
 local me = minecheck.getPlayer()
 if me ~= nil then
   minecheck.runCommand("gamemode survival " .. me.name)
-end
-
--- The command goes to the server and the mode change comes back, so the screen the player opens in
--- between lags the command. A client still in creative opens the creative inventory, which exposes
--- no player slots at all: reading it then reports an empty hand, and the emerald `give` that did
--- arrive is never seen. Wait for the mode the client is actually in, not just for the command.
-local mode
-local inSurvival = minecheck.waitFor(function()
-  local p = minecheck.getPlayer()
-  mode = p ~= nil and p.gamemode or nil
-  return mode == "survival"
-end, 30)
-minecheck.log(
-  "beacon handshake: client gamemode " .. tostring(mode) .. " (survival landed: " .. tostring(inSurvival) .. ")"
-)
-
+end -- The command goes to the server and the mode change comes back, and this line has no client-side
+-- mode to wait on (a player's `gamemode` is not in the 1.4.7 API), so the change is re-sent as the
+-- retries go by: a client that opens the screen in creative opens the creative inventory instead of
+-- its own, and the emerald `give` that did arrive is then never in the container that is read.
 local inv = false
 local ready = false
 for attempt = 1, 10 do
@@ -85,6 +73,9 @@ for attempt = 1, 10 do
   end
   -- A screen that opened as the creative inventory stays that way; the retry is only worth making
   -- after the mode change has had a moment to land and rebuild it.
+  if attempt % 3 == 0 and me ~= nil then
+    minecheck.runCommand("gamemode survival " .. me.name)
+  end
   minecheck.sleep(2)
 end
 -- What the client's container actually exposes, logged before the asserts: a failure here is then
