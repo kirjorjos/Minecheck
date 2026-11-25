@@ -1,4 +1,5 @@
 package net.minecheck.platform.yarn;
+import net.minecraft.registry.Registries;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -230,7 +231,7 @@ public final class JeiRecipeViewer implements RecipeViewer {
       if (stack.isEmpty()) {
         continue;
       }
-      Identifier id = Registry.ITEM.getId(stack.getItem());
+      Identifier id = Registries.ITEM.getId(stack.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

@@ -1,4 +1,5 @@
 package net.minecheck.platform.yarn;
+import net.minecraft.registry.Registries;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -152,7 +153,7 @@ public final class ReiRecipeViewer implements RecipeViewer {
       if (!(value instanceof ItemStack item) || item.isEmpty()) {
         continue;
       }
-      Identifier id = Registry.ITEM.getId(item.getItem());
+      Identifier id = Registries.ITEM.getId(item.getItem());
       if (id != null && !ids.contains(id.toString())) {
         ids.add(id.toString());
       }

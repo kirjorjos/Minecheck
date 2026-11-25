@@ -1,4 +1,6 @@
 package net.minecheck.platform.yarn;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryKeys;
 
 import java.lang.reflect.Method;
 import java.util.Locale;
@@ -771,16 +773,16 @@ public class YarnClientPlatform implements ClientPlatform {
           // overworld generator is replaced with one built from the shared declaration in
           // tests/flat-world.json, which the harness also gives the dedicated server as
           // `generator-settings`, so both sides build the same surface.
-          Registry<Biome> biomes = registryManager.get(Registry.BIOME_KEY);
-          Registry<StructureSet> structureSets = registryManager.get(Registry.STRUCTURE_SET_KEY);
+          Registry<Biome> biomes = registryManager.get(RegistryKeys.BIOME);
+          Registry<StructureSet> structureSets = registryManager.get(RegistryKeys.STRUCTURE_SET);
           FlatChunkGenerator flat =
               new FlatChunkGenerator(
                   structureSets, FlatWorldSettings.config(biomes, structureSets));
           WorldPreset preset =
-              registryManager.get(Registry.WORLD_PRESET_KEY).getOrThrow(WorldPresets.FLAT);
+              registryManager.get(RegistryKeys.WORLD_PRESET).getOrThrow(WorldPresets.FLAT);
           Registry<DimensionOptions> dimensions =
               GeneratorOptions.getRegistryWithReplacedOverworldGenerator(
-                  registryManager.get(Registry.DIMENSION_TYPE_KEY),
+                  registryManager.get(RegistryKeys.DIMENSION_TYPE),
                   preset
                       .createGeneratorOptions(options.seed(), options.structures(), false)
                       .getDimensions(),
@@ -1098,7 +1100,7 @@ public class YarnClientPlatform implements ClientPlatform {
         type == null ? null : net.minecraft.util.Identifier.tryParse(type);
     java.util.List<net.minecheck.platform.api.EntityInfo> out = new java.util.ArrayList<>();
     for (net.minecraft.entity.Entity entity : world.getEntities()) {
-      net.minecraft.util.Identifier actual = Registry.ENTITY_TYPE.getId(entity.getType());
+      net.minecraft.util.Identifier actual = Registries.ENTITY_TYPE.getId(entity.getType());
       if (typeId != null && !actual.equals(typeId)) {
         continue;
       }
@@ -1133,7 +1135,7 @@ public class YarnClientPlatform implements ClientPlatform {
     java.util.Map<String, Object> nbt =
         blockEntity == null ? null : nbtToMap(blockEntity.createNbt());
     return new net.minecheck.platform.api.BlockInfo(
-        net.minecraft.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
+        net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
 
   @Override
@@ -1389,7 +1391,7 @@ public class YarnClientPlatform implements ClientPlatform {
     net.minecraft.nbt.NbtCompound nbt = stack.getNbt();
     return new net.minecheck.platform.api.SlotInfo(
         false,
-        net.minecraft.registry.Registry.ITEM.getId(stack.getItem()).toString(),
+        net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString(),
         stack.getCount(),
         nbt == null ? null : nbtToMap(nbt));
   }

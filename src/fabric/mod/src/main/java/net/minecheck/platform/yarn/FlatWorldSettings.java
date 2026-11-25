@@ -10,13 +10,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import net.minecraft.block.Block;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryEntryLookup;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.structure.StructureSet;
 import net.minecraft.util.Identifier;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
 import net.minecraft.world.biome.Biome;
 import net.minecraft.world.gen.chunk.FlatChunkGeneratorConfig;
 import net.minecraft.world.gen.chunk.FlatChunkGeneratorLayer;
+import net.minecraft.world.gen.feature.PlacedFeature;
 
 /**
  * The flat world every Minecheck suite runs in, built from the declaration the harness also hands
@@ -69,23 +73,25 @@ final class FlatWorldSettings {
 
   /** The declared world, laid over the preset this version would build so nothing else shifts. */
   static FlatChunkGeneratorConfig config(
-      Registry<Biome> biomes, Registry<StructureSet> structureSets) {
+      RegistryEntryLookup<Biome> biomes,
+      RegistryEntryLookup<StructureSet> structureSets,
+      RegistryEntryLookup<PlacedFeature> placedFeatures) {
     Declaration declared = declaration();
     List<FlatChunkGeneratorLayer> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
-      Block block = Registry.BLOCK.get(new Identifier(layer.block));
+      Block block = Registries.BLOCK.get(new Identifier(layer.block));
       layers.add(new FlatChunkGeneratorLayer(layer.height, block));
     }
     FlatChunkGeneratorConfig base =
-        FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets);
-    // No structure overrides: the declaration describes bare ground, and the suites place the
-    // structures they assert on themselves.
-    FlatChunkGeneratorConfig config = base.withLayers(layers, Optional.empty());
+        FlatChunkGeneratorConfig.getDefaultConfig(biomes, structureSets, placedFeatures);
     // A registry-backed entry, not RegistryEntry.of: a direct holder is not a registry element,
     // and the game refuses to write a level whose flat settings name one.
-    biomes
-        .getEntry(RegistryKey.of(Registry.BIOME_KEY, new Identifier(declared.biome)))
-        .ifPresent(config::setBiome);
-    return config;
+    RegistryEntry<Biome> biome =
+        biomes
+            .getOptional(RegistryKey.of(RegistryKeys.BIOME, new Identifier(declared.biome)))
+            .orElseGet(base::getBiome);
+    // No structure overrides: the declaration describes bare ground, and the suites place the
+    // structures they assert on themselves.
+    return base.with(layers, Optional.empty(), biome);
   }
 }
