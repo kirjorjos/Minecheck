@@ -1821,11 +1821,6 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
               continue;
             }
             field.setAccessible(true);
-            LOG.info(
-                "Minecheck: achievement card found on "
-                    + type.getSimpleName()
-                    + "."
-                    + field.getName());
             clearAchievementState(field.get(holder));
           }
         }
@@ -1851,6 +1846,10 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
           ((java.util.Collection<?>) value).clear();
         } else if (field.getType().getSimpleName().equals("Achievement")) {
           field.set(card, null);
+        } else if (field.getType() == boolean.class) {
+          // The window draws only while this flag is set: an emptied achievement and a zeroed
+          // timer still leave the card on screen, which is the frame this is here to catch.
+          field.setBoolean(card, false);
         } else if (field.getType() == int.class) {
           field.setInt(card, 0);
         }
