@@ -30,31 +30,49 @@ local p0 = minecheck.getPlayer()
 check(p0 ~= nil, "player exists after join")
 local py0 = p0.pos.y
 
--- A creative client opens the creative inventory instead of its own: no player slots, so the
--- handshake below would read nothing and report an empty hand. The client is op by now (the server
--- ops before it cues this phase), so it puts itself in survival and waits for that to land — a
--- session must not depend on the mode the world it plays in was left in.
+-- The hand is read through a chest, not the inventory screen. A chest's menu is the same 27 chest
+-- slots + 27 main + 9 hotbar in every gamemode, while the inventory screen is not: a client left in
+-- creative opens the creative inventory, which holds no player slots at all, so the emerald the
+-- `give` did deliver is never in the container that gets read. That read is what used to make this
+-- handshake the flakiest thing in the suite — the server logged the give and the client saw nothing.
+--
+-- The client is op by now (the server ops before it cues this phase), so it still asks for survival
+-- as well: later phases act on it (the tap phase needs a survival player). This line has no
+-- client-side `gamemode` to wait on — a player's mode is not in the 1.4.7 API — so whether or not
+-- that has landed yet no longer matters to the handshake below.
 local me = minecheck.getPlayer()
 if me ~= nil then
   minecheck.runCommand("gamemode survival " .. me.name)
-end -- The command goes to the server and the mode change comes back, and this line has no client-side
--- mode to wait on (a player's `gamemode` is not in the 1.4.7 API), so the change is re-sent as the
--- retries go by: a client that opens the screen in creative opens the creative inventory instead of
--- its own, and the emerald `give` that did arrive is then never in the container that is read.
+end
+
+-- Beside the player's column and below the pyramid lines built later, so it is in reach without
+-- moving and clear of everything the rest of this script places.
+local handChest = { x = math.floor(p0.pos.x) + 2, y = math.floor(p0.pos.y), z = math.floor(p0.pos.z) }
+minecheck.runCommand("setblock " .. handChest.x .. " " .. handChest.y .. " " .. handChest.z .. " minecraft:chest")
+check(
+  minecheck.waitFor(function()
+    local b = minecheck.getBlock(handChest)
+    return b ~= nil and b.id == "minecraft:chest"
+  end, 10),
+  "client sees the handshake chest"
+)
+
+local handAim = { x = handChest.x + 0.5, y = handChest.y + 0.5, z = handChest.z + 0.5 }
+local HAND_FIRST = 27
+
 local inv = false
 local ready = false
 for attempt = 1, 10 do
-  inv = minecheck.openScreen("inventory", nil, 20)
-  local slots = minecheck.slotCount("inventory")
+  inv = minecheck.openScreen("chest", handAim, 20)
+  local slots = minecheck.slotCount("chest")
   minecheck.log("beacon handshake: attempt " .. attempt .. " exposes " .. slots .. " slots")
-  if inv and slots > 0 then
-    -- Any slot of the open inventory, not a fixed hotbar index: where a `give` lands depends on
-    -- what the player already carries and on the screen (a creative client's hotbar sits at a
-    -- different offset than a survival one). The claim under test is the op + give round trip, and
-    -- it is proven by the emerald showing up in the client's inventory container at all.
+  if inv and slots > HAND_FIRST then
+    -- Any slot of the player's share of the menu, not a fixed hotbar index: where a `give` lands
+    -- depends on what the player already carries. The claim under test is the op + give round trip,
+    -- and it is proven by the emerald showing up in the client's own inventory at all.
     ready = minecheck.waitFor(function()
-      for i = 0, minecheck.slotCount("inventory") - 1 do
-        local s = minecheck.getSlot(i, "inventory")
+      for i = HAND_FIRST, minecheck.slotCount("chest") - 1 do
+        local s = minecheck.getSlot(i, "chest")
         if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
           return true
         end
@@ -71,34 +89,27 @@ for attempt = 1, 10 do
       return not minecheck.isScreenOpen()
     end, 5)
   end
-  -- A screen that opened as the creative inventory stays that way; the retry is only worth making
-  -- after the mode change has had a moment to land and rebuild it.
-  if attempt % 3 == 0 and me ~= nil then
-    minecheck.runCommand("gamemode survival " .. me.name)
-  end
   minecheck.sleep(2)
 end
--- What the client's container actually exposes, logged before the asserts: a failure here is then
--- diagnosable from the run log (which slots the screen has, and what is in them) instead of only
--- naming the expectation.
+-- What the menu actually exposes, logged before the asserts: a failure here is then diagnosable from
+-- the run log (which slots the screen has, and what is in them) instead of only naming the
+-- expectation.
 local dump = {}
-local totalSlots = minecheck.slotCount("inventory")
+local totalSlots = minecheck.slotCount("chest")
 for i = 0, totalSlots - 1 do
-  local s = minecheck.getSlot(i, "inventory")
+  local s = minecheck.getSlot(i, "chest")
   if s ~= nil and not s.empty then
     dump[#dump + 1] = i .. ":" .. s.count .. "x " .. s.id
   end
 end
-minecheck.log(
-  "beacon handshake: inventory screen exposes " .. totalSlots .. " slots [" .. table.concat(dump, ", ") .. "]"
-)
-check(inv, "inventory opened for handshake")
-check(ready, "server op + give handshake complete (emerald in hotbar)")
+minecheck.log("beacon handshake: chest menu exposes " .. totalSlots .. " slots [" .. table.concat(dump, ", ") .. "]")
+check(inv, "handshake chest opened")
+check(ready, "server op + give handshake complete (emerald in the player's inventory)")
 minecheck.press("Escape")
 local closed = minecheck.waitFor(function()
   return not minecheck.isScreenOpen()
 end, 5)
-check(closed, "inventory closed after handshake")
+check(closed, "handshake chest closed")
 
 minecheck.runCommand("fill ~-4 ~2 ~-4 ~4 ~2 ~4 minecraft:iron_block")
 minecheck.runCommand("fill ~-3 ~3 ~-3 ~3 ~3 ~3 minecraft:iron_block")
