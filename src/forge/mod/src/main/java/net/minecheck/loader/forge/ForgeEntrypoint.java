@@ -50,9 +50,6 @@ public class ForgeEntrypoint {
     network = new ForgeNetworkPlatform(dedicated);
 
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("emi")) {
-      viewers.add(new ForgeEmiRecipeViewer());
-    }
     if (!dedicated && ModList.get().isLoaded("jei")) {
       viewers.add(new ForgeJeiRecipeViewer());
     }

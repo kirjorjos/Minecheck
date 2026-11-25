@@ -1,9 +1,7 @@
 package net.minecheck.loader.forge;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 import java.util.logging.Logger;
 import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
@@ -13,29 +11,28 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.network.ChannelBuilder;
 import net.minecraftforge.network.NetworkDirection;
-import net.minecraftforge.network.NetworkEvent;
-import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
-import net.minecraftforge.network.simple.SimpleChannel;
+import net.minecraftforge.network.SimpleChannel;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
 /**
  * Forge transport over an FML {@code SimpleChannel}.
  *
- * <p>One channel carries both directions, with one message index per direction. Unlike Fabric's
- * play-channel receivers, Forge's {@code SimpleChannel} has a single receiver per channel per
- * direction, which is why {@link #observeChannel} cannot piggyback on it: watching another mod's
- * channel needs a lower-level tap (roadmap 4b) — {@link ForgeClientChannelTap} on a client, {@link
- * ForgeServerChannelTap} on a dedicated server.
+ * <p>One channel carries both directions, with one message registration per direction. Unlike
+ * Fabric's play-channel receivers, Forge's {@code SimpleChannel} has a single receiver per channel
+ * per direction, which is why {@link #observeChannel} cannot piggyback on it: watching another
+ * mod's channel needs a lower-level tap (roadmap 4b) — {@link ForgeClientChannelTap} on a client,
+ * {@link ForgeServerChannelTap} on a dedicated server.
  *
- * <p>Script packets arrive on the network thread and are re-dispatched with {@code enqueueWork} to
- * the game thread, where the script engine ticks.
+ * <p>Script packets arrive on the network thread; {@code consumerMainThread} hands them to the game
+ * thread before the receiver runs, which is where the script engine ticks.
  */
 public class ForgeNetworkPlatform implements NetworkPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
-  private static final String VERSION = "1";
+  private static final int VERSION = 1;
   private static final ResourceLocation CHANNEL_ID = new ResourceLocation("minecheck", "main");
 
   private final boolean dedicated;
@@ -47,27 +44,33 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     boolean ok;
     try {
       SimpleChannel channel =
-          NetworkRegistry.newSimpleChannel(
-              CHANNEL_ID,
-              () -> VERSION,
+          ChannelBuilder.named(CHANNEL_ID)
+              .networkProtocolVersion(VERSION)
               // Tolerate a peer without Minecheck: the channel is for testing, it must not make a
               // vanilla client unable to join this server.
-              NetworkRegistry.acceptMissingOr(VERSION),
-              NetworkRegistry.acceptMissingOr(VERSION));
-      channel.registerMessage(
-          0,
-          MinecheckC2SMessage.class,
-          MinecheckC2SMessage::encode,
-          MinecheckC2SMessage::decode,
-          this::onC2S,
-          Optional.of(NetworkDirection.PLAY_TO_SERVER));
-      channel.registerMessage(
-          1,
-          MinecheckS2CMessage.class,
-          MinecheckS2CMessage::encode,
-          MinecheckS2CMessage::decode,
-          this::onS2C,
-          Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+              .clientAcceptedVersions((status, version) -> true)
+              .serverAcceptedVersions((status, version) -> true)
+              .simpleChannel();
+      channel
+          .messageBuilder(MinecheckC2SMessage.class, NetworkDirection.PLAY_TO_SERVER)
+          .encoder(MinecheckC2SMessage::encode)
+          .decoder(MinecheckC2SMessage::decode)
+          .consumerMainThread(
+              (message, context) -> {
+                context.setPacketHandled(true);
+                deliver(message.payload());
+              })
+          .add();
+      channel
+          .messageBuilder(MinecheckS2CMessage.class, NetworkDirection.PLAY_TO_CLIENT)
+          .encoder(MinecheckS2CMessage::encode)
+          .decoder(MinecheckS2CMessage::decode)
+          .consumerMainThread(
+              (message, context) -> {
+                context.setPacketHandled(true);
+                deliver(message.payload());
+              })
+          .add();
       this.channel = channel;
       ok = true;
     } catch (RuntimeException e) {
@@ -99,9 +102,9 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
         if (server == null || server.getPlayerList().getPlayerCount() == 0) {
           return false;
         }
-        channel.send(PacketDistributor.ALL.noArg(), new MinecheckS2CMessage(payload));
+        channel.send(new MinecheckS2CMessage(payload), PacketDistributor.ALL.noArg());
       } else {
-        channel.sendToServer(new MinecheckC2SMessage(payload));
+        channel.send(new MinecheckC2SMessage(payload), PacketDistributor.SERVER.noArg());
       }
       return true;
     } catch (RuntimeException e) {
@@ -126,7 +129,7 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
     }
     byte[] payload = new MinecheckPacket(name, args).encode();
     try {
-      channel.send(PacketDistributor.PLAYER.with(() -> player), new MinecheckS2CMessage(payload));
+      channel.send(new MinecheckS2CMessage(payload), PacketDistributor.PLAYER.with(player));
       return true;
     } catch (RuntimeException e) {
       LOG.warning(
@@ -162,18 +165,6 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
           String.format("Minecheck: failed to observe channel %s: %s", channel, String.valueOf(e)));
       return false;
     }
-  }
-
-  private void onC2S(MinecheckC2SMessage message, Supplier<NetworkEvent.Context> context) {
-    NetworkEvent.Context ctx = context.get();
-    ctx.enqueueWork(() -> deliver(message.payload()));
-    ctx.setPacketHandled(true);
-  }
-
-  private void onS2C(MinecheckS2CMessage message, Supplier<NetworkEvent.Context> context) {
-    NetworkEvent.Context ctx = context.get();
-    ctx.enqueueWork(() -> deliver(message.payload()));
-    ctx.setPacketHandled(true);
   }
 
   private void deliver(byte[] payload) {

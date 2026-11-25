@@ -11,7 +11,7 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.game.ServerboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -82,7 +82,7 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (player == null) {
       return false;
     }
-    Connection connection = player.connection == null ? null : player.connection.connection;
+    Connection connection = player.connection == null ? null : player.connection.getConnection();
     return ForgeChannelTaps.install(connection, INSTANCE, "server");
   }
 
@@ -101,8 +101,8 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ServerboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getIdentifier();
-    FriendlyByteBuf data = packet.getData();
+    ResourceLocation id = packet.getName();
+    FriendlyByteBuf data = packet.getInternalData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

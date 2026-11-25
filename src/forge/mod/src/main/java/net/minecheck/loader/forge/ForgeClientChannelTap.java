@@ -13,7 +13,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
 import net.minecraft.resources.ResourceLocation;
 
 /**
@@ -83,8 +83,8 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ClientboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getIdentifier();
-    FriendlyByteBuf data = packet.getData();
+    ResourceLocation id = packet.getName();
+    FriendlyByteBuf data = packet.getInternalData();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

@@ -244,7 +244,7 @@ public final class YarnCameraPlatform implements CameraPlatform {
     // this the first rendered frame would interpolate the camera in from 0,0,0.
     entity.setPos(start.x(), start.y(), start.z());
     place(entity, start);
-    world.addEntity(CAMERA_ENTITY_ID, entity);
+    world.addEntity(entity);
     mc.cameraEntity = entity;
     camera = entity;
     LOG.info(

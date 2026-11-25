@@ -20,18 +20,17 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val emiVersion = "1.1.24+1.20.1+forge"
-val jeiVersion = "15.20.0.106"
-val reiVersion = "12.1.785+forge"
+val jeiVersion = "17.3.1.5"
+val reiVersion = "14.1.786+forge"
 
 // REI's mods.toml makes both mandatory.
-val clothConfigVersion = "11.1.136+forge"
-val architecturyVersion = "9.2.14+forge"
+val clothConfigVersion = "13.0.138+forge"
+val architecturyVersion = "11.1.17+minecraftforge"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("47.4.28") }
+  minecraftForge { loader("49.2.13") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -57,8 +56,10 @@ val platformApiOutput =
     .output
 
 dependencies {
-  implementation(project(":common"))
-  implementation(project(":platform-api"))
+  // Only the class directories, never the sibling projects' jars: unimined hands the dev run all
+  // three outputs under one mod id (MOD_CLASSES), so Forge 1.20.2+ builds a single JPMS module from
+  // them. Adding the jars too puts the same packages in a second module (`common`, `platform.api`)
+  // and ModLauncher dies resolving the layer with a split-package error.
   // Direct, so it is definitely on this module's runtime classpath for the game-layer patch below:
   // unimined's Forge dev launch gives Forge's module classloader this module's classes and not the
   // libraries they link against, so a library needed during mod construction has to be put on the
@@ -67,8 +68,7 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
-  add("modImplementation", "mezz.jei:jei-1.20.1-forge:$jeiVersion") { isTransitive = false }
+  add("modImplementation", "mezz.jei:jei-1.20.4-forge:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
     isTransitive = false
@@ -90,10 +90,6 @@ tasks.shadowJar {
   exclude("com/google/gson/**")
   exclude("com/google/errorprone/**")
   exclude("net/minecraftforge/**")
-  exclude("dev/emi/**")
-  exclude("assets/emi/**")
-  exclude("emi.mixins.json")
-  exclude("emi-forge.mixins.json")
   exclude("mezz/jei/**")
   exclude("assets/jei/**")
   exclude("jei.mixins.json")
@@ -147,6 +143,14 @@ val productionJar =
 tasks.named("assemble") { dependsOn(productionJar) }
 
 sourceSets.main.get().resources.srcDir(project.file("resources"))
+
+// Forge 1.20.2+ discovers a development mod by scanning one classpath entry for both its
+// `mods.toml` and the `@Mod` class that file declares. Gradle's default split (classes under
+// `build/classes`, resources under `build/resources`) hands FML a resource-only folder, which it
+// rejects with "constructed 0 mods" and "has mods that were not found". Writing the resources
+// beside the classes puts them back into the one entry FML scans; the shipped jar is unaffected.
+sourceSets.main.get().output.resourcesDir =
+  layout.buildDirectory.dir("classes/java/main").get().asFile
 
 // A Forge dev client loads this module as a directory on the classpath, and FML decides whether to
 // apply minecheck.mixins.json from the mod's *filesystem* manifest — a classes directory carries
