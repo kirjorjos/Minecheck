@@ -1,13 +1,6 @@
 {
   "entries": [],
-  "holder": {
-    "granted_at": "2026-11-25T20:15:40Z",
-    "id": "e-6",
-    "kind": "chore",
-    "lease_until": "2026-11-25T21:45:40Z",
-    "pr": "",
-    "sha": "ad5afb335da9e1a21122d278830a8dcc521654ac"
-  },
+  "holder": null,
   "last_runs": {
     "268": {
       "at": "2026-11-25T19:45:31Z",
