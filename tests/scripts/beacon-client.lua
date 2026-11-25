@@ -39,11 +39,27 @@ if me ~= nil then
   minecheck.runCommand("gamemode survival " .. me.name)
 end
 
+-- The command goes to the server and the mode change comes back, so the screen the player opens in
+-- between lags the command. A client still in creative opens the creative inventory, which exposes
+-- no player slots at all: reading it then reports an empty hand, and the emerald `give` that did
+-- arrive is never seen. Wait for the mode the client is actually in, not just for the command.
+local mode
+local inSurvival = minecheck.waitFor(function()
+  local p = minecheck.getPlayer()
+  mode = p ~= nil and p.gamemode or nil
+  return mode == "survival"
+end, 30)
+minecheck.log(
+  "beacon handshake: client gamemode " .. tostring(mode) .. " (survival landed: " .. tostring(inSurvival) .. ")"
+)
+
 local inv = false
 local ready = false
-for _ = 1, 6 do
+for attempt = 1, 10 do
   inv = minecheck.openScreen("inventory", nil, 20)
-  if inv and minecheck.slotCount("inventory") > 0 then
+  local slots = minecheck.slotCount("inventory")
+  minecheck.log("beacon handshake: attempt " .. attempt .. " exposes " .. slots .. " slots")
+  if inv and slots > 0 then
     -- Any slot of the open inventory, not a fixed hotbar index: where a `give` lands depends on
     -- what the player already carries and on the screen (a creative client's hotbar sits at a
     -- different offset than a survival one). The claim under test is the op + give round trip, and
@@ -67,6 +83,9 @@ for _ = 1, 6 do
       return not minecheck.isScreenOpen()
     end, 5)
   end
+  -- A screen that opened as the creative inventory stays that way; the retry is only worth making
+  -- after the mode change has had a moment to land and rebuild it.
+  minecheck.sleep(2)
 end
 -- What the client's container actually exposes, logged before the asserts: a failure here is then
 -- diagnosable from the run log (which slots the screen has, and what is in them) instead of only
