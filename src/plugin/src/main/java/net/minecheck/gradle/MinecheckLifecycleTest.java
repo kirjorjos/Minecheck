@@ -819,6 +819,12 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Files.createDirectories(runDir);
     StringBuilder options = new StringBuilder();
     options.append("renderDistance:10\n").append("simulationDistance:10\n");
+    // CI boots the client under Xvfb, which never gives the window focus. Vanilla then opens its
+    // pause screen while pause-on-lost-focus is on — 1.20.1 Forge opens it as soon as the level
+    // finishes loading — and every injected key goes to that screen instead of the game, so a
+    // client-only suite sees a player that never moves. An unattended client must never pause, so
+    // this is pinned for every profile, not just the capture one below.
+    options.append("pauseOnLostFocus:false\n");
     if (screenshotProfile()) {
       // The deterministic capture profile. Everything here either changes what is drawn (graphics,
       // FOV, particles, clouds, GUI scale, window size) or when it is drawn (VSync, FPS cap), and
@@ -845,7 +851,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       options.append("fullscreen:false\n");
       options.append("showSubtitles:false\n");
       options.append("reducedDebugInfo:false\n");
-      options.append("pauseOnLostFocus:false\n");
       // Chat stays *enabled* here even when captures must not contain it: the server refuses every
       // command from a client whose chat visibility is hidden ("chat.disabled.options"), and a run
       // that cannot run commands cannot set up a scene. The capture empties the chat lines itself

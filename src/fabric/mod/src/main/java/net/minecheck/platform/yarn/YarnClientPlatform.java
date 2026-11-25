@@ -802,7 +802,7 @@ public class YarnClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           try {
-            ConnectScreen.connect(mc().currentScreen, mc(), serverAddress, info);
+            ConnectScreen.connect(mc().currentScreen, mc(), serverAddress, info, false);
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.connect(%s:%s)",
@@ -1324,7 +1324,7 @@ public class YarnClientPlatform implements ClientPlatform {
     if (!(be instanceof net.minecraft.block.entity.SignBlockEntity sign)) {
       return false;
     }
-    onClientThread(() -> mc.player.openEditSignScreen(sign));
+    onClientThread(() -> mc.player.openEditSignScreen(sign, true));
     return true;
   }
 
