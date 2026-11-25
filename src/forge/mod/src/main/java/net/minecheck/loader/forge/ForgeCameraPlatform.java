@@ -188,7 +188,7 @@ public final class ForgeCameraPlatform implements CameraPlatform {
       return;
     }
     Minecraft mc = mc();
-    if (mc.player == null || mc.level == null || camera.level != mc.level) {
+    if (mc.player == null || mc.level == null || camera.level() != mc.level) {
       detach();
       return;
     }

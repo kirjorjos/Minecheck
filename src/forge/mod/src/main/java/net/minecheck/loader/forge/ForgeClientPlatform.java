@@ -819,7 +819,7 @@ public class ForgeClientPlatform implements ClientPlatform {
         () -> {
           try {
             Minecraft mc = mc();
-            ConnectScreen.startConnecting(mc.screen, mc, serverAddress, info);
+            ConnectScreen.startConnecting(mc.screen, mc, serverAddress, info, false);
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.startConnecting(%s:%s)",
@@ -1042,7 +1042,7 @@ public class ForgeClientPlatform implements ClientPlatform {
         p.getX(),
         p.getY(),
         p.getZ(),
-        p.getLevel().dimension().location().toString());
+        p.level().dimension().location().toString());
   }
 
   @Override
@@ -1342,7 +1342,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     if (!(be instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign)) {
       return false;
     }
-    onClientThread(() -> mc.player.openTextEdit(sign));
+    onClientThread(() -> mc.player.openTextEdit(sign, true));
     return true;
   }
 
