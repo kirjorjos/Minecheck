@@ -137,12 +137,26 @@ check(closed, "sign editor closed after Done")
 
 -- The text proves the round trip reached the block, not just the field: the editor saves through the
 -- server, which writes the line into the block entity the client reads back.
+-- 1.20 gave signs a front and a back and moved the lines from the flat `Text1` keys to a message list
+-- per side, so the line is read from whichever shape the version writes.
+local function signLine(nbt)
+  if type(nbt.Text1) == "string" then
+    return nbt.Text1
+  end
+  local front = nbt.front_text
+  if type(front) == "table" and type(front.messages) == "table" then
+    return front.messages[1]
+  end
+  return nil
+end
+
 local wroteText = minecheck.waitFor(function()
   local s = minecheck.getBlock({ x = bx, y = sy, z = bz })
-  return s ~= nil
-    and s.nbt ~= nil
-    and type(s.nbt.Text1) == "string"
-    and string.find(s.nbt.Text1, "minecheck", 1, true) ~= nil
+  if s == nil or s.nbt == nil then
+    return false
+  end
+  local line = signLine(s.nbt)
+  return line ~= nil and string.find(line, "minecheck", 1, true) ~= nil
 end, 10)
 check(wroteText, "the sign saved the typed text")
 
