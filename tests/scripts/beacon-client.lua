@@ -359,11 +359,13 @@ local chest = minecheck.openScreen("chest", chestAim, 10)
 check(chest, "chest opened")
 check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest slots plus the player's 36")
 
--- Found by content, like the redstone below: a merged session reaches this phase with the hotbar
--- the session set up for it, so a give lands wherever the first free slot happens to be.
+-- Found by content over the player's whole share of the menu (main inventory at 27..53, hotbar at
+-- 54..62), not a fixed index: a merged session reaches this phase with a hotbar the session set up
+-- for it, so a give lands wherever the first free slot happens to be — and once the hotbar is full
+-- that is a main-inventory slot, which a hotbar-only scan read as a missing item.
 local sword = nil
 local swordReady = minecheck.waitFor(function()
-  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+  for i = CHEST_SLOTS, HOTBAR_FIRST + 8 do
     local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:iron_sword" and s.nbt ~= nil then
       sword = s
@@ -375,11 +377,12 @@ end, 10)
 check(swordReady, "named sword in the hotbar")
 check(sword ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
--- Found by content, not by index: a merged session reaches this phase with the hotbar the session
--- set up for it, so the gives land wherever the first free slot happens to be.
+-- Found by content, not by index, over the player's whole share of the menu: a merged session
+-- reaches this phase with the hotbar the session set up for it, so the gives land wherever the first
+-- free slot happens to be.
 local redstoneSlot = nil
-local redstoneReady = minecheck.waitFor(function()
-  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+local function findRedstone()
+  for i = CHEST_SLOTS, HOTBAR_FIRST + 8 do
     local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8 then
       redstoneSlot = i
@@ -387,11 +390,26 @@ local redstoneReady = minecheck.waitFor(function()
     end
   end
   return false
-  -- 90 s, not 30: the give is one server tick's work, but the chest's container sync and this
-  -- client's own phase can both trail a loaded runner by a long way, and a give window that is
-  -- merely tight reads as a missing item and fails the run.
-end, 90)
-check(redstoneReady, "server gave the 8-redstone stack (in the hotbar)")
+end
+-- 60 s, not 30: the give is one server tick's work, but the chest's container sync and this client's
+-- own phase can both trail a loaded runner by a long way, and a give window that is merely tight
+-- reads as a missing item and fails the run.
+local redstoneReady = minecheck.waitFor(findRedstone, 60)
+if not redstoneReady and me ~= nil then
+  -- And when it never arrives at all, the same join-time drop the emerald handshake re-asks for: the
+  -- give reached the server, the client never saw it. Nothing redstone is left in the player's
+  -- inventory at this point (the scan above found no 8-stack), so re-asking from the client makes
+  -- the stack exactly the 8 the check reads. The command needs no container open, so the chest is
+  -- closed for it and reopened after.
+  minecheck.press("Escape")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+  minecheck.runCommand("give " .. me.name .. " minecraft:redstone 8")
+  check(minecheck.openScreen("chest", chestAim, 10), "chest reopened after the redstone re-give")
+  redstoneReady = minecheck.waitFor(findRedstone, 45)
+end
+check(redstoneReady, "server gave the 8-redstone stack (in the player's inventory)")
 local partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
 if not partial then
   -- A click the server cannot match to its own container is dropped without a resync, so every
