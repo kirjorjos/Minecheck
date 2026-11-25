@@ -1945,22 +1945,29 @@ public final class ForgeClientPlatform extends ClientPlatformBase {
    * None of these classes or fields got MCP names on this line, so they are found structurally: the
    * popup under {@code GuiIngame}, then its single achievement, the queue behind it and its timer.
    */
-  private static void clearAchievementCard(Object gui) {
-    if (gui == null) {
-      return;
-    }
-    try {
-      for (Class<?> type = gui.getClass(); type != null; type = type.getSuperclass()) {
-        for (java.lang.reflect.Field field : type.getDeclaredFields()) {
-          if (!field.getType().getSimpleName().equals("GuiAchievement")) {
-            continue;
-          }
-          field.setAccessible(true);
-          clearAchievementState(field.get(gui));
-        }
+  private static void clearAchievementCard(Object... holders) {
+    for (Object holder : holders) {
+      if (holder == null) {
+        continue;
       }
-    } catch (ReflectiveOperationException | RuntimeException ignored) {
-      // Nothing to clear on a version that has no such card.
+      try {
+        for (Class<?> type = holder.getClass(); type != null; type = type.getSuperclass()) {
+          for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+            if (!field.getType().getSimpleName().equals("GuiAchievement")) {
+              continue;
+            }
+            field.setAccessible(true);
+            LOG.info(
+                "Minecheck: achievement card found on "
+                    + type.getSimpleName()
+                    + "."
+                    + field.getName());
+            clearAchievementState(field.get(holder));
+          }
+        }
+      } catch (ReflectiveOperationException | RuntimeException ignored) {
+        // Nothing to clear on a version that has no such card.
+      }
     }
   }
 
@@ -1994,7 +2001,7 @@ public final class ForgeClientPlatform extends ClientPlatformBase {
     if (clearChat && !request.prepared()) {
       // 1.4.7's clear method never got an MCP name; this is GuiNewChat#clearChatMessages.
       client.ingameGUI.getChatGUI().func_73761_a();
-      clearAchievementCard(client.ingameGUI);
+      clearAchievementCard(client, client.ingameGUI);
       chatClearedAtFrame = DRAWN_FRAMES.get();
       request.markPrepared();
       request.retry("clearing chat before the capture");
