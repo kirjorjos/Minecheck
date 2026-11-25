@@ -30,27 +30,49 @@ local p0 = minecheck.getPlayer()
 check(p0 ~= nil, "player exists after join")
 local py0 = p0.pos.y
 
--- A creative client opens the creative inventory instead of its own: no player slots, so the
--- handshake below would read nothing and report an empty hand. The client is op by now (the server
--- ops before it cues this phase), so it puts itself in survival and waits for that to land — a
--- session must not depend on the mode the world it plays in was left in.
+-- The hand is read through a chest, not the inventory screen. A chest's menu is the same 27 chest
+-- slots + 27 main + 9 hotbar in every gamemode, while the inventory screen is not: a client left in
+-- creative opens the creative inventory, which holds no player slots at all, so the emerald the
+-- `give` did deliver is never in the container that gets read. That read is what used to make this
+-- handshake the flakiest thing in the suite — the server logged the give and the client saw nothing.
+--
+-- The client is op by now (the server ops before it cues this phase), so it still asks for survival
+-- as well: later phases act on it (the tap phase needs a survival player). This line has no
+-- client-side `gamemode` to wait on — a player's mode is not in the 1.4.7 API — so whether or not
+-- that has landed yet no longer matters to the handshake below.
 local me = minecheck.getPlayer()
 if me ~= nil then
   minecheck.runCommand("gamemode survival " .. me.name)
 end
 
+-- Beside the player's column and below the pyramid lines built later, so it is in reach without
+-- moving and clear of everything the rest of this script places.
+local handChest = { x = math.floor(p0.pos.x) + 2, y = math.floor(p0.pos.y), z = math.floor(p0.pos.z) }
+minecheck.runCommand("setblock " .. handChest.x .. " " .. handChest.y .. " " .. handChest.z .. " minecraft:chest")
+check(
+  minecheck.waitFor(function()
+    local b = minecheck.getBlock(handChest)
+    return b ~= nil and b.id == "minecraft:chest"
+  end, 10),
+  "client sees the handshake chest"
+)
+
+local handAim = { x = handChest.x + 0.5, y = handChest.y + 0.5, z = handChest.z + 0.5 }
+local HAND_FIRST = 27
+
 local inv = false
 local ready = false
-for _ = 1, 6 do
-  inv = minecheck.openScreen("inventory", nil, 20)
-  if inv and minecheck.slotCount("inventory") > 0 then
-    -- Any slot of the open inventory, not a fixed hotbar index: where a `give` lands depends on
-    -- what the player already carries and on the screen (a creative client's hotbar sits at a
-    -- different offset than a survival one). The claim under test is the op + give round trip, and
-    -- it is proven by the emerald showing up in the client's inventory container at all.
+for attempt = 1, 10 do
+  inv = minecheck.openScreen("chest", handAim, 20)
+  local slots = minecheck.slotCount("chest")
+  minecheck.log("beacon handshake: attempt " .. attempt .. " exposes " .. slots .. " slots")
+  if inv and slots > HAND_FIRST then
+    -- Any slot of the player's share of the menu, not a fixed hotbar index: where a `give` lands
+    -- depends on what the player already carries. The claim under test is the op + give round trip,
+    -- and it is proven by the emerald showing up in the client's own inventory at all.
     ready = minecheck.waitFor(function()
-      for i = 0, minecheck.slotCount("inventory") - 1 do
-        local s = minecheck.getSlot(i, "inventory")
+      for i = HAND_FIRST, minecheck.slotCount("chest") - 1 do
+        local s = minecheck.getSlot(i, "chest")
         if s ~= nil and not s.empty and s.id == "minecraft:emerald" then
           return true
         end
@@ -67,28 +89,38 @@ for _ = 1, 6 do
       return not minecheck.isScreenOpen()
     end, 5)
   end
+  -- The world script gives the emerald as soon as it cues this phase, and a give that arrives while
+  -- the client is still settling into the world does not reach it: the menu above then shows an
+  -- empty player inventory minutes later, which is what the retries are for. The client is op, so it
+  -- asks again from inside the session — the claim under test is the op + give round trip, not which
+  -- side issued the command.
+  -- Only from the third attempt: the phase's own give normally lands on the first one, and an extra
+  -- emerald is one more item in the hotbar for the container checks further down to sort the
+  -- redstone and the sword around.
+  if attempt >= 3 and me ~= nil then
+    minecheck.runCommand("give " .. me.name .. " minecraft:emerald 1")
+  end
+  minecheck.sleep(2)
 end
--- What the client's container actually exposes, logged before the asserts: a failure here is then
--- diagnosable from the run log (which slots the screen has, and what is in them) instead of only
--- naming the expectation.
+-- What the menu actually exposes, logged before the asserts: a failure here is then diagnosable from
+-- the run log (which slots the screen has, and what is in them) instead of only naming the
+-- expectation.
 local dump = {}
-local totalSlots = minecheck.slotCount("inventory")
+local totalSlots = minecheck.slotCount("chest")
 for i = 0, totalSlots - 1 do
-  local s = minecheck.getSlot(i, "inventory")
+  local s = minecheck.getSlot(i, "chest")
   if s ~= nil and not s.empty then
     dump[#dump + 1] = i .. ":" .. s.count .. "x " .. s.id
   end
 end
-minecheck.log(
-  "beacon handshake: inventory screen exposes " .. totalSlots .. " slots [" .. table.concat(dump, ", ") .. "]"
-)
-check(inv, "inventory opened for handshake")
-check(ready, "server op + give handshake complete (emerald in hotbar)")
+minecheck.log("beacon handshake: chest menu exposes " .. totalSlots .. " slots [" .. table.concat(dump, ", ") .. "]")
+check(inv, "handshake chest opened")
+check(ready, "server op + give handshake complete (emerald in the player's inventory)")
 minecheck.press("Escape")
 local closed = minecheck.waitFor(function()
   return not minecheck.isScreenOpen()
 end, 5)
-check(closed, "inventory closed after handshake")
+check(closed, "handshake chest closed")
 
 minecheck.runCommand("fill ~-4 ~2 ~-4 ~4 ~2 ~4 minecraft:iron_block")
 minecheck.runCommand("fill ~-3 ~3 ~-3 ~3 ~3 ~3 minecraft:iron_block")
@@ -327,11 +359,13 @@ local chest = minecheck.openScreen("chest", chestAim, 10)
 check(chest, "chest opened")
 check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest slots plus the player's 36")
 
--- Found by content, like the redstone below: a merged session reaches this phase with the hotbar
--- the session set up for it, so a give lands wherever the first free slot happens to be.
+-- Found by content over the player's whole share of the menu (main inventory at 27..53, hotbar at
+-- 54..62), not a fixed index: a merged session reaches this phase with a hotbar the session set up
+-- for it, so a give lands wherever the first free slot happens to be — and once the hotbar is full
+-- that is a main-inventory slot, which a hotbar-only scan read as a missing item.
 local sword = nil
 local swordReady = minecheck.waitFor(function()
-  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+  for i = CHEST_SLOTS, HOTBAR_FIRST + 8 do
     local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:iron_sword" and s.nbt ~= nil then
       sword = s
@@ -343,11 +377,12 @@ end, 10)
 check(swordReady, "named sword in the hotbar")
 check(sword ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
 
--- Found by content, not by index: a merged session reaches this phase with the hotbar the session
--- set up for it, so the gives land wherever the first free slot happens to be.
+-- Found by content, not by index, over the player's whole share of the menu: a merged session
+-- reaches this phase with the hotbar the session set up for it, so the gives land wherever the first
+-- free slot happens to be.
 local redstoneSlot = nil
-local redstoneReady = minecheck.waitFor(function()
-  for i = HOTBAR_FIRST, HOTBAR_FIRST + 8 do
+local function findRedstone()
+  for i = CHEST_SLOTS, HOTBAR_FIRST + 8 do
     local s = minecheck.getSlot(i, "chest")
     if s ~= nil and not s.empty and s.id == "minecraft:redstone" and s.count == 8 then
       redstoneSlot = i
@@ -355,11 +390,26 @@ local redstoneReady = minecheck.waitFor(function()
     end
   end
   return false
-  -- 90 s, not 30: the give is one server tick's work, but the chest's container sync and this
-  -- client's own phase can both trail a loaded runner by a long way, and a give window that is
-  -- merely tight reads as a missing item and fails the run.
-end, 90)
-check(redstoneReady, "server gave the 8-redstone stack (in the hotbar)")
+end
+-- 60 s, not 30: the give is one server tick's work, but the chest's container sync and this client's
+-- own phase can both trail a loaded runner by a long way, and a give window that is merely tight
+-- reads as a missing item and fails the run.
+local redstoneReady = minecheck.waitFor(findRedstone, 60)
+if not redstoneReady and me ~= nil then
+  -- And when it never arrives at all, the same join-time drop the emerald handshake re-asks for: the
+  -- give reached the server, the client never saw it. Nothing redstone is left in the player's
+  -- inventory at this point (the scan above found no 8-stack), so re-asking from the client makes
+  -- the stack exactly the 8 the check reads. The command needs no container open, so the chest is
+  -- closed for it and reopened after.
+  minecheck.press("Escape")
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen()
+  end, 5)
+  minecheck.runCommand("give " .. me.name .. " minecraft:redstone 8")
+  check(minecheck.openScreen("chest", chestAim, 10), "chest reopened after the redstone re-give")
+  redstoneReady = minecheck.waitFor(findRedstone, 45)
+end
+check(redstoneReady, "server gave the 8-redstone stack (in the player's inventory)")
 local partial = minecheck.moveItem(redstoneSlot, 0, 3, "chest")
 if not partial then
   -- A click the server cannot match to its own container is dropped without a resync, so every

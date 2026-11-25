@@ -34,8 +34,17 @@ public final class TickClock {
 
   private static final TickClock GLOBAL = new TickClock();
 
-  /** How recently a tick must have run for {@link #running()} to call this clock live. */
-  private static final long RUNNING_WINDOW_NANOS = TimeUnit.SECONDS.toNanos(5);
+  /**
+   * How recently a tick must have run for {@link #running()} to call this clock live.
+   *
+   * <p>A held clock runs no ticks, so this has to outlast the longest gap between two holds a
+   * script can go through: a screenshot run pauses for a scene, captures it, closes a screen and
+   * waits for the world to come back before pausing for the next one, and a clock held through that
+   * reads as dead at five seconds and is refused as "no server tick has run in this process". A
+   * client whose world genuinely lives in another process never ticks at all, so it still fails
+   * this regardless of the window.
+   */
+  private static final long RUNNING_WINDOW_NANOS = TimeUnit.SECONDS.toNanos(60);
 
   /**
    * One permit per tick the loop may run while held. Fair, so a burst of steps is consumed in the

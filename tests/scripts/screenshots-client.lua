@@ -150,6 +150,12 @@ local function stand()
   command("tp @s 0.5 " .. SURFACE_Y .. " 0.5 0 90")
   -- The command travels to the server and back, so the move lands a tick or two later.
   minecheck.expect(minecheck.waitFor(atPinnedSpot, 5), "the player stands on the pinned spot")
+  -- The rotation is pinned with the position, because `tp` takes the spot and leaves the angles on
+  -- this line where the client spawned them. Straight down keeps the sky out of the frame: its sun,
+  -- moon and star field are sprites placed by the celestial angle, and one of their edges fell on a
+  -- different pixel between two captures of the same night scene, which is a different digest for a
+  -- picture nothing in the script had changed.
+  minecheck.expect(minecheck.lookAt(0.5, SURFACE_Y - 1, 0.5), "aimed straight down")
   local player = minecheck.getPlayer()
   minecheck.log(
     string.format("player at %.3f %.3f %.3f in %s", player.pos.x, player.pos.y, player.pos.z, player.dimension)
@@ -160,6 +166,34 @@ end
 -- milliseconds-per-tick the machine manages, so the ticks between the scene steps stop being a
 -- twenty-a-second floor. The captures themselves are still taken on a held clock.
 minecheck.uncappedTicks()
+
+-- 1.4.7 opens on its tutorial card ("Press 'E' to open your inventory.") and queues it again on
+-- every tick until the step is done, so it sits over every frame a scene captures. It is not an
+-- options entry on that line (its GameSettings has no tutorial field at all) and it cannot be
+-- cleared from the client object, so the step is completed here instead: the inventory is opened
+-- and closed once, and the card that the step was waiting on is given its few seconds to fade
+-- before the first capture.
+minecheck.press("e")
+minecheck.expect(
+  minecheck.waitFor(function()
+    return minecheck.isScreenOpen(nil)
+  end, 5),
+  "the inventory opened"
+)
+minecheck.press("escape")
+minecheck.expect(
+  minecheck.waitFor(function()
+    return not minecheck.isScreenOpen(nil)
+  end, 5),
+  "the inventory closed"
+)
+minecheck.sleep(8)
+
+-- The clock is pinned twice over: each scene sets the time, and the day cycle is stopped so the
+-- server cannot carry it on between a scene's settle and its capture. With the cycle running, the
+-- night frame moved by a single star pixel between two captures of the same scene, which is a
+-- different digest for a picture nothing in the script changed.
+command("gamerule doDaylightCycle false")
 
 -- 1. The world at noon, looking down: ground, the pinned HUD and the held-block highlight in one
 -- frame, with the sky's light at the flat top of its curve.
@@ -221,6 +255,9 @@ if minecheck.expect(opened, "opened the crafting table") then
     end, 5),
     "the crafting screen closed"
   )
+  -- The screen was opened looking at the table, so the camera comes back down to the ground before
+  -- the HUD is captured: a horizon here would put the sky, and its sprites, back in the frame.
+  minecheck.expect(minecheck.lookAt(0.5, SURFACE_Y - 1, 0.5), "aimed straight down")
   settle("hud")
 else
   minecheck.fail("openScreen(crafting) failed")
