@@ -20,18 +20,18 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val emiVersion = "1.1.24+1.19.2+forge"
-val jeiVersion = "11.6.0.1024"
-val reiVersion = "9.2.784+forge"
+val emiVersion = "1.1.22+1.19.3+forge"
+val jeiVersion = "12.4.0.22"
+val reiVersion = "10.0.646+forge"
 
-// REI's mods.toml makes both mandatory (`architectury` >= 5.7, `cloth_config` >= 7.0).
-val clothConfigVersion = "8.3.134+forge"
-val architecturyVersion = "6.6.92+forge"
+// REI's mods.toml makes both mandatory.
+val clothConfigVersion = "9.1.104+forge"
+val architecturyVersion = "7.1.86+forge"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("43.4.0") }
+  minecraftForge { loader("44.1.23") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -68,7 +68,7 @@ dependencies {
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
-  add("modImplementation", "mezz.jei:jei-1.19.2-forge:$jeiVersion") { isTransitive = false }
+  add("modImplementation", "mezz.jei:jei-1.19.3-forge:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
     isTransitive = false

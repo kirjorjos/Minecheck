@@ -26,9 +26,10 @@ include(":fabric-mod")
 
 project(":fabric-mod").projectDir = file("src/fabric/mod")
 
-include(":quilt-mod")
-
-project(":quilt-mod").projectDir = file("src/quilt/mod")
+// No Quilt module on 1.19.3 yet: every quilted-fabric-api build published for this version (5.0.0
+// alpha.1 through beta.9) fails unimined's intermediary->yarn remap of
+// `fabric-lifecycle-events-v1`, so the module cannot configure. Restore it here once a QFAPI build
+// remaps, and add the `quilt` task registrations back in the root build file.
 
 include(":forge-mod")
 

@@ -16,13 +16,13 @@ import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import net.minecraft.resource.DataPackSettings;
+import net.minecraft.resource.DataConfiguration;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.integrated.IntegratedServerLoader;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.StructureSet;
-import net.minecraft.util.registry.DynamicRegistryManager;
-import net.minecraft.util.registry.Registry;
+import net.minecraft.registry.DynamicRegistryManager;
+import net.minecraft.registry.Registry;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.GameRules;
@@ -761,7 +761,7 @@ public class YarnClientPlatform implements ClientPlatform {
             difficulty(options.difficulty()),
             options.allowCheats(),
             rules,
-            DataPackSettings.SAFE_MODE);
+            DataConfiguration.SAFE_MODE);
     MinecraftClient mc = mc();
     onClientThread(
         () -> {
@@ -1133,7 +1133,7 @@ public class YarnClientPlatform implements ClientPlatform {
     java.util.Map<String, Object> nbt =
         blockEntity == null ? null : nbtToMap(blockEntity.createNbt());
     return new net.minecheck.platform.api.BlockInfo(
-        net.minecraft.util.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
+        net.minecraft.registry.Registry.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
 
   @Override
@@ -1245,7 +1245,7 @@ public class YarnClientPlatform implements ClientPlatform {
     net.minecraft.client.gui.widget.ClickableWidget target = matches.get(at);
     // The centre is inside the widget, so its own isMouseOver/clicked check passes.
     target.mouseClicked(
-        target.x + target.getWidth() / 2.0, target.y + target.getHeight() / 2.0, button);
+        target.getX() + target.getWidth() / 2.0, target.getY() + target.getHeight() / 2.0, button);
     return true;
   }
 
@@ -1389,7 +1389,7 @@ public class YarnClientPlatform implements ClientPlatform {
     net.minecraft.nbt.NbtCompound nbt = stack.getNbt();
     return new net.minecheck.platform.api.SlotInfo(
         false,
-        net.minecraft.util.registry.Registry.ITEM.getId(stack.getItem()).toString(),
+        net.minecraft.registry.Registry.ITEM.getId(stack.getItem()).toString(),
         stack.getCount(),
         nbt == null ? null : nbtToMap(nbt));
   }
