@@ -89,6 +89,17 @@ for attempt = 1, 10 do
       return not minecheck.isScreenOpen()
     end, 5)
   end
+  -- The world script gives the emerald as soon as it cues this phase, and a give that arrives while
+  -- the client is still settling into the world does not reach it: the menu above then shows an
+  -- empty player inventory minutes later, which is what the retries are for. The client is op, so it
+  -- asks again from inside the session — the claim under test is the op + give round trip, not which
+  -- side issued the command.
+  -- Only from the third attempt: the phase's own give normally lands on the first one, and an extra
+  -- emerald is one more item in the hotbar for the container checks further down to sort the
+  -- redstone and the sword around.
+  if attempt >= 3 and me ~= nil then
+    minecheck.runCommand("give " .. me.name .. " minecraft:emerald 1")
+  end
   minecheck.sleep(2)
 end
 -- What the menu actually exposes, logged before the asserts: a failure here is then diagnosable from
