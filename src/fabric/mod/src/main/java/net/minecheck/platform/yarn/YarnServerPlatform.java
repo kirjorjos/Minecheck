@@ -26,6 +26,9 @@ import net.minecraft.util.math.BlockPos;
 
 public class YarnServerPlatform implements ServerPlatform {
 
+  private static final java.util.logging.Logger LOG =
+      java.util.logging.Logger.getLogger("Minecheck");
+
   private volatile MinecraftServer server;
 
   public void setServer(MinecraftServer server) {
@@ -84,7 +87,15 @@ public class YarnServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          return s.getCommandManager().executeWithPrefix(s.getCommandSource(), command);
+          // 1.20.2 made executeWithPrefix void. The dispatcher is what it called, and it still
+          // returns the command's result count, which scripts assert on.
+          String cmd = command.startsWith("/") ? command.substring(1) : command;
+          try {
+            return s.getCommandManager().getDispatcher().execute(cmd, s.getCommandSource());
+          } catch (CommandSyntaxException e) {
+            LOG.warning(String.format("Minecheck: command failed: %s: %s", cmd, e.getMessage()));
+            return 0;
+          }
         });
   }
 

@@ -87,7 +87,7 @@ public class YarnServerNetworkPlatform implements NetworkPlatform {
     }
     byte[] payload = new MinecheckPacket(name, args).encode();
     for (ServerPlayerEntity player : s.getPlayerManager().getPlayerList()) {
-      if (!player.getEntityName().equals(playerName)) {
+      if (!player.getGameProfile().getName().equals(playerName)) {
         continue;
       }
       try {

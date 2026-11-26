@@ -9,9 +9,9 @@ import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecraft.client.Keyboard;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.Mouse;
-import net.minecraft.client.gui.screen.ConnectScreen;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
@@ -342,7 +342,7 @@ public class YarnClientPlatform implements ClientPlatform {
     private float accumulatedTickDelta = Float.NaN;
 
     PinnedRenderTickCounter(float fixedTimeStep, long lastTimeMillis) {
-      super(fixedTimeStep, lastTimeMillis);
+      super(fixedTimeStep, lastTimeMillis, delta -> delta);
     }
 
     @Override
@@ -735,7 +735,7 @@ public class YarnClientPlatform implements ClientPlatform {
       throw new IllegalArgumentException("World not found: " + worldName);
     }
     IntegratedServerLoader loader = mc.createIntegratedServerLoader();
-    onClientThread(() -> loader.start(mc.currentScreen, worldName));
+    onClientThread(() -> loader.start(worldName, () -> {}));
   }
 
   @Override
@@ -792,13 +792,14 @@ public class YarnClientPlatform implements ClientPlatform {
                               dimensionTypes,
                               preset.createDimensionsRegistryHolder().dimensions(),
                               flat));
-                    }));
+                    },
+                    mc.currentScreen));
   }
 
   @Override
   public void joinServer(String address) {
     ServerAddress serverAddress = ServerAddress.parse(address);
-    ServerInfo info = new ServerInfo(address, address, false);
+    ServerInfo info = new ServerInfo(address, address, ServerInfo.ServerType.OTHER);
     onClientThread(
         () -> {
           try {
@@ -1026,7 +1027,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return null;
     }
     return new net.minecheck.platform.api.PlayerInfo(
-        mc.player.getEntityName(),
+        mc.player.getGameProfile().getName(),
         mc.player.getX(),
         mc.player.getY(),
         mc.player.getZ(),
@@ -1061,7 +1062,9 @@ public class YarnClientPlatform implements ClientPlatform {
   @Override
   public net.minecheck.platform.api.BlockPosition getTargetBlock(String entityName) {
     MinecraftClient mc = mc();
-    if (mc.player == null || !mc.player.getEntityName().equals(entityName) || mc.world == null) {
+    if (mc.player == null
+        || !mc.player.getGameProfile().getName().equals(entityName)
+        || mc.world == null) {
       return null;
     }
     net.minecraft.util.hit.HitResult hit = mc.player.raycast(5.0, 1.0F, false);

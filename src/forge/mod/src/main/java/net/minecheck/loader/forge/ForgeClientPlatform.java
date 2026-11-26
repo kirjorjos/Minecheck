@@ -333,7 +333,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     private float accumulatedPartialTick = Float.NaN;
 
     PinnedTimer(float msPerTick, long lastMs) {
-      super(msPerTick, lastMs);
+      super(msPerTick, lastMs, delta -> delta);
     }
 
     @Override
@@ -715,7 +715,7 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.createWorldOpenFlows().loadLevel(mc.screen, worldName);
+          mc.createWorldOpenFlows().checkForBackupAndLoad(worldName, () -> {});
           proceedPastExperimentalWarning(mc);
         });
   }
@@ -808,13 +808,14 @@ public class ForgeClientPlatform implements ClientPlatform {
                       return preset
                           .createWorldDimensions()
                           .replaceOverworldGenerator(registryAccess, flat);
-                    }));
+                    },
+                    mc.screen));
   }
 
   @Override
   public void joinServer(String address) {
     ServerAddress serverAddress = ServerAddress.parseString(address);
-    ServerData info = new ServerData(address, address, false);
+    ServerData info = new ServerData(address, address, ServerData.Type.OTHER);
     onClientThread(
         () -> {
           try {
@@ -838,11 +839,13 @@ public class ForgeClientPlatform implements ClientPlatform {
           if (mc.level != null) {
             mc.level.disconnect();
           }
-          // The no-arg clearLevel() lands on a ProgressScreen ("Saving world"), which is not a
-          // title screen, so isOnTitleScreen() would never be true after leaving a world. Use the
-          // screen-taking overload so the documented phase terminator (back to the title screen)
-          // actually happens.
-          mc.clearLevel(new TitleScreen());
+          // The no-arg disconnect() lands on a ProgressScreen ("Saving world"), which is not a
+          // title screen, so isOnTitleScreen() would never be true after leaving a world. The
+          // screen-taking overload is the one to use, and it is also the blocking one: it stops the
+          // integrated server and waits for it to shut down, which releases the world directory's
+          // session lock. clearClientLevel only tears down the client half, so rejoining straight
+          // away raced the shutdown and died with OverlappingFileLockException.
+          mc.disconnect(new TitleScreen());
         });
   }
 

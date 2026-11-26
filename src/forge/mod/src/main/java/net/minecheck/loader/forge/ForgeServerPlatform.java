@@ -27,6 +27,9 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 
 public class ForgeServerPlatform implements ServerPlatform {
 
+  private static final java.util.logging.Logger LOG =
+      java.util.logging.Logger.getLogger("Minecheck");
+
   private volatile MinecraftServer server;
 
   public void setServer(MinecraftServer server) {
@@ -86,7 +89,15 @@ public class ForgeServerPlatform implements ServerPlatform {
     return onServerThread(
         () -> {
           MinecraftServer s = requireServer();
-          return s.getCommands().performPrefixedCommand(s.createCommandSourceStack(), command);
+          // 1.20.2 made performPrefixedCommand void. The dispatcher is what it called, and it
+          // still returns the command's result count, which scripts assert on.
+          String cmd = command.startsWith("/") ? command.substring(1) : command;
+          try {
+            return s.getCommands().getDispatcher().execute(cmd, s.createCommandSourceStack());
+          } catch (CommandSyntaxException e) {
+            LOG.warning(String.format("Minecheck: command failed: %s: %s", cmd, e.getMessage()));
+            return 0;
+          }
         });
   }
 
