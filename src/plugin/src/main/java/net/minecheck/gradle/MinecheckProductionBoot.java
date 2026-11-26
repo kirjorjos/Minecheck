@@ -68,6 +68,9 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       "https://quiltmc.org/api/v1/download-latest-installer/java-universal";
   private static final String FORGE_INSTALLER =
       "https://maven.minecraftforge.net/net/minecraftforge/forge/%s-%s/forge-%s-%s-installer.jar";
+  // NeoForge's installer is keyed by the loader version alone (`20.4.253` names its own Minecraft).
+  private static final String NEOFORGE_INSTALLER =
+      "https://maven.neoforged.net/releases/net/neoforged/neoforge/%s/neoforge-%s-installer.jar";
   // Built by concatenation, not String.format: the percent-encoded `[` would read as a conversion.
   private static final String MODRINTH_PROJECT = "https://api.modrinth.com/v2/project/";
   private static final String USER_AGENT =
@@ -97,6 +100,8 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       Pattern.compile("quilted-fabric-api:quilted-fabric-api:([^\"\\s]+)");
   private static final Pattern FORGE_LOADER =
       Pattern.compile("minecraftForge\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
+  private static final Pattern NEOFORGE_LOADER =
+      Pattern.compile("neoForged\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
 
   /** The Minecraft version this line builds, e.g. 1.18.2. */
   @Input
@@ -214,6 +219,14 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         String loaderVersion = match(FORGE_LOADER, buildFile, "Forge loader version", "forge");
         getLogger().lifecycle("Minecheck:   loader {}", loaderVersion);
         command = installForge(workdir, minecraft, loaderVersion, java);
+      }
+      case "neoforge" -> {
+        String loaderVersion =
+            neoforgeVersion(
+                minecraft,
+                match(NEOFORGE_LOADER, buildFile, "NeoForge loader version", "neoforge"));
+        getLogger().lifecycle("Minecheck:   loader {}", loaderVersion);
+        command = installNeoForge(workdir, loaderVersion, java);
       }
       default -> throw failure("no production boot is defined for loader '" + loader + "'");
     }
@@ -420,6 +433,42 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
         "-jar",
         launcher.getFileName().toString(),
         "nogui");
+  }
+
+  /**
+   * The module pins Neonate's shorthand (`loader("253")`), while the installer and the libraries
+   * directory are keyed by the full NeoForge version, which carries the Minecraft line: {@code
+   * 1.20.4} plus {@code 253} is {@code 20.4.253}. A line without a minor version (`1.21`) uses
+   * {@code 21.0}.
+   */
+  private static String neoforgeVersion(String minecraft, String loader) {
+    String line = minecraft.startsWith("1.") ? minecraft.substring(2) : minecraft;
+    if (!line.contains(".")) {
+      line = line + ".0";
+    }
+    return line + "." + loader;
+  }
+
+  private List<String> installNeoForge(Path workdir, String version, String java) {
+    Path installer = workdir.resolve("neoforge-" + version + "-installer.jar");
+    download(String.format(NEOFORGE_INSTALLER, version, version), installer);
+    run(
+        workdir,
+        List.of(java, "-jar", installer.getFileName().toString(), "--installServer"),
+        workdir.resolve("install.log"),
+        1200,
+        false);
+    Path libraries = workdir.resolve("libraries/net/neoforged/neoforge/" + version);
+    if (!Files.isDirectory(libraries)) {
+      throw failure("the NeoForge installer produced no " + libraries + " in " + workdir);
+    }
+    try {
+      Files.writeString(
+          workdir.resolve("user_jvm_args.txt"), "-Xmx1536M\n", StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw failure("could not write user_jvm_args.txt in " + workdir + ": " + e);
+    }
+    return List.of("bash", "run.sh", "nogui");
   }
 
   private List<String> installForge(Path workdir, String minecraft, String version, String java) {
