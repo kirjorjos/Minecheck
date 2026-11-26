@@ -96,6 +96,8 @@ registerLoaderLifecycle("testFabric", "fabric")
 
 registerLoaderLifecycle("testForge", "forge")
 
+registerLoaderLifecycle("testNeoForge", "neoforge")
+
 registerLoaderLifecycle("testQuilt", "quilt")
 
 fun registerFailPathLifecycle(taskName: String, loader: String) {
@@ -148,6 +150,8 @@ registerFailPathLifecycle("testFabricFail", "fabric")
 
 registerFailPathLifecycle("testForgeFail", "forge")
 
+registerFailPathLifecycle("testNeoForgeFail", "neoforge")
+
 registerFailPathLifecycle("testQuiltFail", "quilt")
 
 fun registerSpawnLifecycle(taskName: String, loader: String) {
@@ -196,6 +200,8 @@ fun registerSpawnLifecycle(taskName: String, loader: String) {
 registerSpawnLifecycle("testFabricSpawn", "fabric")
 
 registerSpawnLifecycle("testForgeSpawn", "forge")
+
+registerSpawnLifecycle("testNeoForgeSpawn", "neoforge")
 
 registerSpawnLifecycle("testQuiltSpawn", "quilt")
 
@@ -246,6 +252,8 @@ registerQueryLifecycle("testFabricQuery", "fabric")
 
 registerQueryLifecycle("testForgeQuery", "forge")
 
+registerQueryLifecycle("testNeoForgeQuery", "neoforge")
+
 registerQueryLifecycle("testQuiltQuery", "quilt")
 
 fun registerBeaconLifecycle(taskName: String, loader: String) {
@@ -294,6 +302,8 @@ fun registerBeaconLifecycle(taskName: String, loader: String) {
 registerBeaconLifecycle("testFabricBeacon", "fabric")
 
 registerBeaconLifecycle("testForgeBeacon", "forge")
+
+registerBeaconLifecycle("testNeoForgeBeacon", "neoforge")
 
 registerBeaconLifecycle("testQuiltBeacon", "quilt")
 
@@ -408,6 +418,8 @@ registerWorldHandoffLifecycle("testFabricWorldHandoff", "fabric")
 
 registerWorldHandoffLifecycle("testForgeWorldHandoff", "forge")
 
+registerWorldHandoffLifecycle("testNeoForgeWorldHandoff", "neoforge")
+
 registerWorldHandoffLifecycle("testQuiltWorldHandoff", "quilt")
 
 fun registerPacketLifecycle(
@@ -463,6 +475,8 @@ registerPacketLifecycle("testFabricPacket", "fabric")
 
 registerPacketLifecycle("testForgePacket", "forge")
 
+registerPacketLifecycle("testNeoForgePacket", "neoforge")
+
 registerPacketLifecycle("testQuiltPacket", "quilt")
 
 registerPacketLifecycle(
@@ -473,15 +487,27 @@ registerPacketLifecycle(
   "Boots the Forge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
 )
 
+registerPacketLifecycle(
+  "testNeoForgePacketTap",
+  "neoforge",
+  "packet-tap-client.lua",
+  "packet-tap-server.lua",
+  "Boots the NeoForge client + dedicated server in parallel and verifies foreign-channel observation through the play-connection frame tap",
+)
+
 registerInputLifecycle("testFabricInput", "fabric")
 
 registerInputLifecycle("testForgeInput", "forge")
+
+registerInputLifecycle("testNeoForgeInput", "neoforge")
 
 registerInputLifecycle("testQuiltInput", "quilt")
 
 registerLiveLifecycle("testFabricLive", "fabric")
 
 registerLiveLifecycle("testForgeLive", "forge")
+
+registerLiveLifecycle("testNeoForgeLive", "neoforge")
 
 registerLiveLifecycle("testQuiltLive", "quilt")
 
@@ -592,6 +618,8 @@ registerScreenshotsLifecycle("testFabricShots", "fabric")
 
 registerScreenshotsLifecycle("testForgeShots", "forge")
 
+registerScreenshotsLifecycle("testNeoForgeShots", "neoforge")
+
 registerScreenshotsLifecycle("testQuiltShots", "quilt")
 
 /**
@@ -683,11 +711,15 @@ registerServerFeaturesLifecycle("testFabricServerFeatures", "fabric")
 
 registerServerFeaturesLifecycle("testForgeServerFeatures", "forge")
 
+registerServerFeaturesLifecycle("testNeoForgeServerFeatures", "neoforge")
+
 registerServerFeaturesLifecycle("testQuiltServerFeatures", "quilt")
 
 registerClientFeaturesLifecycle("testFabricClientFeatures", "fabric")
 
 registerClientFeaturesLifecycle("testForgeClientFeatures", "forge")
+
+registerClientFeaturesLifecycle("testNeoForgeClientFeatures", "neoforge")
 
 registerClientFeaturesLifecycle("testQuiltClientFeatures", "quilt")
 
@@ -722,6 +754,16 @@ registerLoaderAggregate(
   "testForgeClientFeatures",
   "testForgeWorldHandoff",
   "testForgeShots",
+)
+
+registerLoaderAggregate(
+  "neoforge",
+  "testNeoForge",
+  "testNeoForgeFail",
+  "testNeoForgeServerFeatures",
+  "testNeoForgeClientFeatures",
+  "testNeoForgeWorldHandoff",
+  "testNeoForgeShots",
 )
 
 registerLoaderAggregate(
@@ -913,7 +955,7 @@ subprojects {
   }
 }
 
-val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod")
+val loaderModules = listOf("fabric-mod", "quilt-mod", "forge-mod", "neoforge-mod")
 
 fun loaderJarDir(module: String): File =
   project.file("src/${module.removeSuffix("-mod")}/mod/build/libs")
@@ -952,7 +994,7 @@ extra["localDevTag"] = localDevTag
 tasks.register("buildAll") {
   group = "minecheck"
   description =
-    "Builds every loader's local -dev jar and its -deobf twin (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar)"
+    "Builds every loader's local -dev jar and its -deobf twin (:fabric-mod:productionJar, :quilt-mod:productionJar, :forge-mod:productionJar, :neoforge-mod:productionJar)"
   dependsOn(loaderModules.map { ":$it:productionJar" })
 }
 
@@ -1043,11 +1085,14 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
  * / `f_12345_` for SRG), so a remapped jar contains those tokens and a dev jar contains none. No
  * member id is hardcoded, so it holds across Minecraft versions.
  */
-val productionNamespaces =
+val productionNamespaces: Map<String, Regex?> =
   mapOf(
     "fabric" to Regex("(?:method|field)_[0-9]+"),
     "quilt" to Regex("(?:method|field)_[0-9]+"),
     "forge" to Regex("[mf]_[0-9]+_"),
+    // NeoForge 20.2+ runs on the Mojang names the modules compile against, so there is nothing to
+    // remap and no production-namespace token to look for; null means "assert it stayed Mojang".
+    "neoforge" to null,
   )
 
 val checkProductionJars =
@@ -1057,7 +1102,13 @@ val checkProductionJars =
       "Asserts each distributable loader jar is remapped into its production namespace (issue #23)"
     dependsOn(loaderModules.map { ":$it:productionJar" })
     doLast {
-      val loaders = mapOf("fabric-mod" to "fabric", "quilt-mod" to "quilt", "forge-mod" to "forge")
+      val loaders =
+        mapOf(
+          "fabric-mod" to "fabric",
+          "quilt-mod" to "quilt",
+          "forge-mod" to "forge",
+          "neoforge-mod" to "neoforge",
+        )
       loaders.forEach { (module, loader) ->
         // The task's own output, not a directory scan: `build/libs` also holds jars from earlier
         // versions of the same loader, and "the newest file there" is exactly the guess that lets a
@@ -1074,14 +1125,31 @@ val checkProductionJars =
                 zip.getInputStream(entry).use { String(it.readBytes(), Charsets.ISO_8859_1) }
               }
           }
-        if (!pattern.containsMatchIn(classes)) {
-          throw GradleException(
-            "Minecheck: ${jar.name} is not remapped into the $loader production namespace (no " +
-              "${pattern.pattern} member name in its classes). A jar built against development " +
-              "names loads in the dev runtime and dies in a production instance — see issue #23."
+        if (pattern == null) {
+          // No production remap on this loader: the shipped jar must still be in the Mojang names
+          // it was built from, so an SRG-named jar here would mean the remap ran when it must not.
+          val srg = Regex("[mf]_[0-9]+_")
+          if (srg.containsMatchIn(classes)) {
+            throw GradleException(
+              "Minecheck: ${jar.name} carries SRG member names, but $loader runs on Mojang names; " +
+                "remapping it would make a jar that cannot link against the game."
+            )
+          }
+          logger.lifecycle(
+            "Minecheck: {} stays in Mojang names ({} needs no remap)",
+            jar.name,
+            loader,
           )
+        } else {
+          if (!pattern.containsMatchIn(classes)) {
+            throw GradleException(
+              "Minecheck: ${jar.name} is not remapped into the $loader production namespace (no " +
+                "${pattern.pattern} member name in its classes). A jar built against development " +
+                "names loads in the dev runtime and dies in a production instance — see issue #23."
+            )
+          }
+          logger.lifecycle("Minecheck: {} carries {} production names", jar.name, loader)
         }
-        logger.lifecycle("Minecheck: {} carries {} production names", jar.name, loader)
         // A release attaches the pair: the loadable jar and the same code in development names.
         // A missing deobf jar is a silent half release, so it is checked here too.
         val deobf = project(":$module").tasks.named("shadowJar").get().outputs.files.singleFile
@@ -1107,7 +1175,12 @@ tasks.named("checkModule") { dependsOn(checkProductionJars) }
 val mcVersion: String = property("minecraft_version") as String
 
 val loaderArtifactNames =
-  mapOf("fabric-mod" to "fabric", "quilt-mod" to "quilt", "forge-mod" to "forge")
+  mapOf(
+    "fabric-mod" to "fabric",
+    "quilt-mod" to "quilt",
+    "forge-mod" to "forge",
+    "neoforge-mod" to "neoforge",
+  )
 
 subprojects {
   val loader = loaderArtifactNames[name] ?: return@subprojects

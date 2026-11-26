@@ -27,26 +27,48 @@ if not observed then
   minecheck.fail("watchPacketChannel returned false on a Forge client")
 end
 
+-- Forge envelopes the frame behind a SimpleChannel VarInt message index; NeoForge's payload
+-- registry does not. One script serves both taps: parse with the index first, then fall back to the
+-- bare frame. A misaligned parse throws or yields an empty name, so the fallback only takes over
+-- where the envelope really is absent.
+local function readTicketedFrame(reader)
+  reader.readVarInt() -- Forge SimpleChannel message index
+  local discriminator = reader.readInt()
+  local name = reader.readString()
+  local argc = reader.readVarInt()
+  local first = nil
+  if argc >= 1 then
+    -- Each value is length-framed: VarInt frameLength, then the tag byte, then the payload.
+    reader.readVarInt()
+    reader.readByte()
+    first = reader.readZigZag() -- Minecheck i32 arguments are ZigZag VarInts
+  end
+  return { discriminator = discriminator, name = name, first = first }
+end
+
+local function readBareFrame(reader)
+  local discriminator = reader.readInt()
+  local name = reader.readString()
+  local argc = reader.readVarInt()
+  local first = nil
+  if argc >= 1 then
+    reader.readVarInt()
+    reader.readByte()
+    first = reader.readZigZag()
+  end
+  return { discriminator = discriminator, name = name, first = first }
+end
+
 minecheck.registerPacketDecoder("minecheck:main", function(bytes)
   -- Handshake/version payloads also travel on this channel; anything unparseable decodes to {} so
   -- the predicate simply skips it instead of failing the run.
-  local ok, value = pcall(function()
-    local reader = minecheck.reader(bytes)
-    reader.readVarInt() -- Forge SimpleChannel message index
-    local discriminator = reader.readInt()
-    local name = reader.readString()
-    local argc = reader.readVarInt()
-    local first = nil
-    if argc >= 1 then
-      -- Each value is length-framed: VarInt frameLength, then the tag byte, then the payload.
-      reader.readVarInt()
-      reader.readByte()
-      first = reader.readZigZag() -- Minecheck i32 arguments are ZigZag VarInts
+  for _, parse in ipairs({ readTicketedFrame, readBareFrame }) do
+    local ok, value = pcall(function()
+      return parse(minecheck.reader(bytes))
+    end)
+    if ok and type(value.name) == "string" and #value.name > 0 then
+      return value
     end
-    return { discriminator = discriminator, name = name, first = first }
-  end)
-  if ok then
-    return value
   end
   return {}
 end)

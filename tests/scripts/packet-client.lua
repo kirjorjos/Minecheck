@@ -77,10 +77,8 @@ end
 -- be false there; Forge's frame tap sits *below* the channel and reports true. The invariant is that
 -- a claimed channel is never reported as watched while the handler would be silently shadowed.
 local own = minecheck.watchPacketChannel("minecheck:main")
-minecheck.expect(
-  own == minecheck.isModLoaded("forge"),
-  "an already-owned channel is refused on Fabric/Quilt and tapped on Forge"
-)
+local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
+minecheck.expect(own == taps, "an already-owned channel is refused on Fabric/Quilt and tapped on Forge/NeoForge")
 if own then
   minecheck.registerPacketDecoder("minecheck:main", function()
     return {}

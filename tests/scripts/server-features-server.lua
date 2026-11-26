@@ -28,7 +28,7 @@ phase("query-test.lua")
 after("query-client.lua")
 phase("packet-test.lua")
 after("packet-client.lua")
-if minecheck.isModLoaded("forge") then
+if minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge") then
   phase("packet-tap-server.lua")
   after("packet-tap-client.lua")
 end
