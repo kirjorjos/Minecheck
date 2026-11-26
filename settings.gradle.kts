@@ -34,4 +34,8 @@ include(":forge-mod")
 
 project(":forge-mod").projectDir = file("src/forge/mod")
 
+include(":neoforge-mod")
+
+project(":neoforge-mod").projectDir = file("src/neoforge/mod")
+
 includeBuild("src/plugin")

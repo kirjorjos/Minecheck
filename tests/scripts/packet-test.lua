@@ -56,10 +56,8 @@ minecheck.expect(observed, "a dedicated server can watch a free foreign channel"
 -- Minecheck's own channel is already owned by its transport. Fabric/Quilt cannot install a second
 -- receiver for it and must say so; Forge's per-player frame tap sits below the channel and says yes.
 local own = minecheck.watchPacketChannel("minecheck:main")
-minecheck.expect(
-  own == minecheck.isModLoaded("forge"),
-  "an already-owned channel is refused on Fabric/Quilt and tapped on Forge"
-)
+local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
+minecheck.expect(own == taps, "an already-owned channel is refused on Fabric/Quilt and tapped on Forge/NeoForge")
 if own then
   minecheck.registerPacketDecoder("minecheck:main", function()
     return {}

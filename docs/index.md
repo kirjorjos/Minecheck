@@ -7,7 +7,7 @@ title: Minecheck
 A development-helper Minecraft mod that automates the Minecraft client and dedicated server for
 testing and debugging mods: scripted world setup, entity and block spawning with NBT, GUI and
 inventory automation, input simulation, and CI-friendly runs — all driven by Lua scripts, from a
-single Java codebase across Forge, Fabric, and Quilt.
+single Java codebase across Forge, NeoForge, Fabric, and Quilt.
 
 ## Quick links
 
