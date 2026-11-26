@@ -13,6 +13,7 @@ import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.javadoc.Javadoc
 import org.gradle.external.javadoc.StandardJavadocDocletOptions
+import org.gradle.jvm.toolchain.JavaToolchainService
 
 plugins {
   java
@@ -1060,6 +1061,11 @@ tasks.register<Copy>("collectArtifacts") {
 // Resolved on the project: inside the task block `property` would look for a task property.
 val bootMinecraftVersion = property("minecraft_version").toString()
 
+// Likewise `the<JavaToolchainService>()`: inside the task block the receiver is the task, which is
+// not where the toolchain service lives.
+val bootJava21 =
+  the<JavaToolchainService>().launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) }
+
 tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   group = "minecheck"
   description = "Boots every packaged loader jar in an installed dedicated server"
@@ -1072,7 +1078,14 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
   artifactJars.from(fileTree(layout.buildDirectory.dir("artifacts")) { include("*.jar") })
   workRoot.set(layout.buildDirectory.dir("production-boot"))
   onlyLoaders.set(providers.gradleProperty("boot.only").getOrElse(""))
-  javaExecutable.set(providers.gradleProperty("boot.java").getOrElse("java"))
+  // The servers run on the line's own Java, not whatever `java` a CI image puts on PATH: the
+  // packaged check is exactly where a 1.21 server was launched by a 17 runtime and died with
+  // `class file version 65.0` instead of testing the jar. `boot.java` still overrides it.
+  javaExecutable.set(
+    providers
+      .gradleProperty("boot.java")
+      .orElse(bootJava21.map { it.executablePath.asFile.absolutePath })
+  )
   bootTimeoutSeconds.set(providers.gradleProperty("boot.timeout").map { it.toInt() }.getOrElse(600))
 }
 
