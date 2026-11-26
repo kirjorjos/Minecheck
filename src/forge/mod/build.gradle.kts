@@ -355,6 +355,7 @@ fun disableConfigWatcher(runTask: JavaExec) {
     lines.add("$key = true")
   }
   file.writeText(lines.joinToString("\n", postfix = "\n"))
+  logger.lifecycle("Minecheck: turned off FML's config watcher in {}", file)
 }
 
 tasks
