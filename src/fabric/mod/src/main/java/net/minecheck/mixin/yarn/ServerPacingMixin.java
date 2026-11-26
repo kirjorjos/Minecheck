@@ -1,6 +1,8 @@
 package net.minecheck.mixin.yarn;
 
+import java.util.function.BooleanSupplier;
 import net.minecheck.common.tick.TickClock;
+import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -10,9 +12,11 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  * tick starts as soon as the previous one finished and throughput is whatever the machine's
  * milliseconds-per-tick allow.
  *
- * <p>The sleep is the loop's only pacing: every other piece of the tick is the work itself, so
- * replacing the sleep is enough to turn twenty ticks a second into "as many as fit". A paused clock
- * still wins — the gate in the tick event runs the sleep later, not sooner.
+ * <p>1.21 no longer spells the wait as a {@code Thread.sleep} inside {@code runServer}: the loop
+ * ends each tick in {@code runTasksTillTickEnd}, whose blocking {@code runTasks(condition)} call is
+ * the loop's only pacing. Skipping that call is the same lever the old redirect pulled; the
+ * non-blocking {@code runTasks()} right before it still drains the queue. A paused clock still wins
+ * — the gate in the tick event runs the wait later, not sooner.
  *
  * <p>{@code require = 0}: the injection's whole job is an optimisation, and a Minecraft build whose
  * loop spells this differently must keep the vanilla cadence rather than fail to start. {@link
@@ -22,16 +26,20 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 public class ServerPacingMixin {
 
   @Redirect(
-      method = "runServer",
-      at = @At(value = "INVOKE", target = "Ljava/lang/Thread;sleep(J)V"),
+      method = "runTasksTillTickEnd",
+      at =
+          @At(
+              value = "INVOKE",
+              target =
+                  "Lnet/minecraft/server/MinecraftServer;runTasks(Ljava/util/function/BooleanSupplier;)V"),
       require = 0)
-  private void minecheck$pace(long millis) throws InterruptedException {
+  private void minecheck$pace(MinecraftServer server, BooleanSupplier condition) {
     TickClock clock = TickClock.get();
     clock.notePacingHook();
     if (clock.uncapped()) {
       // Nothing to wait for: the loop's next iteration starts the next tick immediately.
       return;
     }
-    Thread.sleep(millis);
+    server.runTasks(condition);
   }
 }

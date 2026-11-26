@@ -135,7 +135,7 @@ public final class NeoForgeJeiRecipeViewer implements RecipeViewer {
     probed = true;
     int crafting =
         manager
-            .getRecipeType(new ResourceLocation("minecraft", "crafting"))
+            .getRecipeType(ResourceLocation.fromNamespaceAndPath("minecraft", "crafting"))
             .map(type -> countFor(manager, type))
             .orElse(-1);
     LOG.info(

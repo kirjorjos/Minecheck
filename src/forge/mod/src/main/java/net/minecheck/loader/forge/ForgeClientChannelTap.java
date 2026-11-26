@@ -14,7 +14,9 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraftforge.network.ForgePayload;
 
 /**
  * Client-side <em>low-level frame tap</em>: the Forge-only way to observe another mod's channel
@@ -83,8 +85,14 @@ final class ForgeClientChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ClientboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getName();
-    FriendlyByteBuf data = packet.getInternalData();
+    // Forge wraps every channel message in a ForgePayload, which keeps the bytes it decoded, so
+    // the tap can copy them without knowing the message type.
+    CustomPacketPayload body = packet.payload();
+    if (!(body instanceof ForgePayload forge)) {
+      return;
+    }
+    ResourceLocation id = forge.id();
+    FriendlyByteBuf data = forge.data();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

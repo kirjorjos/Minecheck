@@ -225,7 +225,7 @@ public class YarnServerPlatform implements ServerPlatform {
     }
     if (entity instanceof MobEntity mob) {
       mob.initialize(
-          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null, null);
+          world, world.getLocalDifficulty(entity.getBlockPos()), SpawnReason.COMMAND, null);
     }
     if (!world.spawnNewEntityAndPassengers(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
@@ -258,7 +258,7 @@ public class YarnServerPlatform implements ServerPlatform {
     if (!compound.isEmpty()) {
       BlockEntity blockEntity = world.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.readNbt(compound);
+        blockEntity.readComponentlessNbt(compound, world.getRegistryManager());
       }
     }
     return true;
@@ -281,7 +281,9 @@ public class YarnServerPlatform implements ServerPlatform {
     stack.setCount(count);
     NbtCompound compound = parseNbt(nbt);
     if (!compound.isEmpty()) {
-      stack.setNbt(compound);
+      stack.set(
+          net.minecraft.component.DataComponentTypes.CUSTOM_DATA,
+          net.minecraft.component.type.NbtComponent.of(compound));
     }
     ItemEntity itemEntity = new ItemEntity(world, x, y, z, stack);
     if (!world.spawnEntity(itemEntity)) {

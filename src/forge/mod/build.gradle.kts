@@ -7,7 +7,7 @@ plugins {
   id("com.gradleup.shadow") version "8.3.0"
 }
 
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
 // One branch per Minecraft version; the version comes from gradle.properties (overridable with
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
@@ -20,17 +20,12 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "17.3.1.5"
-val reiVersion = "14.1.786+forge"
-
-// REI's mods.toml makes both mandatory.
-val clothConfigVersion = "13.0.138+forge"
-val architecturyVersion = "11.1.17+minecraftforge"
+val jeiVersion = "19.8.2.99"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("49.2.13") }
+  minecraftForge { loader("51.0.33") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -68,14 +63,7 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  add("modImplementation", "mezz.jei:jei-1.20.4-forge:$jeiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
-  add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {
-    isTransitive = false
-  }
-  add("modImplementation", "maven.modrinth:architectury-api:$architecturyVersion") {
-    isTransitive = false
-  }
+  implementation("mezz.jei:jei-1.21-forge:$jeiVersion") { isTransitive = false }
 }
 
 tasks.shadowJar {
@@ -96,20 +84,6 @@ tasks.shadowJar {
   exclude("jei.refmap.json")
   exclude("META-INF/accesstransformer.cfg")
   exclude("META-INF/services/mezz.jei.**")
-  // REI and the two mods it requires (Cloth Config, Architectury API) are dev-only dependencies.
-  exclude("me/shedaniel/**")
-  exclude("assets/roughlyenoughitems/**")
-  exclude("assets/cloth-config2/**")
-  exclude("dev/architectury/**")
-  exclude("rei.mixins.json")
-  exclude("rei.refmap.json")
-  exclude("roughlyenoughitems.accessWidener")
-  exclude("architectury-common-refmap.json")
-  exclude("architectury-common.mixins.json")
-  exclude("architectury-forge-refmap.json")
-  exclude("architectury.accessWidener")
-  exclude("architectury.mixins.json")
-  exclude("META-INF/services/dev.architectury.**")
   exclude("META-INF/jars/**")
 }
 
@@ -118,12 +92,12 @@ tasks.named("jar") {
   enabled = false
 }
 
-// The published jar has to be in the loader's *production* namespace. A Forge jar built against
-// Mojang names loads fine in the Gradle plugin's dev runtime and dies on a real client's first tick
-// with `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'` (issue #23), because production
-// Forge resolves members by SRG name. unimined's own remap task targets the plain `jar`, which this
-// module disables because the shadowJar is the mod, so the remap is registered against the shadow
-// jar instead: shadow -> remap -> the one jar this loader ships.
+// The published jar has to be in the loader's *production* namespace. On 1.21 Forge runs on the
+// same Mojang names this module compiles against, so unimined reports an empty remap path and the
+// task only renames the shadow jar. The root `checkProductionJars` asserts no SRG names slipped in.
+// The remap stays registered against the shadow jar (unimined's own remap targets the plain `jar`,
+// which this module disables) so shadow -> remap -> the one jar this loader ships keeps working
+// unchanged on lines whose production namespace differs.
 val minecraftConfig =
   extensions
     .getByType(xyz.wagyourtail.unimined.api.UniminedExtension::class.java)

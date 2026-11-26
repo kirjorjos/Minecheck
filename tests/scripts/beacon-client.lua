@@ -287,7 +287,7 @@ check(minecheck.slotCount("chest") == HOTBAR_FIRST + 9, "chest menu is 27 chest 
 
 local sword = minecheck.getSlot(HOTBAR_FIRST + 1, "chest")
 check(not sword.empty and sword.id == "minecraft:iron_sword", "named sword in the second hotbar slot")
-check(sword.nbt ~= nil and sword.nbt.display ~= nil and sword.nbt.display.Name ~= nil, "sword carries display nbt")
+check(sword.nbt ~= nil and sword.nbt.minecheck_test_sword ~= nil, "sword carries custom data")
 
 local redstoneReady = minecheck.waitFor(function()
   local s = minecheck.getSlot(HOTBAR_FIRST + 2, "chest")

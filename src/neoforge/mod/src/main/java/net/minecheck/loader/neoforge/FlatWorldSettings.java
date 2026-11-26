@@ -79,7 +79,7 @@ final class FlatWorldSettings {
     Declaration declared = declaration();
     List<FlatLayerInfo> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
-      Block block = BuiltInRegistries.BLOCK.get(new ResourceLocation(layer.block));
+      Block block = BuiltInRegistries.BLOCK.get(ResourceLocation.parse(layer.block));
       layers.add(new FlatLayerInfo(layer.height, block));
     }
     FlatLevelGeneratorSettings base =
@@ -88,7 +88,7 @@ final class FlatWorldSettings {
     // the game refuses to write a level whose flat settings name one.
     Holder<Biome> biome =
         biomes
-            .get(ResourceKey.create(Registries.BIOME, new ResourceLocation(declared.biome)))
+            .get(ResourceKey.create(Registries.BIOME, ResourceLocation.parse(declared.biome)))
             .<Holder<Biome>>map(holder -> holder)
             .orElseGet(base::getBiome);
     // No structure overrides: the declaration describes bare ground, and the suites place the

@@ -17,7 +17,7 @@ public final class NeoForgeJeiPlugin implements IModPlugin {
 
   @Override
   public ResourceLocation getPluginUid() {
-    return new ResourceLocation("minecheck", "jei");
+    return ResourceLocation.fromNamespaceAndPath("minecheck", "jei");
   }
 
   @Override

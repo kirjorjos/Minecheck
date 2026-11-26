@@ -8,7 +8,7 @@ plugins {
   id("com.gradleup.shadow") version "8.3.0"
 }
 
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
 // One branch per Minecraft version; the version comes from gradle.properties (overridable with
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
@@ -21,18 +21,18 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "17.3.1.5"
-val emiVersion = "1.1.22+1.20.4+fabric"
-val reiVersion = "14.1.786+fabric"
+val jeiVersion = "19.8.2.99"
+val emiVersion = "1.1.12+1.21+fabric"
+val reiVersion = "16.0.799+fabric"
 
 // REI does not declare these in its fabric.mod.json, but its own bytecode references them
 // (`dev/architectury/**`, `me/shedaniel/clothconfig2/**`), so they must be loaded at runtime.
-val clothConfigVersion = "13.0.138+fabric"
-val architecturyVersion = "11.1.17+fabric"
+val clothConfigVersion = "15.0.140+fabric"
+val architecturyVersion = "13.0.12+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(3) }
+  mappings { yarn(9) }
   fabric { loader("0.16.14") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -93,8 +93,8 @@ val extractBasicMath =
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.97.3+1.20.4")
-  add("modImplementation", "mezz.jei:jei-1.20.4-fabric:$jeiVersion") { isTransitive = false }
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21")
+  add("modImplementation", "mezz.jei:jei-1.21-fabric:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:cloth-config:$clothConfigVersion") {

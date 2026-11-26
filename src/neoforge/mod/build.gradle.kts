@@ -7,7 +7,7 @@ plugins {
   id("com.gradleup.shadow") version "8.3.0"
 }
 
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
 // One branch per Minecraft version; the version comes from gradle.properties (overridable with
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
@@ -20,18 +20,19 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "17.3.1.5"
-val emiVersion = "1.1.22+1.20.4+neoforge"
-val reiVersion = "14.1.786+neoforge"
+val jeiVersion = "19.8.2.99"
+val emiVersion = "1.1.12+1.21+neoforge"
+val reiVersion = "16.0.799+neoforge"
 
 // REI's mods.toml makes both mandatory.
-val clothConfigVersion = "13.0.138+neoforge"
-val architecturyVersion = "11.1.17+neoforge"
+val clothConfigVersion = "15.0.140+neoforge"
+val architecturyVersion = "13.0.12+neoforge"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  neoForged { loader("253") }
+  // Unimined expands the bare build number with the line's Minecraft version (1.21 -> 21.0).
+  neoForged { loader("167") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -69,7 +70,7 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  implementation("mezz.jei:jei-1.20.4-neoforge:$jeiVersion")
+  implementation("mezz.jei:jei-1.21-neoforge:$jeiVersion")
   implementation("maven.modrinth:emi:$emiVersion") { isTransitive = false }
   implementation("maven.modrinth:rei:$reiVersion") { isTransitive = false }
   implementation("maven.modrinth:cloth-config:$clothConfigVersion") { isTransitive = false }
@@ -104,6 +105,9 @@ tasks.shadowJar {
   exclude("assets/roughlyenoughitems/**")
   exclude("assets/cloth-config2/**")
   exclude("dev/architectury/**")
+  // Its 1.21 data pack registers a biome-modifier codec that only its own mod class provides; the
+  // jar carries the data but not the mod, so a packaged server dies loading registries.
+  exclude("data/architectury/**")
   exclude("rei.mixins.json")
   exclude("rei.refmap.json")
   exclude("roughlyenoughitems.accessWidener")
@@ -148,7 +152,8 @@ tasks.named("assemble") { dependsOn(productionJar) }
 sourceSets.main.get().resources.srcDir(project.file("resources"))
 
 // NeoForge 20.2+ discovers a development mod by scanning one classpath entry for both its
-// `mods.toml` and the `@Mod` class that file declares. Gradle's default split (classes under
+// `neoforge.mods.toml` and the `@Mod` class that file declares. Gradle's default split (classes
+// under
 // `build/classes`, resources under `build/resources`) hands FML a resource-only folder, which it
 // rejects with "constructed 0 mods" and "has mods that were not found". Writing the resources
 // beside the classes puts them back into the one entry FML scans; the shipped jar is unaffected.
@@ -421,14 +426,14 @@ tasks.register("devHelperServerLaunch") {
   }
 }
 
-// mods.toml declares the mod version; expand it from the project version so the metadata
+// neoforge.mods.toml declares the mod version; expand it from the project version so the metadata
 // tracks the release rather than a hand-maintained literal.
 tasks.processResources {
   // The one declaration of the flat world (also written into the dedicated server's
   // `generator-settings` by the lifecycle plugin), parsed by FlatWorldSettings at world creation.
   from(rootProject.file("tests/flat-world.json"))
   inputs.property("modVersion", project.version)
-  filesMatching("META-INF/mods.toml") {
+  filesMatching("META-INF/neoforge.mods.toml") {
     expand(
       "version" to project.version.toString(),
       "minecraft_version" to mcVersion,

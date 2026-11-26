@@ -17,7 +17,7 @@ public final class MinecheckJeiPlugin implements IModPlugin {
 
   @Override
   public Identifier getPluginUid() {
-    return new Identifier("minecheck", "jei");
+    return Identifier.of("minecheck", "jei");
   }
 
   @Override

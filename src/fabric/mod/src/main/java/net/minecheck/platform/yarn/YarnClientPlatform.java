@@ -286,7 +286,9 @@ public class YarnClientPlatform implements ClientPlatform {
     MinecraftClient mc = mc();
     java.lang.reflect.Field counterField = null;
     for (java.lang.reflect.Field field : MinecraftClient.class.getDeclaredFields()) {
-      if (field.getType().getSimpleName().equals("RenderTickCounter")) {
+      // 1.21 stores the concrete `RenderTickCounter.Dynamic`, so match by assignability rather
+      // than by the interface's simple name.
+      if (net.minecraft.client.render.RenderTickCounter.class.isAssignableFrom(field.getType())) {
         counterField = field;
         break;
       }
@@ -327,33 +329,22 @@ public class YarnClientPlatform implements ClientPlatform {
   /**
    * A render tick counter that hands the renderer a delta of 1 without touching the tick count.
    *
-   * <p>{@code tickDelta} is the renderer's partial tick <em>and</em> vanilla's own accumulator:
-   * {@code beginRenderTick} adds the frame's elapsed time to it, returns the whole ticks and leaves
-   * the fraction behind. Overwriting it outright feeds that {@code 1} back in as the accumulator on
-   * the next frame, so the client runs one tick per rendered frame instead of twenty a second —
-   * harmless on a fast workstation, far too slow on a software-rendered CI runner, where every
-   * timing-sensitive wait then misses. The fraction vanilla computed is kept aside and put back
-   * before the next call, so only the value the renderer reads is pinned.
+   * <p>1.21's counter is a {@code Dynamic} whose accumulator is private, and its {@code
+   * beginRenderTick} already returns the whole ticks and keeps the fraction for the next frame. So
+   * the pinned counter leaves that method alone and overrides only {@code getTickDelta} — the value
+   * the renderer reads — which keeps the accumulator vanilla's own and stops the client from
+   * running one tick per rendered frame on a slow software renderer.
    */
   private static final class PinnedRenderTickCounter
-      extends net.minecraft.client.render.RenderTickCounter {
-
-    /** The fraction vanilla accumulated, restored before the next {@code beginRenderTick}. */
-    private float accumulatedTickDelta = Float.NaN;
+      extends net.minecraft.client.render.RenderTickCounter.Dynamic {
 
     PinnedRenderTickCounter(float fixedTimeStep, long lastTimeMillis) {
       super(fixedTimeStep, lastTimeMillis, delta -> delta);
     }
 
     @Override
-    public int beginRenderTick(long timeMillis) {
-      if (!Float.isNaN(accumulatedTickDelta)) {
-        this.tickDelta = accumulatedTickDelta;
-      }
-      int ticks = super.beginRenderTick(timeMillis);
-      accumulatedTickDelta = this.tickDelta;
-      this.tickDelta = 1.0f;
-      return ticks;
+    public float getTickDelta(boolean ignoreFreeze) {
+      return 1.0f;
     }
   }
 
@@ -803,7 +794,7 @@ public class YarnClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           try {
-            ConnectScreen.connect(mc().currentScreen, mc(), serverAddress, info, false);
+            ConnectScreen.connect(mc().currentScreen, mc(), serverAddress, info, false, null);
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.connect(%s:%s)",
@@ -1137,7 +1128,7 @@ public class YarnClientPlatform implements ClientPlatform {
     net.minecraft.block.BlockState state = mc.world.getBlockState(blockPos);
     net.minecraft.block.entity.BlockEntity blockEntity = mc.world.getBlockEntity(blockPos);
     java.util.Map<String, Object> nbt =
-        blockEntity == null ? null : nbtToMap(blockEntity.createNbt());
+        blockEntity == null ? null : nbtToMap(blockEntity.createNbt(mc.world.getRegistryManager()));
     return new net.minecheck.platform.api.BlockInfo(
         net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
@@ -1394,7 +1385,9 @@ public class YarnClientPlatform implements ClientPlatform {
     if (stack.isEmpty()) {
       return new net.minecheck.platform.api.SlotInfo(true, null, 0, null);
     }
-    net.minecraft.nbt.NbtCompound nbt = stack.getNbt();
+    net.minecraft.component.type.NbtComponent custom =
+        stack.get(net.minecraft.component.DataComponentTypes.CUSTOM_DATA);
+    net.minecraft.nbt.NbtCompound nbt = custom == null ? null : custom.copyNbt();
     return new net.minecheck.platform.api.SlotInfo(
         false,
         net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString(),

@@ -11,7 +11,7 @@ description = "Scripted automation of the Minecraft client and server for mod de
 [[dependencies.minecheck]]
 modId = "neoforge"
 type = "required"
-versionRange = "[20.4.253,)"
+versionRange = "[21.0.167,)"
 ordering = "NONE"
 side = "BOTH"
 

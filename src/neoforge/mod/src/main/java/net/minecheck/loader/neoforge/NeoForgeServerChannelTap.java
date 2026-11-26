@@ -11,11 +11,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.minecraft.network.Connection;
-import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.ConnectionProtocol;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 /**
@@ -23,10 +28,9 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
  * channel on the server (design note §5.7).
  *
  * <p>The mirror of {@link NeoForgeClientChannelTap}. A second handler cannot be given a channel an
- * existing one already receives ({@code SimpleChannel} and Fabric's addon are both single-receiver
- * per direction), so instead one netty {@code channelRead} handler is installed per player
- * connection, in front of vanilla's own {@link Connection}, and forwards a <em>copy</em> of each
- * serverbound payload's bytes to the script's observers.
+ * existing one already receives, so instead one netty {@code channelRead} handler is installed per
+ * player connection, in front of vanilla's own {@link Connection}, and forwards a <em>copy</em> of
+ * each serverbound payload's bytes to the script's observers.
  *
  * <p>Direction: serverbound only — the script is watching what <em>clients</em> send, exactly as
  * the client tap watches what the server sends. Connections are per player, so the tap is installed
@@ -38,10 +42,7 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
  * is always forwarded untouched, and nothing is retained.
  *
  * <p>{@code @Sharable} because the tap holds no per-connection state — its only state is the static
- * observer map — and one instance is installed on <em>every</em> player connection. Netty rejects
- * adding the same handler instance to a second pipeline otherwise ({@code is not a @Sharable
- * handler, so can't be added or removed multiple times}), which is why the second and later players
- * used to go untapped.
+ * observer map — and one instance is installed on <em>every</em> player connection.
  */
 @Sharable
 final class NeoForgeServerChannelTap extends ChannelInboundHandlerAdapter {
@@ -107,28 +108,47 @@ final class NeoForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (body == null) {
       return;
     }
-    List<Consumer<byte[]>> observers = OBSERVERS.get(body.id().toString());
+    ResourceLocation id = body.type().id();
+    List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty()) {
       return;
-    }
-    // Re-serialise the body into a buffer of our own: the payload object gives no byte accessor,
-    // and this leaves the packet untouched for its real handler.
-    byte[] payload;
-    FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-    try {
-      body.write(buf);
-      payload = new byte[buf.readableBytes()];
-      buf.readBytes(payload);
-    } finally {
-      buf.release();
     }
     MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
     if (server == null) {
       return;
     }
+    byte[] payload = bytes(body, id, server);
+    if (payload == null) {
+      return;
+    }
     for (Consumer<byte[]> observer : observers) {
       // Netty event loop -> server thread, where the script engine ticks.
       server.execute(() -> observer.accept(payload));
+    }
+  }
+
+  /** Minecheck's own payload carries its bytes; anything else is re-encoded with its codec. */
+  private static byte[] bytes(
+      CustomPacketPayload body, ResourceLocation id, MinecraftServer server) {
+    if (body instanceof NeoForgeNetworkPlatform.MinecheckPayload own) {
+      return own.payload();
+    }
+    StreamCodec<? super RegistryFriendlyByteBuf, ? extends CustomPacketPayload> codec =
+        NetworkRegistry.getCodec(id, ConnectionProtocol.PLAY, PacketFlow.SERVERBOUND);
+    if (codec == null) {
+      return null;
+    }
+    RegistryFriendlyByteBuf buf =
+        new RegistryFriendlyByteBuf(Unpooled.buffer(), server.registryAccess());
+    try {
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      StreamCodec<RegistryFriendlyByteBuf, CustomPacketPayload> raw = (StreamCodec) codec;
+      raw.encode(buf, body);
+      byte[] out = new byte[buf.readableBytes()];
+      buf.readBytes(out);
+      return out;
+    } finally {
+      buf.release();
     }
   }
 }

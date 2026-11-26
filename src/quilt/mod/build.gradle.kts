@@ -7,17 +7,17 @@ plugins {
   id("com.gradleup.shadow") version "8.3.0"
 }
 
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
 // One branch per Minecraft version; the version comes from gradle.properties (overridable with
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
-val emiVersion = "1.1.22+1.20.4+fabric"
+val emiVersion = "1.1.12+1.21+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(3) }
+  mappings { yarn(9) }
   quilt { loader("0.30.2") }
   mods {
     modImplementation {
@@ -43,6 +43,11 @@ val fabricClasses = fabricMain.output.classesDirs
 
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
+  // QFAPI bundles QSL base as a nested jar, and a development classpath does not expand
+  // Jar-in-Jar, so the entrypoint interface is compiled against the same artifact it ships.
+  maven("https://maven.quiltmc.org/repository/release") {
+    content { includeGroup("org.quiltmc.qsl.core") }
+  }
 }
 
 // quilt.mod.json is templated so its Minecraft bound cannot drift from gradle.properties.
@@ -63,8 +68,9 @@ dependencies {
   implementation(fabricClasses)
   add(
     "modImplementation",
-    "org.quiltmc.quilted-fabric-api:quilted-fabric-api:9.0.0-alpha.8+0.97.0-1.20.4",
+    "org.quiltmc.quilted-fabric-api:quilted-fabric-api:11.0.0-alpha.3+0.102.0-1.21",
   )
+  compileOnly("org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.1+1.21")
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
 

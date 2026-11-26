@@ -21,7 +21,9 @@ minecheck.runCommand("op " .. player)
 local g1 = minecheck.runCommand("give " .. player .. " minecraft:emerald 1")
 check(g1.result > 0, "emerald given")
 local g2 = minecheck.runCommand(
-  "give " .. player .. ' minecraft:iron_sword{display:{Name:\'{"text":"Minecheck Test Sword","italic":false}\'}} 1'
+  "give "
+    .. player
+    .. ' minecraft:iron_sword[minecraft:custom_name=\'{"text":"Minecheck Test Sword","italic":false}\',minecraft:custom_data={minecheck_test_sword:1b}] 1'
 )
 check(g2.result > 0, "named sword given")
 local g3 = minecheck.runCommand("give " .. player .. " minecraft:redstone 8")

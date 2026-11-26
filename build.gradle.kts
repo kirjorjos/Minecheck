@@ -42,7 +42,7 @@ fun configureSpotless(project: Project) {
 
 configureSpotless(project)
 
-version = "3.4.0"
+version = "3.5.0"
 
 group = "net.minecheck"
 
@@ -840,7 +840,8 @@ subprojects {
   group = rootProject.group
   version = rootProject.version
 
-  java { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }
+  // 1.21 ships class files javac 17 cannot read, so every module on this line targets 21.
+  java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
   repositories { mavenCentral() }
 
@@ -949,7 +950,9 @@ subprojects {
   tasks.withType<ProcessResources>().configureEach {
     val licence = providers.gradleProperty("licence")
     inputs.property("licence", licence)
-    filesMatching(listOf("fabric.mod.json", "quilt.mod.json", "**/mods.toml")) {
+    filesMatching(
+      listOf("fabric.mod.json", "quilt.mod.json", "**/mods.toml", "**/neoforge.mods.toml")
+    ) {
       filter { line: String -> line.replace("\${licence}", licence.get()) }
     }
   }
@@ -1075,10 +1078,12 @@ tasks.register<MinecheckProductionBoot>("bootPackagedJars") {
 
 /**
  * The regression test for issue #23: a distributable jar must carry its loader's *production*
- * member names. Building against development names (Mojang for Forge, Yarn for Fabric/Quilt) is
- * invisible in the Gradle dev runtime and fatal in a production instance — the released Forge jar
- * died on a real client's first tick with `NoSuchMethodError: 'Minecraft Minecraft.getInstance()'`
- * because production Forge resolves members by SRG name.
+ * member names. Building against development names (Yarn for Fabric/Quilt, Mojang for
+ * Forge/NeoForge) is invisible in the Gradle dev runtime and fatal in a production instance — the
+ * released Forge jar died on a real client's first tick with `NoSuchMethodError: 'Minecraft
+ * Minecraft.getInstance()'` because production Forge resolved members by SRG name. Forge 1.21 runs
+ * on Mojang names, so that remap is a no-op here and the probe asserts the jar stayed Mojang
+ * instead.
  *
  * The check is a namespace probe rather than a bytecode reference walk: the production namespaces
  * are exactly the machine-generated ones (`method_1234` / `field_5678` for intermediary, `m_12345_`
@@ -1089,9 +1094,11 @@ val productionNamespaces: Map<String, Regex?> =
   mapOf(
     "fabric" to Regex("(?:method|field)_[0-9]+"),
     "quilt" to Regex("(?:method|field)_[0-9]+"),
-    "forge" to Regex("[mf]_[0-9]+_"),
-    // NeoForge 20.2+ runs on the Mojang names the modules compile against, so there is nothing to
-    // remap and no production-namespace token to look for; null means "assert it stayed Mojang".
+    // Forge 1.21 and NeoForge 20.2+ run on the Mojang names the modules compile against, so there
+    // is
+    // nothing to remap and no production-namespace token to look for; null means "assert it stayed
+    // Mojang". On Forge that is visible in the build log as `detected empty remap path`.
+    "forge" to null,
     "neoforge" to null,
   )
 

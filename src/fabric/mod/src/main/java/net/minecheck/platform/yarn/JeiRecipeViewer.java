@@ -135,7 +135,7 @@ public final class JeiRecipeViewer implements RecipeViewer {
     probed = true;
     int crafting =
         manager
-            .getRecipeType(new Identifier("minecraft", "crafting"))
+            .getRecipeType(Identifier.of("minecraft", "crafting"))
             .map(type -> countFor(manager, type))
             .orElse(-1);
     LOG.info(

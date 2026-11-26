@@ -47,16 +47,16 @@ minecheck.expect(
   "sendPacketTo to an absent player returns false"
 )
 
--- A dedicated server can watch a free foreign channel on every loader: Fabric/Quilt register a
--- play-channel receiver for it (whose success means no other handler owns it), Forge installs a
--- frame tap on each player connection (see packet-tap-server).
+-- Only a frame tap can watch a channel on 1.21: Fabric/Quilt's typed payload API has no receiver
+-- for a channel whose owning mod did not register a codec, while Forge/NeoForge tap each player
+-- connection below the payload layer (see packet-tap-server).
+local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
 local observed = minecheck.watchPacketChannel("other-mod:test")
-minecheck.expect(observed, "a dedicated server can watch a free foreign channel")
+minecheck.expect(observed == taps, "a free foreign channel is observable only through the frame tap")
 
 -- Minecheck's own channel is already owned by its transport. Fabric/Quilt cannot install a second
 -- receiver for it and must say so; Forge's per-player frame tap sits below the channel and says yes.
 local own = minecheck.watchPacketChannel("minecheck:main")
-local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
 minecheck.expect(own == taps, "an already-owned channel is refused on Fabric/Quilt and tapped on Forge/NeoForge")
 if own then
   minecheck.registerPacketDecoder("minecheck:main", function()

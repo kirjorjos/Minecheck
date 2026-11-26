@@ -4,14 +4,11 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.network.PacketByteBuf;
-import net.minecraft.util.Identifier;
 
 /**
  * Client-side transport over {@code fabric-networking-api-v1}: sends to the connected server
@@ -20,7 +17,6 @@ import net.minecraft.util.Identifier;
 public class YarnClientNetworkPlatform implements NetworkPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
-  private static final Identifier CHANNEL = new Identifier("minecheck", "main");
 
   private volatile Consumer<MinecheckPacket> receiver = packet -> {};
   private final boolean registered;
@@ -28,14 +24,14 @@ public class YarnClientNetworkPlatform implements NetworkPlatform {
   public YarnClientNetworkPlatform() {
     registered =
         ClientPlayNetworking.registerGlobalReceiver(
-            CHANNEL,
-            (client, handler, buf, sender) -> {
-              byte[] payload = read(buf);
+            MinecheckPayload.ID,
+            (payload, context) -> {
+              byte[] data = payload.data();
               // Netty event loop -> client thread, where the script engine ticks.
-              client.execute(() -> deliver(payload));
+              context.client().execute(() -> deliver(data));
             });
     if (!registered) {
-      LOG.severe("Minecheck: failed to register the minecheck:main client channel");
+      LOG.severe("Minecheck: failed to register the minecheck:main client payload");
     }
   }
 
@@ -45,7 +41,7 @@ public class YarnClientNetworkPlatform implements NetworkPlatform {
       return false;
     }
     try {
-      return ClientPlayNetworking.canSend(CHANNEL);
+      return ClientPlayNetworking.canSend(MinecheckPayload.ID);
     } catch (RuntimeException e) {
       return false;
     }
@@ -57,7 +53,7 @@ public class YarnClientNetworkPlatform implements NetworkPlatform {
       return false;
     }
     try {
-      ClientPlayNetworking.send(CHANNEL, buffer(new MinecheckPacket(name, args).encode()));
+      ClientPlayNetworking.send(new MinecheckPayload(new MinecheckPacket(name, args).encode()));
       return true;
     } catch (RuntimeException e) {
       LOG.warning(
@@ -72,56 +68,23 @@ public class YarnClientNetworkPlatform implements NetworkPlatform {
   }
 
   /**
-   * Observes another mod's channel by registering a play-channel receiver for it.
+   * Reports that another mod's channel cannot be observed on this line.
    *
-   * <p>Fabric API keeps <em>exactly one</em> handler per channel per connection ({@code
-   * putIfAbsent} on the connection's addon; the global table is copied in first, so the two do not
-   * stack). That makes a live connection the only place the claim can be proved: a per-connection
-   * registration succeeds if and only if nothing — no mod handler, and nothing of Minecheck's own —
-   * already receives there. Registering globally first would report success even when an existing
-   * per-connection handler silently shadows us, and the script would then sit in {@code
-   * waitForPacket} until its timeout for a channel it never actually saw.
-   *
-   * <p>The global registration is still installed afterwards so the observation survives a
-   * reconnect: per-connection handlers are dropped with the connection, while the new addon copies
-   * the global table in {@code lateInit}.
+   * <p>1.20.5 replaced raw channel buffers with typed payloads: every receiver is registered for a
+   * payload {@code Id} with a codec both sides declared before the play phase. Fabric's networking
+   * API therefore has no receiver to install for an arbitrary channel name — the payload never
+   * reaches the game unless its own mod registered that id. Watching foreign channels remains
+   * possible on Forge and NeoForge, whose frame taps read the decoded packet frame; pretending to
+   * watch here would leave the script waiting out its timeout for payloads that cannot arrive.
    */
   @Override
   public boolean observeChannel(String channel, Consumer<byte[]> observer) {
-    Identifier id;
-    try {
-      id = new Identifier(channel);
-    } catch (RuntimeException e) {
-      return false;
-    }
-    ClientPlayNetworking.PlayChannelHandler handler =
-        (client, handler0, buf, sender) -> {
-          byte[] payload = read(buf);
-          client.execute(() -> observer.accept(payload));
-        };
-    boolean exclusive;
-    try {
-      exclusive = ClientPlayNetworking.registerReceiver(id, handler);
-    } catch (RuntimeException notInGame) {
-      // No play connection yet, so there is nothing to prove against: the global table is all we
-      // can consult, and it refuses a channel another mod has already registered there. A
-      // per-connection handler installed elsewhere can still shadow this one, so say so rather
-      // than let it look like a verified watch.
-      boolean registered = ClientPlayNetworking.registerGlobalReceiver(id, handler);
-      if (registered) {
-        LOG.info(
-            String.format(
-                "Minecheck: watching %s before a play connection exists — it takes effect on join,"
-                    + " where whether another handler owns that channel cannot be checked",
-                channel));
-      }
-      return registered;
-    }
-    if (!exclusive) {
-      return false;
-    }
-    ClientPlayNetworking.registerGlobalReceiver(id, handler);
-    return true;
+    LOG.warning(
+        String.format(
+            "Minecheck: cannot watch %s — 1.21 play payloads are typed, so a channel needs a codec"
+                + " registered by the mod that owns it",
+            channel));
+    return false;
   }
 
   private void deliver(byte[] payload) {
@@ -132,17 +95,5 @@ public class YarnClientNetworkPlatform implements NetworkPlatform {
           String.format(
               "Minecheck: dropped a malformed packet: %s", String.valueOf(e.getMessage())));
     }
-  }
-
-  private static byte[] read(PacketByteBuf buf) {
-    byte[] bytes = new byte[buf.readableBytes()];
-    buf.readBytes(bytes);
-    return bytes;
-  }
-
-  private static PacketByteBuf buffer(byte[] payload) {
-    PacketByteBuf buf = PacketByteBufs.create();
-    buf.writeBytes(payload);
-    return buf;
   }
 }

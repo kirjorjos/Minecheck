@@ -239,11 +239,7 @@ public class NeoForgeServerPlatform implements ServerPlatform {
     }
     if (entity instanceof Mob mob) {
       mob.finalizeSpawn(
-          level,
-          level.getCurrentDifficultyAt(entity.blockPosition()),
-          MobSpawnType.COMMAND,
-          null,
-          null);
+          level, level.getCurrentDifficultyAt(entity.blockPosition()), MobSpawnType.COMMAND, null);
     }
     if (!level.tryAddFreshEntityWithPassengers(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);
@@ -276,7 +272,7 @@ public class NeoForgeServerPlatform implements ServerPlatform {
     if (!tag.isEmpty()) {
       BlockEntity blockEntity = level.getBlockEntity(pos);
       if (blockEntity != null) {
-        blockEntity.load(tag);
+        blockEntity.loadWithComponents(tag, level.registryAccess());
       }
     }
     return true;
@@ -299,7 +295,9 @@ public class NeoForgeServerPlatform implements ServerPlatform {
     stack.setCount(count);
     CompoundTag tag = parseTag(nbt);
     if (!tag.isEmpty()) {
-      stack.setTag(tag);
+      stack.set(
+          net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+          net.minecraft.world.item.component.CustomData.of(tag));
     }
     ItemEntity itemEntity = new ItemEntity(level, x, y, z, stack);
     if (!level.addFreshEntity(itemEntity)) {

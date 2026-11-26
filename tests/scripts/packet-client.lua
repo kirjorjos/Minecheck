@@ -60,12 +60,12 @@ local handlerRan = minecheck.waitFor(function()
 end, 60)
 minecheck.expect(handlerRan, "onPacket saw the server push")
 
--- Foreign-channel observation. Fabric/Quilt register a play-channel receiver for the channel, which
--- succeeds only for a channel nothing else receives (Fabric's API keeps one handler per channel per
--- connection); Forge installs a frame tap below the channel. This channel is free, so every loader
--- must report it and hand payloads to a decoder.
+-- Foreign-channel observation. 1.21 play payloads are typed, so Fabric/Quilt have no receiver to
+-- install for a channel whose owning mod did not register a codec — not even for a free channel;
+-- Forge/NeoForge install a frame tap below the channel, which sees any of them.
 local observed = minecheck.watchPacketChannel("other-mod:test")
-minecheck.expect(observed, "watching a free foreign channel succeeds on this client")
+local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
+minecheck.expect(observed == taps, "a free foreign channel is observable only through the frame tap")
 if observed then
   minecheck.registerPacketDecoder("other-mod:test", function(bytes)
     return minecheck.reader(bytes).readVarInt()
@@ -77,7 +77,6 @@ end
 -- be false there; Forge's frame tap sits *below* the channel and reports true. The invariant is that
 -- a claimed channel is never reported as watched while the handler would be silently shadowed.
 local own = minecheck.watchPacketChannel("minecheck:main")
-local taps = minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge")
 minecheck.expect(own == taps, "an already-owned channel is refused on Fabric/Quilt and tapped on Forge/NeoForge")
 if own then
   minecheck.registerPacketDecoder("minecheck:main", function()

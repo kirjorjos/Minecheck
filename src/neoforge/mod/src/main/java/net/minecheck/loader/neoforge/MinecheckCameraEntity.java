@@ -25,7 +25,8 @@ final class MinecheckCameraEntity extends Entity {
   public void tick() {}
 
   @Override
-  protected void defineSynchedData() {}
+  protected void defineSynchedData(
+      net.minecraft.network.syncher.SynchedEntityData.Builder builder) {}
 
   @Override
   protected void readAdditionalSaveData(CompoundTag tag) {}

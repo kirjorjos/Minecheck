@@ -53,10 +53,6 @@ public class ForgeEntrypoint {
     if (!dedicated && ModList.get().isLoaded("jei")) {
       viewers.add(new ForgeJeiRecipeViewer());
     }
-    // REI's mod id is `roughlyenoughitems`; the provider reports the short id `rei`.
-    if (!dedicated && ModList.get().isLoaded("roughlyenoughitems")) {
-      viewers.add(new ForgeReiRecipeViewer());
-    }
 
     PlatformServices services =
         new PlatformServices() {

@@ -323,28 +323,20 @@ public class NeoForgeClientPlatform implements ClientPlatform {
   /**
    * A frame timer that hands the renderer a partial tick of 1 without touching the tick count.
    *
-   * <p>The same hazard as the Yarn counter: the field vanilla uses to accumulate tick time is the
-   * one the renderer reads, so a value written for the renderer would be carried into the next
-   * frame's arithmetic. Whatever vanilla computed is kept aside and restored before each call.
+   * <p>1.21's timer accumulates tick time privately, so the pinned subclass leaves {@code
+   * advanceTime} alone and overrides only the partial-tick accessor the renderer reads. Ticks are
+   * still scheduled exactly as vanilla does, and the accumulator cannot be corrupted by the
+   * override.
    */
-  private static final class PinnedTimer extends net.minecraft.client.Timer {
-
-    /** The partial tick vanilla computed, restored before the next {@code advanceTime}. */
-    private float accumulatedPartialTick = Float.NaN;
+  private static final class PinnedTimer extends net.minecraft.client.DeltaTracker.Timer {
 
     PinnedTimer(float msPerTick, long lastMs) {
       super(msPerTick, lastMs, delta -> delta);
     }
 
     @Override
-    public int advanceTime(long timeMs) {
-      if (!Float.isNaN(accumulatedPartialTick)) {
-        this.partialTick = accumulatedPartialTick;
-      }
-      int ticks = super.advanceTime(timeMs);
-      accumulatedPartialTick = this.partialTick;
-      this.partialTick = 1.0f;
-      return ticks;
+    public float getGameTimeDeltaPartialTick(boolean ignoreFreeze) {
+      return 1.0f;
     }
   }
 
@@ -715,7 +707,7 @@ public class NeoForgeClientPlatform implements ClientPlatform {
     }
     onClientThread(
         () -> {
-          mc.createWorldOpenFlows().checkForBackupAndLoad(worldName, () -> {});
+          mc.createWorldOpenFlows().openWorld(worldName, () -> {});
           proceedPastExperimentalWarning(mc);
         });
   }
@@ -820,7 +812,7 @@ public class NeoForgeClientPlatform implements ClientPlatform {
         () -> {
           try {
             Minecraft mc = mc();
-            ConnectScreen.startConnecting(mc.screen, mc, serverAddress, info, false);
+            ConnectScreen.startConnecting(mc.screen, mc, serverAddress, info, false, null);
             LOG.info(
                 String.format(
                     "joinServer: ConnectScreen.startConnecting(%s:%s)",
@@ -851,7 +843,20 @@ public class NeoForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void quit() {
-    onClientThread(mc()::stop);
+    onClientThread(
+        () -> {
+          Minecraft mc = mc();
+          // Stopping the client while the integrated server is still live hangs its shutdown on
+          // 1.21: `Minecraft.stop()` waits for the server thread, which never finishes saving.
+          // Leave the world through the same two steps as leaveWorld -- the level disconnect tells
+          // the integrated server to shut down, and disconnect(screen) then ticks until it has --
+          // so the final stop has no server left to wait for.
+          if (mc.level != null) {
+            mc.level.disconnect();
+            mc.disconnect(new TitleScreen());
+          }
+          mc.stop();
+        });
   }
 
   @Override
@@ -1151,7 +1156,9 @@ public class NeoForgeClientPlatform implements ClientPlatform {
     net.minecraft.world.level.block.entity.BlockEntity blockEntity =
         mc.level.getBlockEntity(blockPos);
     java.util.Map<String, Object> nbt =
-        blockEntity == null ? null : nbtToMap(blockEntity.saveWithoutMetadata());
+        blockEntity == null
+            ? null
+            : nbtToMap(blockEntity.saveWithoutMetadata(mc.level.registryAccess()));
     return new net.minecheck.platform.api.BlockInfo(
         BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(), nbt);
   }
@@ -1414,7 +1421,9 @@ public class NeoForgeClientPlatform implements ClientPlatform {
     if (stack.isEmpty()) {
       return new net.minecheck.platform.api.SlotInfo(true, null, 0, null);
     }
-    net.minecraft.nbt.CompoundTag nbt = stack.getTag();
+    net.minecraft.world.item.component.CustomData custom =
+        stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+    net.minecraft.nbt.CompoundTag nbt = custom == null ? null : custom.copyTag();
     return new net.minecheck.platform.api.SlotInfo(
         false,
         BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(),

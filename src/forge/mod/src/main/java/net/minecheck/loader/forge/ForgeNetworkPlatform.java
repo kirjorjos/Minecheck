@@ -33,7 +33,8 @@ public class ForgeNetworkPlatform implements NetworkPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
   private static final int VERSION = 1;
-  private static final ResourceLocation CHANNEL_ID = new ResourceLocation("minecheck", "main");
+  private static final ResourceLocation CHANNEL_ID =
+      ResourceLocation.fromNamespaceAndPath("minecheck", "main");
 
   private final boolean dedicated;
   private final boolean registered;

@@ -12,9 +12,11 @@ import java.util.logging.Logger;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.network.ForgePayload;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
 /**
@@ -101,8 +103,14 @@ final class ForgeServerChannelTap extends ChannelInboundHandlerAdapter {
     if (!(msg instanceof ServerboundCustomPayloadPacket packet)) {
       return;
     }
-    ResourceLocation id = packet.getName();
-    FriendlyByteBuf data = packet.getInternalData();
+    // Forge wraps every channel message in a ForgePayload, which keeps the bytes it decoded, so
+    // the tap can copy them without knowing the message type.
+    CustomPacketPayload body = packet.payload();
+    if (!(body instanceof ForgePayload forge)) {
+      return;
+    }
+    ResourceLocation id = forge.id();
+    FriendlyByteBuf data = forge.data();
     List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty() || data == null) {
       return;

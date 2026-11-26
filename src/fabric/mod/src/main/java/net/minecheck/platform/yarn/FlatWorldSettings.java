@@ -79,7 +79,7 @@ final class FlatWorldSettings {
     Declaration declared = declaration();
     List<FlatChunkGeneratorLayer> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
-      Block block = Registries.BLOCK.get(new Identifier(layer.block));
+      Block block = Registries.BLOCK.get(Identifier.tryParse(layer.block));
       layers.add(new FlatChunkGeneratorLayer(layer.height, block));
     }
     FlatChunkGeneratorConfig base =
@@ -88,7 +88,7 @@ final class FlatWorldSettings {
     // and the game refuses to write a level whose flat settings name one.
     RegistryEntry<Biome> biome =
         biomes
-            .getOptional(RegistryKey.of(RegistryKeys.BIOME, new Identifier(declared.biome)))
+            .getOptional(RegistryKey.of(RegistryKeys.BIOME, Identifier.tryParse(declared.biome)))
             .<RegistryEntry<Biome>>map(entry -> entry)
             .orElseGet(base::getBiome);
     // No structure overrides: the declaration describes bare ground, and the suites place the

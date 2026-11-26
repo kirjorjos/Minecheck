@@ -7,14 +7,15 @@ import net.minecheck.platform.api.net.MinecheckPacket;
 import net.minecheck.platform.api.net.NetworkPlatform;
 import net.minecheck.platform.api.net.PacketValue;
 import net.minecheck.platform.api.net.WireFormatException;
-import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
-import net.neoforged.neoforge.network.event.RegisterPayloadHandlerEvent;
-import net.neoforged.neoforge.network.registration.IPayloadRegistrar;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 /**
@@ -33,10 +34,12 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
 public class NeoForgeNetworkPlatform implements NetworkPlatform {
 
   private static final Logger LOG = Logger.getLogger("Minecheck");
+
   // One id for both directions, exactly like the Fabric and Forge transports use: scripts name the
   // channel `minecheck:main` and the frame tap matches on that name, so a per-direction id would
   // make every tap observe a channel that never carries a frame.
-  private static final ResourceLocation ID = new ResourceLocation("minecheck", "main");
+  static final CustomPacketPayload.Type<MinecheckPayload> TYPE =
+      new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath("minecheck", "main"));
 
   private final boolean dedicated;
   private volatile boolean registered;
@@ -47,23 +50,22 @@ public class NeoForgeNetworkPlatform implements NetworkPlatform {
   }
 
   /**
-   * Registers both payloads on the mod event bus. Called from the entrypoint's constructor, which
-   * is NeoForge's equivalent of putting a listener on the mod bus.
+   * Registers the payload on the mod event bus. Called from the entrypoint's constructor, which is
+   * NeoForge's equivalent of putting a listener on the mod bus.
    */
-  public void register(RegisterPayloadHandlerEvent event) {
+  public void register(RegisterPayloadHandlersEvent event) {
     try {
-      // The registrar argument is the payload namespace, which has to be this mod's id: any other
-      // value makes NeoForge reject ids like minecheck:main_c2s. No versioned(...) and no
+      // The registrar argument is the payload version, not the mod id. No version and no
       // mandatory(): a peer without Minecheck must still be able to join, and the channel is for
       // testing rather than for gameplay state.
-      IPayloadRegistrar registrar = event.registrar("minecheck").optional();
-      registrar.play(
-          ID,
-          MinecheckPayload::decode,
-          (payload, context) -> context.workHandler().execute(() -> deliver(payload.payload())));
+      PayloadRegistrar registrar = event.registrar("1").optional();
+      registrar.playBidirectional(
+          TYPE,
+          MinecheckPayload.CODEC,
+          (payload, context) -> context.enqueueWork(() -> deliver(payload.payload())));
       this.registered = true;
     } catch (RuntimeException e) {
-      LOG.severe(String.format("Minecheck: failed to register the minecheck:main payloads: %s", e));
+      LOG.severe(String.format("Minecheck: failed to register the minecheck:main payload: %s", e));
     }
   }
 
@@ -87,9 +89,9 @@ public class NeoForgeNetworkPlatform implements NetworkPlatform {
         if (server == null || server.getPlayerList().getPlayerCount() == 0) {
           return false;
         }
-        PacketDistributor.ALL.noArg().send(new MinecheckPayload(payload));
+        PacketDistributor.sendToAllPlayers(new MinecheckPayload(payload));
       } else {
-        PacketDistributor.SERVER.noArg().send(new MinecheckPayload(payload));
+        PacketDistributor.sendToServer(new MinecheckPayload(payload));
       }
       return true;
     } catch (RuntimeException e) {
@@ -114,7 +116,7 @@ public class NeoForgeNetworkPlatform implements NetworkPlatform {
     }
     byte[] payload = new MinecheckPacket(name, args).encode();
     try {
-      PacketDistributor.PLAYER.with(player).send(new MinecheckPayload(payload));
+      PacketDistributor.sendToPlayer(player, new MinecheckPayload(payload));
       return true;
     } catch (RuntimeException e) {
       LOG.warning(
@@ -160,23 +162,21 @@ public class NeoForgeNetworkPlatform implements NetworkPlatform {
     }
   }
 
-  /** The encoded {@link MinecheckPacket} frame, carried in either direction on {@link #ID}. */
+  /** The encoded {@link MinecheckPacket} frame, carried in either direction on {@link #TYPE}. */
   public record MinecheckPayload(byte[] payload) implements CustomPacketPayload {
 
-    @Override
-    public void write(FriendlyByteBuf buf) {
-      buf.writeBytes(payload);
-    }
+    public static final StreamCodec<RegistryFriendlyByteBuf, MinecheckPayload> CODEC =
+        StreamCodec.of(
+            (buf, value) -> buf.writeBytes(value.payload()),
+            buf -> {
+              byte[] data = new byte[buf.readableBytes()];
+              buf.readBytes(data);
+              return new MinecheckPayload(data);
+            });
 
     @Override
-    public ResourceLocation id() {
-      return ID;
-    }
-
-    public static MinecheckPayload decode(FriendlyByteBuf buf) {
-      byte[] payload = new byte[buf.readableBytes()];
-      buf.readBytes(payload);
-      return new MinecheckPayload(payload);
+    public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
+      return TYPE;
     }
   }
 }

@@ -87,7 +87,7 @@ public final class NeoForgeEmiRecipeViewer implements RecipeViewer {
 
   private static EmiRecipe recipe(String recipeId) {
     try {
-      return EmiApi.getRecipeManager().getRecipe(new ResourceLocation(recipeId));
+      return EmiApi.getRecipeManager().getRecipe(ResourceLocation.tryParse(recipeId));
     } catch (Throwable t) {
       LOG.log(Level.FINE, String.format("EMI recipe lookup failed for %s", recipeId), t);
       return null;

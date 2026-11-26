@@ -21,7 +21,6 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.TickEvent;
 
 @Mod("minecheck")
 public class NeoForgeEntrypoint {
@@ -147,24 +146,25 @@ public class NeoForgeEntrypoint {
    * the client can tick several times between two frames).
    */
   @SubscribeEvent
-  public void onRenderTick(TickEvent.RenderTickEvent event) {
-    if (event.phase == TickEvent.Phase.END && client != null && engine != null) {
+  public void onRenderFrame(net.neoforged.neoforge.client.event.RenderFrameEvent.Post event) {
+    if (client != null && engine != null) {
       NeoForgeClientPlatform.notifyFrameDrawn();
     }
   }
 
   @SubscribeEvent
-  public void onClientTick(TickEvent.ClientTickEvent event) {
-    if (event.phase == TickEvent.Phase.START) {
-      if (client != null) {
-        // The camera runs before the player does: it holds the body's rotation at the value the
-        // server last saw, and doing that after the player ticked would be after the packet that
-        // carries the change.
-        client.camera().tick();
-      }
-      return;
+  public void onClientTickPre(net.neoforged.neoforge.client.event.ClientTickEvent.Pre event) {
+    if (client != null) {
+      // The camera runs before the player does: it holds the body's rotation at the value the
+      // server last saw, and doing that after the player ticked would be after the packet that
+      // carries the change.
+      client.camera().tick();
     }
-    if (event.phase != TickEvent.Phase.END || client == null) {
+  }
+
+  @SubscribeEvent
+  public void onClientTickPost(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
+    if (client == null) {
       return;
     }
     ScriptEngine e = engine;
@@ -195,16 +195,14 @@ public class NeoForgeEntrypoint {
   }
 
   @SubscribeEvent
-  public void onServerTick(TickEvent.ServerTickEvent event) {
-    if (event.phase == TickEvent.Phase.START) {
-      // Before this tick's world work: a held clock parks the server thread here, which is what
-      // keeps the world from advancing between two captures.
-      TickClock.get().awaitTick();
-      return;
-    }
-    if (event.phase != TickEvent.Phase.END) {
-      return;
-    }
+  public void onServerTickPre(net.neoforged.neoforge.event.tick.ServerTickEvent.Pre event) {
+    // Before this tick's world work: a held clock parks the server thread here, which is what keeps
+    // the world from advancing between two captures.
+    TickClock.get().awaitTick();
+  }
+
+  @SubscribeEvent
+  public void onServerTickPost(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
     TickClock.get().countTick();
     if (serverPlatform == null) {
       return;

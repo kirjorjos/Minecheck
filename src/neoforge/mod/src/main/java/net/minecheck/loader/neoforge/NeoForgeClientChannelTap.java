@@ -13,20 +13,29 @@ import java.util.logging.Logger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.Connection;
-import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.ConnectionProtocol;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.ResourceLocation;
+import net.neoforged.neoforge.network.registration.NetworkRegistry;
 
 /**
  * Client-side <em>low-level frame tap</em>: the NeoForge-only way to observe another mod's channel
  * (design note §5.7).
  *
  * <p>No loader's play-channel API can hand a second handler the same channel: Fabric's addon and
- * FML's {@code SimpleChannel} are both single-receiver per channel per connection, and neither can
- * be shared or chained around. The only way to see a channel someone else already owns is therefore
- * to look at the play connection's decoded custom-payload frames, below the channel. This installs
- * one netty {@code channelRead} handler into that pipeline, in front of vanilla's own {@link
- * Connection}, and forwards a <em>copy</em> of the payload's bytes to the script's observers.
+ * NeoForge's payload registry are both single-handler per direction, and neither can be shared or
+ * chained around. The only way to see a channel someone else already owns is therefore to look at
+ * the play connection's decoded custom-payload frames, below the channel. This installs one netty
+ * {@code channelRead} handler into that pipeline, in front of vanilla's own {@link Connection}, and
+ * forwards a <em>copy</em> of the payload's bytes to the script's observers.
+ *
+ * <p>1.21 play payloads are typed, so a payload object has no byte accessor. NeoForge keeps the
+ * codec it registered for each id, which lets the tap re-serialise either Minecheck's own payload
+ * or another mod's from the object the packet already carries.
  *
  * <p>Deliberately defensive: every failure is swallowed (logged at most), the original message is
  * always forwarded untouched, and nothing is retained, so a bug here cannot break the connection.
@@ -88,24 +97,46 @@ final class NeoForgeClientChannelTap extends ChannelInboundHandlerAdapter {
     if (body == null) {
       return;
     }
-    List<Consumer<byte[]>> observers = OBSERVERS.get(body.id().toString());
+    ResourceLocation id = body.type().id();
+    List<Consumer<byte[]>> observers = OBSERVERS.get(id.toString());
     if (observers == null || observers.isEmpty()) {
       return;
     }
-    // Re-serialise the body into a buffer of our own: the payload object gives no byte accessor,
-    // and this leaves the packet untouched for its real handler.
-    byte[] payload;
-    FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-    try {
-      body.write(buf);
-      payload = new byte[buf.readableBytes()];
-      buf.readBytes(payload);
-    } finally {
-      buf.release();
+    byte[] payload = bytes(body, id);
+    if (payload == null) {
+      return;
     }
     Minecraft client = Minecraft.getInstance();
     for (Consumer<byte[]> observer : observers) {
       client.execute(() -> observer.accept(payload));
+    }
+  }
+
+  /** Minecheck's own payload carries its bytes; anything else is re-encoded with its codec. */
+  private static byte[] bytes(CustomPacketPayload body, ResourceLocation id) {
+    if (body instanceof NeoForgeNetworkPlatform.MinecheckPayload own) {
+      return own.payload();
+    }
+    Minecraft client = Minecraft.getInstance();
+    if (client.level == null) {
+      return null;
+    }
+    StreamCodec<? super RegistryFriendlyByteBuf, ? extends CustomPacketPayload> codec =
+        NetworkRegistry.getCodec(id, ConnectionProtocol.PLAY, PacketFlow.CLIENTBOUND);
+    if (codec == null) {
+      return null;
+    }
+    RegistryFriendlyByteBuf buf =
+        new RegistryFriendlyByteBuf(Unpooled.buffer(), client.level.registryAccess());
+    try {
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      StreamCodec<RegistryFriendlyByteBuf, CustomPacketPayload> raw = (StreamCodec) codec;
+      raw.encode(buf, body);
+      byte[] out = new byte[buf.readableBytes()];
+      buf.readBytes(out);
+      return out;
+    } finally {
+      buf.release();
     }
   }
 }

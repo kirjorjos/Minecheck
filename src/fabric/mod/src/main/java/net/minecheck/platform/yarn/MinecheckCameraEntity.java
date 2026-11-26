@@ -34,5 +34,5 @@ final class MinecheckCameraEntity extends Entity {
 
   /** No tracked data: the camera has no state a client and server would need to agree on. */
   @Override
-  protected void initDataTracker() {}
+  protected void initDataTracker(net.minecraft.entity.data.DataTracker.Builder builder) {}
 }
