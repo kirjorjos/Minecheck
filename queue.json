@@ -1,21 +1,13 @@
 {
-  "entries": [
-    {
-      "compare": "1.20.4/development",
-      "enqueued_at": "2026-11-26T00:28:20Z",
-      "fork": false,
-      "head_repo": "kirjorjos/Minecheck",
-      "id": "e-5",
-      "kind": "pr",
-      "overtaken": 0,
-      "pr": "278",
-      "seq": 5,
-      "sha": "b7f4ed15f243c6e2c09e6325ade2c48b944c6c28",
-      "target": "1.20.4/development",
-      "tier": 0
-    }
-  ],
-  "holder": null,
+  "entries": [],
+  "holder": {
+    "granted_at": "2026-11-26T00:28:32Z",
+    "id": "e-5",
+    "kind": "pr",
+    "lease_until": "2026-11-26T01:58:32Z",
+    "pr": "278",
+    "sha": "b7f4ed15f243c6e2c09e6325ade2c48b944c6c28"
+  },
   "last_runs": {
     "276": {
       "at": "2026-11-26T00:27:02Z",
