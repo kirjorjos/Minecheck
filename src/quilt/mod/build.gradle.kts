@@ -70,7 +70,10 @@ dependencies {
     "modImplementation",
     "org.quiltmc.quilted-fabric-api:quilted-fabric-api:11.0.0-alpha.3+0.102.0-1.21",
   )
-  compileOnly("org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.5+1.21.1")
+  // QSL base is the mod that provides the `init` entrypoint phase this loader's entrypoint is
+  // registered in. QFAPI nests it, and a dev classpath does not expand nested jars, so it has to
+  // be a mod of its own or the phase never runs and the run sits at the title screen.
+  add("modImplementation", "org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.5+1.21.1")
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
 
