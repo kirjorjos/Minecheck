@@ -21,7 +21,7 @@ val mcNext =
   }
 
 val jeiVersion = "19.8.2.99"
-val emiVersion = "1.1.12+1.21+neoforge"
+val emiVersion = "1.1.24+1.21.1+neoforge"
 val reiVersion = "16.0.799+neoforge"
 
 // REI's mods.toml makes both mandatory.
@@ -32,7 +32,7 @@ unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
   // Unimined expands the bare build number with the line's Minecraft version (1.21 -> 21.0).
-  neoForged { loader("167") }
+  neoForged { loader("268") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }

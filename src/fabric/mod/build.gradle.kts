@@ -22,7 +22,7 @@ val mcNext =
   }
 
 val jeiVersion = "19.8.2.99"
-val emiVersion = "1.1.12+1.21+fabric"
+val emiVersion = "1.1.24+1.21.1+fabric"
 val reiVersion = "16.0.799+fabric"
 
 // REI does not declare these in its fabric.mod.json, but its own bytecode references them
@@ -32,7 +32,7 @@ val architecturyVersion = "13.0.12+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(9) }
+  mappings { yarn(3) }
   fabric { loader("0.16.14") }
   mods { modImplementation {} }
   defaultRemapJar = false
@@ -93,7 +93,7 @@ val extractBasicMath =
 dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
-  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21")
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.116.18+1.21.1")
   add("modImplementation", "mezz.jei:jei-1.21-fabric:$jeiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
   add("modImplementation", "maven.modrinth:rei:$reiVersion") { isTransitive = false }

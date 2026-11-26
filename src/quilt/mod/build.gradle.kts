@@ -13,11 +13,11 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 // -Pminecraft_version=<mc>). Everything else that differs per version lives beside it.
 val mcVersion = property("minecraft_version") as String
 
-val emiVersion = "1.1.12+1.21+fabric"
+val emiVersion = "1.1.24+1.21.1+fabric"
 
 unimined.minecraft {
   version(mcVersion)
-  mappings { yarn(9) }
+  mappings { yarn(3) }
   quilt { loader("0.30.2") }
   mods {
     modImplementation {
@@ -70,7 +70,7 @@ dependencies {
     "modImplementation",
     "org.quiltmc.quilted-fabric-api:quilted-fabric-api:11.0.0-alpha.3+0.102.0-1.21",
   )
-  compileOnly("org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.1+1.21")
+  compileOnly("org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.5+1.21.1")
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
 

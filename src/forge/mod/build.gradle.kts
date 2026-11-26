@@ -22,10 +22,11 @@ val mcNext =
 
 val jeiVersion = "19.8.2.99"
 
+
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("51.0.33") }
+  minecraftForge { loader("52.1.20") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
