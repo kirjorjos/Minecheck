@@ -417,6 +417,10 @@ tasks.register("devHelperServerLaunch") {
     val server = tasks.named("runServer").get() as JavaExec
     writeDescriptor(server, out.get().asFile)
     ensureGameLayerRuntimeDeps(server)
+    // The lifecycle harness launches from this descriptor rather than through `runServer`, so the
+    // config watcher has to be turned off here too: the server that hangs on `stop` is the one the
+    // descriptor starts.
+    disableConfigWatcher(server)
   }
 }
 
