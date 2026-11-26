@@ -18,3 +18,12 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
+
+## Added
+
+- NeoForge support for 1.20.4: `MineCheck-neoforge-1.20.4-<version>` and its `-deobf` twin, from the same common code as Fabric, Quilt and Forge. The loader's transport is NeoForge's payload registry rather than a `SimpleChannel`, and `watchPacketChannel` observes another mod's channel through the same low-level frame tap Forge uses.
+- EMI, JEI and REI are all supported on NeoForge; EMI wins where it is installed, as it does on Fabric.
+
+## Changed
+
+- The packaged-jar check boots the NeoForge server as well, so every artifact in a release is proven to load.
