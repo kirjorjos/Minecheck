@@ -334,12 +334,41 @@ fun ensureGameLayerRuntimeDeps(runTask: JavaExec) {
 // before a dev run starts, so the patch belongs to the invocation that launches the game.
 gradle.projectsEvaluated { patchGameLayerClasspath() }
 
+/**
+ * Turns off FML's config file watcher in the run's `config/fml.toml`.
+ *
+ * <p>Forge 1.21 never stops NightConfig's `FileWatcher`: the watcher's scheduled executor is a
+ * non-daemon thread, so a dedicated server that ran `stop` saves every dimension and then sits in
+ * the JVM for ever while the harness waits for the process to exit. The watcher only reloads a
+ * config edited on disk mid-run, which no test does.
+ */
+fun disableConfigWatcher(runTask: JavaExec) {
+  val configDir = (runTask.workingDir as File).resolve("config")
+  configDir.mkdirs()
+  val file = configDir.resolve("fml.toml")
+  val lines = if (file.isFile) file.readLines().toMutableList() else mutableListOf()
+  val key = "disableConfigWatcher"
+  val index = lines.indexOfFirst { it.trimStart().startsWith(key) }
+  if (index >= 0) {
+    lines[index] = "$key = true"
+  } else {
+    lines.add("$key = true")
+  }
+  file.writeText(lines.joinToString("\n", postfix = "\n"))
+  logger.lifecycle("Minecheck: turned off FML's config watcher in {}", file)
+}
+
 tasks
   .matching { it.name == "runClient" || it.name == "runServer" }
   .configureEach {
     if (this is JavaExec) {
       val exec = this
-      doFirst { patchGameLayerClasspath(exec) }
+      doFirst {
+        patchGameLayerClasspath(exec)
+        if (exec.name == "runServer") {
+          disableConfigWatcher(exec)
+        }
+      }
     }
   }
 
@@ -388,6 +417,10 @@ tasks.register("devHelperServerLaunch") {
     val server = tasks.named("runServer").get() as JavaExec
     writeDescriptor(server, out.get().asFile)
     ensureGameLayerRuntimeDeps(server)
+    // The lifecycle harness launches from this descriptor rather than through `runServer`, so the
+    // config watcher has to be turned off here too: the server that hangs on `stop` is the one the
+    // descriptor starts.
+    disableConfigWatcher(server)
   }
 }
 

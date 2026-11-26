@@ -76,8 +76,13 @@ local SETTLE_MAX_TICKS = 400
 -- `1/1` in one run and `Page 1 of 2` in the next (#140). So the digest has to hold across a
 -- wall-clock gap too, not only across a tick step. The gap and the sample cap are both bounded: a
 -- scene that never holds still fails the run instead of writing a picture that is still moving.
+--
+-- The budget is the client's easing, not the scene's: after the clock is stepped, the lightmap
+-- walks toward its new target over the frames that follow, and 1.21 walks it slowly enough that a
+-- software renderer needs several seconds of them. The first pair of identical samples ends the
+-- wait, so a scene that converges at once pays for two.
 local SETTLE_STABLE_GAP = 0.5
-local SETTLE_STABLE_SAMPLES = 10
+local SETTLE_STABLE_SAMPLES = 40
 
 local function settle(label, opts)
   opts = opts or {}

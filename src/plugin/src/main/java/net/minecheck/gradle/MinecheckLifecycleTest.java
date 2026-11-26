@@ -670,6 +670,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     stage(serverRunDir.resolve("config/minecheck"), script, false);
 
     Files.deleteIfExists(serverResult);
+    disableForgeConfigWatcher();
     getLogger()
         .lifecycle(
             "Minecheck: [server] generating the shared world once (script={}) -> {}",
@@ -752,6 +753,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 ? "a pinned deterministic world"
                 : "the client-generated world from " + serverSetupDir);
     Files.deleteIfExists(serverResult);
+    disableForgeConfigWatcher();
     Process server =
         start(
             launcherBuilder(
@@ -1079,6 +1081,40 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   }
 
   // ---------------------------------------------------------------- staging
+
+  /**
+   * Re-states Forge 1.21's {@code disableConfigWatcher} in the server run dir before every launch.
+   *
+   * <p>Forge reads the key but drops it when it corrects {@code fml.toml}, so a file written once
+   * only covers the first server: the next process starts with no key and brings the watcher back.
+   * Its NightConfig executor is a non-daemon thread that FML never stops, so a server that ran
+   * {@code stop} saves every dimension and then keeps the JVM alive until the harness gives up. The
+   * watcher only reloads a config edited on disk mid-run, which no test does. Fabric and Quilt
+   * never read {@code fml.toml}, so the other loaders are left alone.
+   */
+  private void disableForgeConfigWatcher() throws IOException {
+    if (!getServerLoaderTask().get().startsWith(":forge-mod")) {
+      return;
+    }
+    Path file = Path.of(getServerRunDir().get()).resolve("config/fml.toml");
+    Files.createDirectories(file.getParent());
+    List<String> lines =
+        Files.isRegularFile(file) ? new ArrayList<>(Files.readAllLines(file)) : new ArrayList<>();
+    String key = "disableConfigWatcher";
+    int index = -1;
+    for (int i = 0; i < lines.size(); i++) {
+      if (lines.get(i).trim().startsWith(key)) {
+        index = i;
+        break;
+      }
+    }
+    if (index >= 0) {
+      lines.set(index, key + " = true");
+    } else {
+      lines.add(key + " = true");
+    }
+    Files.write(file, lines, StandardCharsets.UTF_8);
+  }
 
   /**
    * Stages scripts into {@code configDir/scripts} and writes {@code config.json} pointing {@code
