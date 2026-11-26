@@ -36,9 +36,10 @@ end
 phase("beacon-client.lua")
 phase("query-client.lua")
 phase("packet-client.lua")
--- The frame tap is a Forge-only observation path; on the other loaders the whole channel API is
--- exercised by packet-client above (`watchPacketChannel("minecheck:main")` is asserted there).
-if minecheck.isModLoaded("forge") then
+-- The frame tap is the observation path on the loaders whose channel API cannot hand out a second
+-- receiver (Forge, NeoForge); on Fabric/Quilt the whole channel API is exercised by packet-client
+-- above (`watchPacketChannel("minecheck:main")` is asserted there).
+if minecheck.isModLoaded("forge") or minecheck.isModLoaded("neoforge") then
   phase("packet-tap-client.lua")
 end
 phase("spawn-client.lua")

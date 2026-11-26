@@ -883,9 +883,11 @@ Opts in to observing **another mod's** channel: each payload is handed to that c
 |--------|-----------|
 | Fabric / Quilt | Registers a play-channel receiver for that channel. Fabric API keeps **exactly one handler per channel per connection** — a second registration for the same channel is refused — so this succeeds only for a channel nothing else receives. Minecheck checks it against the live connection (and against every online player on a dedicated server), so a channel that another mod already receives reports `false` instead of installing a handler that is silently shadowed. Minecheck's own `minecheck:main` is claimed by its own transport, so it is never observable this way. |
 | Forge (client) | Installs a low-level frame tap *below* the play connection: FML's `SimpleChannel` is single-receiver per direction too, but the tap copies each decoded custom payload's bytes as they pass, so it can observe a channel that something else already receives — `minecheck:main` included. Only the **clientbound** direction is captured. Returns `false` when there is no play connection yet. |
+| NeoForge (client) | Installs a low-level frame tap *below* the play connection: NeoForge's payload registry is single-handler per direction too, but the tap copies each decoded custom payload's bytes as they pass, so it can observe a channel that something else already receives — `minecheck:main` included. Only the **clientbound** direction is captured. Returns `false` when there is no play connection yet. |
 | Forge (dedicated server) | Taps every **player connection** the same way, capturing the **serverbound** direction (what clients send). Connections that appear later are picked up at login, so a channel can be watched before the client joins. Returns `false` only when no server is running yet. |
+| NeoForge (dedicated server) | Taps every **player connection** the same way, capturing the **serverbound** direction (what clients send). Connections that appear later are picked up at login, so a channel can be watched before the client joins. Returns `false` only when no server is running yet. |
 
-> **Observing a foreign channel in practice.** On Fabric/Quilt a mod that already receives its own channel cannot be observed: its handler owns the channel for that connection, and Fabric's API has no way to share or chain one. That is a rule of the loader's networking, not a Minecheck limitation, and it is why the Forge tap sits *below* the connection instead. Two consequences: traffic you control is better carried on Minecheck's own channel (`sendPacket`/`waitForPacket`), and a channel is only observable on Fabric/Quilt while nothing else receives on that side of the connection. Use [`isModLoaded`](#minecheckismodloadedmodid--boolean) to tell "the mod is absent" from "the mod owns its channel". |
+> **Observing a foreign channel in practice.** On Fabric/Quilt a mod that already receives its own channel cannot be observed: its handler owns the channel for that connection, and Fabric's API has no way to share or chain one. That is a rule of the loader's networking, not a Minecheck limitation, and it is why the Forge/NeoForge tap sits *below* the connection instead. Two consequences: traffic you control is better carried on Minecheck's own channel (`sendPacket`/`waitForPacket`), and a channel is only observable on Fabric/Quilt while nothing else receives on that side of the connection. Use [`isModLoaded`](#minecheckismodloadedmodid--boolean) to tell "the mod is absent" from "the mod owns its channel". |
 
 ### `minecheck.registerPacketDecoder(channel, decoderFn) → nil`
 
@@ -1720,29 +1722,29 @@ refused, and a missing file raises rather than silently doing nothing.
 
 ## Platform notes
 
-| Feature | Fabric | Quilt | Forge |
-|---------|--------|-------|-------|
-| `joinLocalWorld` | ✅ | ✅ | ✅ |
-| `createWorld` | ✅ | ✅ | ✅ |
-| `joinServer` | ✅ with retry | ✅ with retry | ✅ with retry |
-| `disconnect` | ✅ | ✅ | ✅ |
-| `quit` | ✅ | ✅ | ✅ |
-| `runCommand` | ✅ | ✅ | ✅ |
-| `waitForPlayer` / `waitForPlayerLeave` | ✅ | ✅ | ✅ |
-| `spawnEntity` / `spawnBlock` / `spawnItemDrop` / `spawnStructure` | ✅ | ✅ | ✅ |
-| `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ |
-| `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ |
-| `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ |
-| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` / `waitForChunk` | ✅ | ✅ | ✅ |
-| `loadChunk` (server: force-loads a chunk) | ✅ | ✅ | ✅ |
-| `isModLoaded` | ✅ | ✅ | ✅ |
-| `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI |
-| `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
-| `config` / `side` / `minecraftVersion` / `wait` / `sleepUntil` / `keyPress` / `lookAt` / `mouse` / `pressCombination` / `sendPacketTo` | ✅ | ✅ | ✅ |
-| Third-party plugins (`minecheck.ext`, `ServiceLoader` discovery) | ✅ | ✅ | ✅ |
-| Headless client (Xvfb) | ✅ | ✅ | ✅ |
+| Feature | Fabric | Quilt | Forge | NeoForge |
+|---------|--------|-------|-------|----------|
+| `joinLocalWorld` | ✅ | ✅ | ✅ | ✅ |
+| `createWorld` | ✅ | ✅ | ✅ | ✅ |
+| `joinServer` | ✅ with retry | ✅ with retry | ✅ with retry | ✅ with retry |
+| `disconnect` | ✅ | ✅ | ✅ | ✅ |
+| `quit` | ✅ | ✅ | ✅ | ✅ |
+| `runCommand` | ✅ | ✅ | ✅ | ✅ |
+| `waitForPlayer` / `waitForPlayerLeave` | ✅ | ✅ | ✅ | ✅ |
+| `spawnEntity` / `spawnBlock` / `spawnItemDrop` / `spawnStructure` | ✅ | ✅ | ✅ | ✅ |
+| `findEntities` (server) + `findNearbyEntities` (client) | ✅ | ✅ | ✅ | ✅ |
+| `openScreen` / `isScreenOpen` / `slotCount` / `getSlot` / `clickGui` / `moveItem` / `typeText` | ✅ | ✅ | ✅ | ✅ |
+| `press` / `pressCombination` / `mouse` / `keyPress` / `mousePress` | ✅ | ✅ | ✅ | ✅ |
+| `getPlayer` / `look` / `lookAt` / `getTargetBlock` / `getCrosshairBlock` / `getBlock` / `groundHeight` / `isChunkLoaded` / `waitForChunk` | ✅ | ✅ | ✅ | ✅ |
+| `loadChunk` (server: force-loads a chunk) | ✅ | ✅ | ✅ | ✅ |
+| `isModLoaded` | ✅ | ✅ | ✅ | ✅ |
+| `recipeViewer` / `getRecipeSlots` / `fillFromRecipe` (soft dep on a viewer) | ✅ EMI, JEI, REI | ✅ EMI | ✅ EMI, JEI, REI | ✅ EMI, JEI, REI |
+| `watchPacketChannel` (another mod's channel) | ✅ only channels nothing else receives | ✅ only channels nothing else receives | ✅ frame tap below the channel (client: clientbound; server: serverbound) | ✅ frame tap below the channel (client: clientbound; server: serverbound) |
+| `config` / `side` / `minecraftVersion` / `wait` / `sleepUntil` / `keyPress` / `lookAt` / `mouse` / `pressCombination` / `sendPacketTo` | ✅ | ✅ | ✅ | ✅ |
+| Third-party plugins (`minecheck.ext`, `ServiceLoader` discovery) | ✅ | ✅ | ✅ | ✅ |
+| Headless client (Xvfb) | ✅ | ✅ | ✅ | ✅ |
 
-Every action in this document is exercised end-to-end by a lifecycle suite on all three loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge (the script compares against `isModLoaded("forge")`).
+Every action in this document is exercised end-to-end by a lifecycle suite on all four loaders — none is only unit-tested. The `test*Input` suite carries the client-side odds and ends (`config`, `side`, `minecraftVersion`, `wait`, `sleepUntil`, `lookAt`, `mouse`, `pressCombination`, `keyPress`, `getCrosshairBlock`, 42 expects), and `test*Packet` covers `sendPacketTo`, `watchPacketChannel`'s per-loader answer and `side`/`config` on the dedicated server (15 client + 17 server expects). The `watchPacketChannel` pair is the one place a script asserts a **loader-dependent** result: a free channel must be observable everywhere, while Minecheck's own already-owned channel must be refused on Fabric/Quilt and tapped on Forge/NeoForge (the script compares against `isModLoaded("forge")` or `isModLoaded("neoforge")`).
 
 All functions share a single implementation in `common/`; loader-specific platform adapters live in each loader module and are selected at boot time.
 
