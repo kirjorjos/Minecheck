@@ -254,6 +254,58 @@ public final class ScriptEngine {
       }
     }
     reapCoroutineThreads();
+    if (server != null) {
+      scheduleConfigWatcherStop();
+    }
+  }
+
+  /**
+   * Stops NightConfig's config file watcher once this server has stopped.
+   *
+   * <p>Forge 1.21 never calls {@code FileWatcher.stop()}, and the watcher's scheduled executor is a
+   * non-daemon thread: a dedicated server that ran {@code stop} saves every dimension and then
+   * keeps the JVM alive, so the run is reported as hung long after the script passed. The watcher
+   * only reloads a config edited on disk mid-run, and the run is over. Its class is absent on
+   * Fabric and Quilt, where there is nothing to stop.
+   *
+   * <p>The wait is for the server thread to stop ticking, not a fixed delay: the last save is
+   * still running at that point, and stopping the watcher early would only let FML start it again
+   * during its own shutdown.
+   */
+  private void scheduleConfigWatcherStop() {
+    Thread watcher =
+        new Thread(
+            () -> {
+              long deadline = System.currentTimeMillis() + 120_000L;
+              try {
+                while (TickClock.get().running() && System.currentTimeMillis() < deadline) {
+                  Thread.sleep(500L);
+                }
+                // A second and a third pass: FML can start the watcher while it unloads configs.
+                for (int pass = 0; pass < 3; pass++) {
+                  Thread.sleep(2_000L);
+                  stopConfigWatcher();
+                }
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+            },
+            "Minecheck-config-watcher-stop");
+    watcher.setDaemon(true);
+    watcher.start();
+  }
+
+  private static void stopConfigWatcher() {
+    try {
+      Class<?> type = Class.forName("com.electronwill.nightconfig.core.file.FileWatcher");
+      Object instance = type.getMethod("defaultInstance").invoke(null);
+      type.getMethod("stop").invoke(instance);
+      LOG.info("Minecheck: stopped the config file watcher");
+    } catch (ClassNotFoundException | NoSuchMethodException e) {
+      // NightConfig is not on Fabric or Quilt; nothing started a watcher there.
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      LOG.log(java.util.logging.Level.WARNING, "Minecheck: could not stop the config file watcher", e);
+    }
   }
 
   /**
