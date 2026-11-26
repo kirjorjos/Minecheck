@@ -504,6 +504,19 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
     getLogger().lifecycle("Minecheck:   $ {}", String.join(" ", command));
     ProcessBuilder builder =
         new ProcessBuilder(command).directory(workdir.toFile()).redirectErrorStream(true);
+    // Forge and NeoForge install a `run.sh` that starts `java` from PATH, so the java this task was
+    // configured with has to be the one those scripts find: on CI, PATH is the JDK 17 the workflow
+    // installs, and the Forge bootstrap refuses to start a 1.21 server on it.
+    Path javaBin = Path.of(getJavaExecutable().get()).toAbsolutePath().getParent();
+    if (javaBin != null) {
+      Map<String, String> env = builder.environment();
+      String path = env.get("PATH");
+      env.put("PATH", javaBin + java.io.File.pathSeparator + (path == null ? "" : path));
+      Path home = javaBin.getParent();
+      if (home != null) {
+        env.put("JAVA_HOME", home.toString());
+      }
+    }
     try {
       builder.redirectOutput(logPath.toFile());
       Process process = builder.start();
