@@ -21,12 +21,12 @@ val mcNext =
   }
 
 val jeiVersion = "19.8.2.99"
-
+val forgeVersion = "52.1.20"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  minecraftForge { loader("52.1.20") }
+  minecraftForge { loader(forgeVersion) }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -35,6 +35,92 @@ repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
   maven("https://maven.blamejared.com") { content { includeGroup("mezz.jei") } }
 }
+
+/**
+ * The jar unimined hands Forge 52's dev launch: Minecraft and Forge already folded into one jar.
+ *
+ * <p>Recognised by the FG3 marker in its name; it is the only classpath entry that carries both
+ * `net/minecraft/client/main/Main` and `net/minecraftforge/common/MinecraftForge`. It is on the run
+ * tasks' classpath, not on the runtime configuration.
+ */
+fun mergedForgeDevJar(classpath: FileCollection): File =
+  classpath.files.firstOrNull { it.isFile && it.name.contains("MinecraftForge-FG3") }
+    ?: error("unimined produced no Forge 52 dev jar for $mcVersion")
+
+fun devRunTask(): JavaExec = tasks.named("runServer").get() as JavaExec
+
+/**
+ * The jar Forge 52's dev launch expects instead of the merged one: Minecraft alone.
+ *
+ * <p>FML splits the dev classpath into a `minecraft` module and a `net.minecraftforge.forge` mod,
+ * and finds them by name: the jar starting with `forge-<mc>-<forge>` becomes the game, and the jar
+ * holding `net/minecraftforge/common/MinecraftForge.class` becomes the mod. Handed one merged jar
+ * for both, FML builds the forge module out of Minecraft-only content and the client dies in
+ * `ImmediateWindowHandler$DummyProvider.updateModuleReads` with `NoSuchElementException`
+ * (issue #287). Stripping the forge packages and naming the result `minecraft` gives FML the two
+ * jars it looks for, with the real universal jar on the classpath as the mod.
+ */
+val forgeDevJarDir = layout.buildDirectory.dir("minecheck/forge-dev")
+
+val stageForgeDevMinecraftJar by
+  tasks.registering(Sync::class) {
+    group = "minecheck"
+    description = "Stages the Minecraft-only dev jar Forge 52's launch expects."
+    from({ zipTree(mergedForgeDevJar(devRunTask().classpath)) }) {
+      exclude(
+        "net/minecraftforge/**",
+        "META-INF/mods.toml",
+        "META-INF/MANIFEST.MF",
+        "META-INF/maven/**",
+      )
+    }
+    into(forgeDevJarDir.map { it.dir("minecraft") })
+    doLast {
+      val metaInf = forgeDevJarDir.get().dir("minecraft/META-INF").asFile
+      metaInf.mkdirs()
+      metaInf
+        .resolve("MANIFEST.MF")
+        .writeText("Manifest-Version: 1.0\nAutomatic-Module-Name: minecraft\n\n")
+    }
+  }
+
+val forgeDevMinecraftJar by
+  tasks.registering(Zip::class) {
+    group = "minecheck"
+    description = "Packages the Minecraft-only dev jar Forge 52's launch expects."
+    from(stageForgeDevMinecraftJar)
+    // FML locates the game jar by this prefix, so it cannot be renamed freely.
+    archiveFileName.set("forge-$mcVersion-$forgeVersion-minecheck-dev.jar")
+    destinationDirectory.set(forgeDevJarDir)
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+  }
+
+/** The real Forge jar, the mod FML builds `net.minecraftforge.forge` from. */
+val forgeUniversal: FileCollection =
+  configurations.detachedConfiguration(
+    dependencies.create("net.minecraftforge:forge:$mcVersion-$forgeVersion:universal")
+  )
+
+/**
+ * The classpath a Forge 52 dev run has to start with: the Minecraft-only jar in place of the merged
+ * one, and the universal jar after it for FML's mod locator to find.
+ */
+fun devRunClasspath(task: JavaExec): List<File> {
+  val merged = mergedForgeDevJar(task.classpath).absoluteFile
+  val minecraftOnly = forgeDevMinecraftJar.get().archiveFile.get().asFile
+  return task.classpath.files.map { if (it.absoluteFile == merged) minecraftOnly else it } +
+    forgeUniversal.files
+}
+
+/**
+ * FML's own bootstrap; unimined picks the union relauncher instead, which cannot start Forge 52.
+ */
+val forgeBootstrapMain = "net.minecraftforge.bootstrap.ForgeBootstrap"
+
+/** The run's JVM arguments without unimined's union relauncher setup. */
+fun devJvmArgs(task: JavaExec): List<String> =
+  task.jvmArgs.orEmpty().filterNot { it.startsWith("-DunionRelauncher.") }
 
 val commonOutput =
   project(":common")
@@ -245,11 +331,11 @@ private fun javaExecFields(task: JavaExec): Map<String, String> {
   fun join(c: List<String>): String =
     LaunchDescriptor.joinList(c.map { resolvePlaceholders(it, props) })
   return linkedMapOf(
-    "classpath" to task.classpath.asPath,
+    "classpath" to devRunClasspath(task).joinToString(File.pathSeparator),
     "javaExecutable" to task.javaLauncher.get().executablePath.asFile.absolutePath,
-    "mainClass" to task.mainClass.get(),
+    "mainClass" to forgeBootstrapMain,
     "args" to join(task.args.orEmpty()),
-    "jvmArgs" to join(task.jvmArgs.orEmpty()),
+    "jvmArgs" to join(devJvmArgs(task)),
     "systemProperties" to
       join(
         task.systemProperties.map { (k, v) ->
@@ -364,7 +450,15 @@ tasks
   .configureEach {
     if (this is JavaExec) {
       val exec = this
+      dependsOn(forgeDevMinecraftJar)
       doFirst {
+        // The split jar Forge 52 needs (see forgeDevMinecraftJar), started by FML's own bootstrap.
+        // unimined's union relauncher is not used: it loads the game into a null-parent
+        // classloader, where securemodules cannot see jdk.zipfs and the run dies on
+        // `ClassNotFoundException: jdk.nio.zipfs.ZipPath` before Minecraft starts.
+        exec.classpath = files(devRunClasspath(exec))
+        exec.mainClass.set(forgeBootstrapMain)
+        exec.jvmArgs = devJvmArgs(exec)
         patchGameLayerClasspath(exec)
         if (exec.name == "runServer") {
           disableConfigWatcher(exec)
@@ -400,6 +494,7 @@ tasks.register("devHelperClientLaunch") {
     tasks.named("classes"),
     configurations.runtimeClasspath,
     tasks.named("devHelperDownloadAssets"),
+    forgeDevMinecraftJar,
   )
   val out = layout.buildDirectory.file("minecheck/client-launch.txt")
   outputs.file(out)
@@ -411,7 +506,7 @@ tasks.register("devHelperClientLaunch") {
 }
 
 tasks.register("devHelperServerLaunch") {
-  dependsOn(tasks.named("classes"), configurations.runtimeClasspath)
+  dependsOn(tasks.named("classes"), configurations.runtimeClasspath, forgeDevMinecraftJar)
   val out = layout.buildDirectory.file("minecheck/server-launch.txt")
   outputs.file(out)
   doLast {
