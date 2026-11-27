@@ -5,6 +5,7 @@ import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.CreateWorldOptions;
 import net.minecraft.client.KeyMapping;
@@ -16,6 +17,7 @@ import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
+import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
@@ -848,14 +850,20 @@ public class NeoForgeClientPlatform implements ClientPlatform {
     onClientThread(
         () -> {
           Minecraft mc = mc();
-          // Stopping the client while the integrated server is still live hangs its shutdown on
-          // 1.21: `Minecraft.stop()` waits for the server thread, which never finishes saving.
-          // Leave the world through the same two steps as leaveWorld -- the level disconnect tells
-          // the integrated server to shut down, and disconnect(screen) then ticks until it has --
-          // so the final stop has no server left to wait for.
-          if (mc.level != null) {
-            mc.level.disconnect();
-            mc.disconnect(new TitleScreen());
+          // Hand the clock back first: a held clock parks the server inside its own tick, and
+          // 1.21.4's shutdown waits for that thread to finish.
+          TickClock.get().resume();
+          // Stop the integrated server before the client. `Minecraft.stop()` only ends the client
+          // loop; `Minecraft.destroy()` then ticks until the integrated server *thread* is dead
+          // (`isShutdown()`), so a server nobody asked to stop keeps the process alive. Halting it
+          // saves the world on its own thread, and the wait in `disconnect` sees it finish.
+          IntegratedServer server = mc.getSingleplayerServer();
+          if (server != null) {
+            server.halt(false);
+            // A halted server can still be parked in the loop's tick wait, whose condition only
+            // looks at the tick schedule. Wake it so it sees the stop, saves, and lets its thread
+            // die -- the client's own shutdown ticks until that thread is gone.
+            java.util.concurrent.locks.LockSupport.unpark(server.getRunningThread());
           }
           mc.stop();
         });

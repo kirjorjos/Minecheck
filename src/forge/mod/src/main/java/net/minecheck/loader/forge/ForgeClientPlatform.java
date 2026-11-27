@@ -845,7 +845,25 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void quit() {
-    onClientThread(mc()::stop);
+    onClientThread(
+        () -> {
+          Minecraft mc = mc();
+          // Hand the clock back first: a held clock parks the server inside its own tick, and the
+          // shutdown below waits for that server thread to finish.
+          net.minecheck.common.tick.TickClock.get().resume();
+          // `stop()` only ends the client's loop. The integrated server has its own thread, and the
+          // client's shutdown ticks until that thread is dead, so it has to be told to stop too --
+          // otherwise the JVM stays up after the client has finished saving.
+          net.minecraft.client.server.IntegratedServer server = mc.getSingleplayerServer();
+          if (server != null) {
+            server.halt(false);
+            // A halted server can still be parked in the loop's tick wait, whose condition only
+            // looks at the tick schedule. Wake it so it sees the stop, saves, and lets its thread
+            // die.
+            java.util.concurrent.locks.LockSupport.unpark(server.getRunningThread());
+          }
+          mc.stop();
+        });
   }
 
   @Override

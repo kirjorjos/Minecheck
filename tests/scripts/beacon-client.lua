@@ -212,7 +212,11 @@ if not viewerInstalled then
 end
 if viewerInstalled then
   local emiInstalled = minecheck.isModLoaded("emi")
-  local priorityId = emiInstalled and "emi" or "jei"
+  local jeiInstalled = minecheck.isModLoaded("jei")
+  -- Loaders register viewers in priority order (EMI, then JEI, then REI) and only register the ones
+  -- they find. A line need not ship all three -- 1.21.4 Fabric has REI alone -- so the expected
+  -- priority viewer is the first of them that is installed, not JEI by assumption.
+  local priorityId = emiInstalled and "emi" or (jeiInstalled and "jei" or "rei")
   check(viewer ~= nil, "priority recipe viewer bridged")
   check(viewer.id == priorityId, "priority recipe viewer is " .. priorityId .. " (got " .. tostring(viewer.id) .. ")")
   check(minecheck.recipeViewer("not_a_viewer") == nil, "an unknown viewer id is not bridged")
@@ -222,7 +226,6 @@ if viewerInstalled then
     check(minecheck.recipeViewer("emi").id == "emi", "emi can also be selected by id")
   end
 
-  local jeiInstalled = minecheck.isModLoaded("jei")
   if jeiInstalled then
     local jei = minecheck.recipeViewer("jei")
     check(jei ~= nil, "JEI is installed but not bridged")

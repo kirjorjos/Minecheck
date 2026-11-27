@@ -37,6 +37,8 @@ public class ServerPacingMixin {
       // Nothing to wait for: the loop's next iteration starts the next tick immediately.
       return;
     }
-    server.managedBlock(condition);
+    // The wait also ends when the server is no longer running: a server halted while parked here
+    // would otherwise keep its thread (and the whole JVM) alive after the client has stopped.
+    server.managedBlock(() -> condition.getAsBoolean() || !server.isRunning());
   }
 }

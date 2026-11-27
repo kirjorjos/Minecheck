@@ -16,6 +16,11 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  * loop's only pacing; the {@code runAllTasks()} before it still drains the queue. Skipping the
  * blocking call is the lever the old {@code Thread.sleep} redirect pulled.
  *
+ * <p>The wait also ends when the server is no longer running. Vanilla's condition only knows about
+ * the tick schedule, so a server halted while parked here — which is what a client quitting does,
+ * since 1.21.4's {@code Minecraft.destroy} ticks until the integrated server's thread is dead —
+ * could otherwise keep that thread (and the whole JVM) alive.
+ *
  * <p>{@code require = 0}: an optimisation may not break a launch. {@link TickClock#pacingHook()}
  * reports whether it bound, which is what {@code uncappedTicks} warns on.
  */
@@ -37,6 +42,6 @@ public class ServerPacingMixin {
       // Nothing to wait for: the loop's next iteration starts the next tick immediately.
       return;
     }
-    server.managedBlock(condition);
+    server.managedBlock(() -> condition.getAsBoolean() || !server.isRunning());
   }
 }

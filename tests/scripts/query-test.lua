@@ -200,7 +200,7 @@ check(minecheck.runCommand(swordCommand).result >= 1, "client player given a swo
 -- rejected as "allows more than one" even when only one entity matches).
 check(
   minecheck.runCommand(
-    "attribute @e[type=minecraft:vex,tag=punchtarget,limit=1] minecraft:generic.knockback_resistance base set 1.0"
+    "attribute @e[type=minecraft:vex,tag=punchtarget,limit=1] minecraft:knockback_resistance base set 1.0"
   ).result >= 1,
   "punch target is knockback-immune"
 )
