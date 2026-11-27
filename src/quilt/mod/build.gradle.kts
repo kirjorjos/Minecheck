@@ -1,5 +1,8 @@
 import java.io.File
 import java.io.FileInputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import net.minecheck.gradle.LaunchDescriptor
 
 plugins {
@@ -14,21 +17,14 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 val mcVersion = property("minecraft_version") as String
 
 val emiVersion = "1.1.24+1.21.1+fabric"
+val qslBaseVersion = "10.0.0-alpha.5+1.21.1"
+val qslBaseJarEntry = "META-INF/jars/qsl_base-$qslBaseVersion.jar"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { yarn(3) }
   quilt { loader("0.30.2") }
-  mods {
-    modImplementation {
-      // QFAPI's 1.19.3 modules ship their access wideners in the `named` (yarn) namespace instead
-      // of intermediary, so unimined's intermediary->yarn pass has nothing to convert and refuses
-      // the jar outright. Quilt Loader remaps an access widener from the namespace its header
-      // declares, so passing it through untouched is correct in the dev runtime (the game is
-      // already named there) and in production alike.
-      catchAWNamespaceAssertion()
-    }
-  }
+  mods { modImplementation {} }
   defaultRemapJar = false
 }
 
@@ -43,12 +39,22 @@ val fabricClasses = fabricMain.output.classesDirs
 
 repositories {
   maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
-  // QFAPI bundles QSL base as a nested jar, and a development classpath does not expand
-  // Jar-in-Jar, so the entrypoint interface is compiled against the same artifact it ships.
+  maven("https://maven.fabricmc.net/") { content { includeGroup("net.fabricmc.fabric-api") } }
   maven("https://maven.quiltmc.org/repository/release") {
     content { includeGroup("org.quiltmc.qsl.core") }
   }
 }
+
+/** QSL base as the mod jar the shipped jar nests, rather than as classes it unpacks. */
+val qslBaseMod: FileCollection =
+  configurations.detachedConfiguration(
+    dependencies.create("org.quiltmc.qsl.core:qsl_base:$qslBaseVersion") { isTransitive = false }
+  )
+
+// The nested mod has to exist on the development classpath too: Quilt Loader reads `jars` out of
+// quilt.mod.json there, and a listed jar it cannot open is a hard failure. The shipped archive gets
+// it from the shadow jar instead, which drops jar files it copies.
+tasks.processResources { from(qslBaseMod) { into("META-INF/jars") } }
 
 // quilt.mod.json is templated so its Minecraft bound cannot drift from gradle.properties.
 tasks.processResources {
@@ -58,7 +64,11 @@ tasks.processResources {
   inputs.property("minecraftVersion", mcVersion)
   inputs.property("modVersion", project.version)
   filesMatching("quilt.mod.json") {
-    expand("version" to project.version.toString(), "minecraft_version" to mcVersion)
+    expand(
+      "version" to project.version.toString(),
+      "minecraft_version" to mcVersion,
+      "qsl_base_jar" to qslBaseJarEntry,
+    )
   }
 }
 
@@ -66,20 +76,21 @@ dependencies {
   implementation(project(":common"))
   implementation(project(":platform-api"))
   implementation(fabricClasses)
-  add(
-    "modImplementation",
-    "org.quiltmc.quilted-fabric-api:quilted-fabric-api:11.0.0-alpha.3+0.102.0-1.21",
-  )
-  // QSL base is the mod that provides the `init` entrypoint phase this loader's entrypoint is
-  // registered in. QFAPI nests it, and a dev classpath does not expand nested jars, so it has to
-  // be a mod of its own or the phase never runs and the run sits at the title screen.
-  add("modImplementation", "org.quiltmc.qsl.core:qsl_base:10.0.0-alpha.5+1.21.1")
+  // Fabric API, not QFAPI: QFAPI has no 1.21.1 release (issue #288), so a 1.21.1 Quilt instance
+  // could not install what a jar built against it demands. Quilt Loader loads Fabric API as-is.
+  add("modImplementation", "net.fabricmc.fabric-api:fabric-api:0.116.18+1.21.1")
+  // QSL base provides the `init` entrypoint phase this loader's entrypoint is registered in. No
+  // QFAPI bundles it on 1.21.1, so the mod carries it as a nested jar and Quilt Loader expands it
+  // (see the shadow jar); it is compiled against but never on the runtime classpath, or it would
+  // load once as a nested mod and once as a classpath mod.
+  compileOnly("org.quiltmc.qsl.core:qsl_base:$qslBaseVersion")
   add("modImplementation", "maven.modrinth:emi:$emiVersion") { isTransitive = false }
 }
 
 tasks.shadowJar {
   dependsOn(project(":fabric-mod").tasks.named("classes"))
   configurations = listOf(project.configurations.runtimeClasspath.get())
+  inputs.files(qslBaseMod)
   // The deobfuscated view of the shipped jar: attached to the release for reading stack traces
   // and writing mixins, never loaded by a game.
   archiveClassifier.set("deobf")
@@ -89,10 +100,46 @@ tasks.shadowJar {
   exclude("net/fabricmc/fabric/**")
   exclude("org/quiltmc/qsl/**")
   exclude("org/quiltmc/quilted-fabric-api/**")
+  // The development classpath carries the nested mod as a plain file; Shadow would unpack it and
+  // collide with this mod's own quilt.mod.json. The shipped archive gets the jar from `doLast`.
+  exclude("META-INF/jars/**")
+
   exclude("dev/emi/**")
   exclude("assets/emi/**")
   exclude("emi.mixins.json")
   exclude("emi-fabric.mixins.json")
+  // QSL base ships beside the mod as a nested mod jar (Quilt Loader expands those): its `init`
+  // entrypoint phase is the only reason this loader's entrypoint is registered there, and no
+  // QFAPI build bundles it on 1.21.1. Shadow unpacks, or drops, every jar it copies, so the
+  // archive is extended after it is written.
+  doLast {
+    val jar = archiveFile.get().asFile
+    val nested = qslBaseMod.singleFile
+    check(nested.name == qslBaseJarEntry.substringAfterLast('/')) {
+      "quilt.mod.json names $qslBaseJarEntry but $nested resolved"
+    }
+    val entryName = qslBaseJarEntry
+    val rewritten = File(jar.parentFile, "${jar.name}.tmp")
+    ZipInputStream(jar.inputStream().buffered()).use { input ->
+      ZipOutputStream(rewritten.outputStream().buffered()).use { output ->
+        var entry = input.nextEntry
+        while (entry != null) {
+          if (entry.name != entryName) {
+            output.putNextEntry(ZipEntry(entry.name))
+            if (!entry.isDirectory) input.copyTo(output)
+            output.closeEntry()
+          }
+          input.closeEntry()
+          entry = input.nextEntry
+        }
+        output.putNextEntry(ZipEntry(entryName))
+        nested.inputStream().use { it.copyTo(output) }
+        output.closeEntry()
+      }
+    }
+    jar.delete()
+    rewritten.renameTo(jar)
+  }
 }
 
 tasks.named("jar") {

@@ -96,8 +96,6 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
   private static final Pattern FABRIC_API = Pattern.compile("fabric-api:fabric-api:([^\"\\s]+)");
   private static final Pattern QUILT_LOADER =
       Pattern.compile("quilt\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
-  private static final Pattern QFAPI =
-      Pattern.compile("quilted-fabric-api:quilted-fabric-api:([^\"\\s]+)");
   private static final Pattern FORGE_LOADER =
       Pattern.compile("minecraftForge\\s*\\{\\s*loader\\(\"([^\"]+)\"\\)");
   private static final Pattern NEOFORGE_LOADER =
@@ -210,9 +208,12 @@ public abstract class MinecheckProductionBoot extends DefaultTask {
       }
       case "quilt" -> {
         String loaderVersion = match(QUILT_LOADER, buildFile, "Quilt loader version", "quilt");
-        String api = match(QFAPI, buildFile, "QFAPI version", "quilt");
-        downloadModrinth("qsl", minecraft, api, mods.resolve("quilted-fabric-api-" + api + ".jar"));
-        getLogger().lifecycle("Minecheck:   loader {}, quilted-fabric-api {}", loaderVersion, api);
+        // A 1.21.1 Quilt instance installs Fabric API, not QFAPI: QFAPI ships no 1.21.1 build. The
+        // QSL base the jar's `init` entrypoint needs is nested in the jar, so nothing else is
+        // fetched here.
+        String api = match(FABRIC_API, buildFile, "Fabric API version", "quilt");
+        downloadModrinth("fabric-api", minecraft, api, mods.resolve("fabric-api-" + api + ".jar"));
+        getLogger().lifecycle("Minecheck:   loader {}, fabric-api {}", loaderVersion, api);
         command = installQuilt(workdir, minecraft, loaderVersion, java);
       }
       case "forge" -> {
