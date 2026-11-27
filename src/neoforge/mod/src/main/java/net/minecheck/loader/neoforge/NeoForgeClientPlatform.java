@@ -341,6 +341,23 @@ public class NeoForgeClientPlatform implements ClientPlatform {
     public float getGameTimeDeltaPartialTick(boolean ignoreFreeze) {
       return 1.0f;
     }
+
+    /**
+     * The fraction of a tick this frame took, which the lighting transition reads to ease the
+     * lightmap toward its target. Left at vanilla's value it eases by a different amount on every
+     * frame, and two runs of the same held scene landed on slightly different lightmap colours: a
+     * level of red and green across every lit pixel, which no baseline update can settle.
+     */
+    @Override
+    public float getGameTimeDeltaTicks() {
+      return 1.0f;
+    }
+
+    /** The same frame duration on the real-time clock, which the renderer also reads. */
+    @Override
+    public float getRealtimeDeltaTicks() {
+      return 1.0f;
+    }
   }
 
   @Override

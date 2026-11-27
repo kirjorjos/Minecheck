@@ -332,9 +332,10 @@ public class YarnClientPlatform implements ClientPlatform {
    *
    * <p>1.21's counter is a {@code Dynamic} whose accumulator is private, and its {@code
    * beginRenderTick} already returns the whole ticks and keeps the fraction for the next frame. So
-   * the pinned counter leaves that method alone and overrides only {@code getTickDelta} — the value
-   * the renderer reads — which keeps the accumulator vanilla's own and stops the client from
-   * running one tick per rendered frame on a slow software renderer.
+   * the pinned counter leaves that method alone and overrides only the accessors the renderer reads
+   * — {@code getTickDelta} and the frame duration the lighting transition eases by — which keeps
+   * the accumulator vanilla's own and stops the client from running one tick per rendered frame on
+   * a slow software renderer.
    */
   private static final class PinnedRenderTickCounter
       extends net.minecraft.client.render.RenderTickCounter.Dynamic {
@@ -345,6 +346,23 @@ public class YarnClientPlatform implements ClientPlatform {
 
     @Override
     public float getTickDelta(boolean ignoreFreeze) {
+      return 1.0f;
+    }
+
+    /**
+     * The fraction of a tick this frame took, which the lighting transition reads to ease the
+     * lightmap toward its target. Left at vanilla's value it eases by a different amount on every
+     * frame, and two runs of the same held scene landed on slightly different lightmap colours: a
+     * level of red and green across every lit pixel, which no baseline update can settle.
+     */
+    @Override
+    public float getLastFrameDuration() {
+      return 1.0f;
+    }
+
+    /** The same frame duration on the real-time clock, which the renderer also reads. */
+    @Override
+    public float getLastDuration() {
       return 1.0f;
     }
   }
