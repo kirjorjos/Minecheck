@@ -81,8 +81,14 @@ local SETTLE_MAX_TICKS = 400
 -- walks toward its new target over the frames that follow, and 1.21 walks it slowly enough that a
 -- software renderer needs several seconds of them. The first pair of identical samples ends the
 -- wait, so a scene that converges at once pays for two.
-local SETTLE_STABLE_GAP = 0.5
-local SETTLE_STABLE_SAMPLES = 40
+--
+-- The gap has to outlast that walk, or the samples agree while the picture is still one shade off
+-- and the same scene comes out a level apart between runs: on 1.21.4 the lightmap was still moving
+-- a second and a half after a 0.5s window called the scene settled, and only the samples past that
+-- point agreed run against run. Two and a half seconds clears that walk on a software renderer
+-- with room to spare, and the cap still bounds a scene that never stops moving.
+local SETTLE_STABLE_GAP = 2.5
+local SETTLE_STABLE_SAMPLES = 12
 
 local function settle(label, opts)
   opts = opts or {}
