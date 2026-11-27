@@ -12,9 +12,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -77,7 +77,7 @@ public class NeoForgeServerPlatform implements ServerPlatform {
     if (!registry.containsKey(id)) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
     }
-    T entry = registry.get(id);
+    T entry = registry.get(id).map(net.minecraft.core.Holder.Reference::value).orElse(null);
     if (entry == null) {
       throw new IllegalArgumentException("unknown " + what + ": " + id);
     }
@@ -230,6 +230,7 @@ public class NeoForgeServerPlatform implements ServerPlatform {
         EntityType.loadEntityRecursive(
             tag,
             level,
+            EntitySpawnReason.COMMAND,
             loaded -> {
               loaded.moveTo(x, y, z, loaded.getYRot(), loaded.getXRot());
               return loaded;
@@ -239,7 +240,10 @@ public class NeoForgeServerPlatform implements ServerPlatform {
     }
     if (entity instanceof Mob mob) {
       mob.finalizeSpawn(
-          level, level.getCurrentDifficultyAt(entity.blockPosition()), MobSpawnType.COMMAND, null);
+          level,
+          level.getCurrentDifficultyAt(entity.blockPosition()),
+          EntitySpawnReason.COMMAND,
+          null);
     }
     if (!level.tryAddFreshEntityWithPassengers(entity)) {
       throw new IllegalStateException("failed to spawn entity " + id);

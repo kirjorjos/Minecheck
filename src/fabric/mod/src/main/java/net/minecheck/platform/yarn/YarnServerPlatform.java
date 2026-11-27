@@ -216,6 +216,7 @@ public class YarnServerPlatform implements ServerPlatform {
         EntityType.loadEntityWithPassengers(
             compound,
             world,
+            SpawnReason.COMMAND,
             loaded -> {
               loaded.refreshPositionAndAngles(x, y, z, loaded.getYaw(), loaded.getPitch());
               return loaded;

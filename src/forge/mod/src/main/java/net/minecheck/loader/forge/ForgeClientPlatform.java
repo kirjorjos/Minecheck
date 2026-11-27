@@ -256,7 +256,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     long serverTime = overworld.getDayTime();
     if (level.getDayTime() != serverTime) {
-      level.setDayTime(serverTime);
+      // 1.21.2 replaced setDayTime with the packet handler's own entry point.
+      level.setTimeFromServer(level.getGameTime(), serverTime, false);
     }
   }
 
@@ -336,6 +337,23 @@ public class ForgeClientPlatform implements ClientPlatform {
 
     @Override
     public float getGameTimeDeltaPartialTick(boolean ignoreFreeze) {
+      return 1.0f;
+    }
+
+    /**
+     * The fraction of a tick this frame took, which the lighting transition reads to ease the
+     * lightmap toward its target. Left at vanilla's value it eases by a different amount on every
+     * frame, and two runs of the same held scene landed on slightly different lightmap colours: a
+     * level of red and green across every lit pixel, which no baseline update can settle.
+     */
+    @Override
+    public float getGameTimeDeltaTicks() {
+      return 1.0f;
+    }
+
+    /** The same frame duration on the real-time clock, which the renderer also reads. */
+    @Override
+    public float getRealtimeDeltaTicks() {
       return 1.0f;
     }
   }
@@ -551,7 +569,7 @@ public class ForgeClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getPixelRGBA(sx, sy);
+                pixels[at++] = source.getPixel(sx, sy);
               }
             }
             request.succeedFrame(
@@ -583,7 +601,7 @@ public class ForgeClientPlatform implements ClientPlatform {
             out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setPixelRGBA(dx, dy, pixels[dy * outWidth + dx]);
+                out.setPixel(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -655,7 +673,7 @@ public class ForgeClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setPixelRGBA(dx, dy, source.getPixelRGBA(sx, sy));
+                out.setPixel(dx, dy, source.getPixel(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -750,7 +768,7 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+    GameRules rules = new GameRules(net.minecraft.world.flag.FeatureFlags.VANILLA_SET);
     if (!options.mobSpawning()) {
       rules.getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
     }
@@ -789,8 +807,9 @@ public class ForgeClientPlatform implements ClientPlatform {
                     registryAccess -> {
                       WorldPreset preset =
                           registryAccess
-                              .registryOrThrow(Registries.WORLD_PRESET)
-                              .getOrThrow(WorldPresets.FLAT);
+                              .lookupOrThrow(Registries.WORLD_PRESET)
+                              .getOrThrow(WorldPresets.FLAT)
+                              .value();
                       FlatLevelSource flat =
                           new FlatLevelSource(
                               FlatWorldSettings.settings(
@@ -843,7 +862,25 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void quit() {
-    onClientThread(mc()::stop);
+    onClientThread(
+        () -> {
+          Minecraft mc = mc();
+          // Hand the clock back first: a held clock parks the server inside its own tick, and the
+          // shutdown below waits for that server thread to finish.
+          net.minecheck.common.tick.TickClock.get().resume();
+          // `stop()` only ends the client's loop. The integrated server has its own thread, and the
+          // client's shutdown ticks until that thread is dead, so it has to be told to stop too --
+          // otherwise the JVM stays up after the client has finished saving.
+          net.minecraft.client.server.IntegratedServer server = mc.getSingleplayerServer();
+          if (server != null) {
+            server.halt(false);
+            // A halted server can still be parked in the loop's tick wait, whose condition only
+            // looks at the tick schedule. Wake it so it sees the stop, saves, and lets its thread
+            // die.
+            java.util.concurrent.locks.LockSupport.unpark(server.getRunningThread());
+          }
+          mc.stop();
+        });
   }
 
   @Override

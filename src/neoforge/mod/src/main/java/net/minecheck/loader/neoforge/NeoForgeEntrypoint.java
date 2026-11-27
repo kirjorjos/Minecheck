@@ -49,13 +49,8 @@ public class NeoForgeEntrypoint {
     serverPlatform = dedicated ? new NeoForgeServerPlatform() : null;
     network = new NeoForgeNetworkPlatform(dedicated);
 
-    // Registration order is the priority order, and EMI wins where it is installed: it is the only
-    // one of the three that both displays and transfers a recipe on this line. It ships a NeoForge
-    // build for 1.20.4, so unlike Forge this loader prefers it over JEI.
+    // 1.21.4 has no EMI build for any loader, so JEI leads here and REI follows.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("emi")) {
-      viewers.add(new NeoForgeEmiRecipeViewer());
-    }
     if (!dedicated && ModList.get().isLoaded("jei")) {
       viewers.add(new NeoForgeJeiRecipeViewer());
     }

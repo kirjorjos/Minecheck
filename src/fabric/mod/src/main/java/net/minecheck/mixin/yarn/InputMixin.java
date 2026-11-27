@@ -24,19 +24,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class InputMixin {
 
   @Inject(method = "tick", at = @At("HEAD"), cancellable = true, require = 0)
-  // 1.19.2 added the partial tick to Input#tick; Mixin matches the descriptor exactly, so a
-  // handler taking only the boolean fails the whole config at join time.
-  private void minecheck$idlePlayer(boolean slowDown, float tickDelta, CallbackInfo ci) {
+  // 1.21.2 collapsed the key state into one `playerInput` record and dropped tick's partial-tick
+  // parameter; Mixin matches the descriptor exactly, so the handler takes no arguments now.
+  private void minecheck$idlePlayer(CallbackInfo ci) {
     if (!YarnCameraPlatform.steering()) {
       return;
     }
     Input input = (Input) (Object) this;
-    input.pressingForward = false;
-    input.pressingBack = false;
-    input.pressingLeft = false;
-    input.pressingRight = false;
-    input.jumping = false;
-    input.sneaking = false;
+    input.playerInput = net.minecraft.util.PlayerInput.DEFAULT;
     input.movementForward = 0.0f;
     input.movementSideways = 0.0f;
     ci.cancel();

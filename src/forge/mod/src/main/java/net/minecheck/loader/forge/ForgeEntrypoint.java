@@ -49,10 +49,8 @@ public class ForgeEntrypoint {
     serverPlatform = dedicated ? new ForgeServerPlatform() : null;
     network = new ForgeNetworkPlatform(dedicated);
 
+    // 1.21.4 publishes no Forge build of any of the three viewers, so this loader has none.
     final List<RecipeViewer> viewers = new ArrayList<>();
-    if (!dedicated && ModList.get().isLoaded("jei")) {
-      viewers.add(new ForgeJeiRecipeViewer());
-    }
 
     PlatformServices services =
         new PlatformServices() {

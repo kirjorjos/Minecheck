@@ -20,14 +20,14 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "19.8.2.99"
-val forgeVersion = "52.1.20"
+// 1.21.4 publishes no Forge build of JEI, so this loader ships without a recipe viewer.
+val forgeVersion = "54.1.22"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
   // Spelled out, not `loader(forgeVersion)`: the packaged-boot check reads this literal.
-  minecraftForge { loader("52.1.20") }
+  minecraftForge { loader("54.1.22") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -38,7 +38,7 @@ repositories {
 }
 
 /**
- * The jar unimined hands Forge 52's dev launch: Minecraft and Forge already folded into one jar.
+ * The jar unimined hands Forge 54's dev launch: Minecraft and Forge already folded into one jar.
  *
  * <p>Recognised by the FG3 marker in its name; it is the only classpath entry that carries both
  * `net/minecraft/client/main/Main` and `net/minecraftforge/common/MinecraftForge`. It is on the run
@@ -46,12 +46,12 @@ repositories {
  */
 fun mergedForgeDevJar(classpath: FileCollection): File =
   classpath.files.firstOrNull { it.isFile && it.name.contains("MinecraftForge-FG3") }
-    ?: error("unimined produced no Forge 52 dev jar for $mcVersion")
+    ?: error("unimined produced no Forge 54 dev jar for $mcVersion")
 
 fun devRunTask(): JavaExec = tasks.named("runServer").get() as JavaExec
 
 /**
- * The jar Forge 52's dev launch expects instead of the merged one: Minecraft alone.
+ * The jar Forge 54's dev launch expects instead of the merged one: Minecraft alone.
  *
  * <p>FML splits the dev classpath into a `minecraft` module and a `net.minecraftforge.forge` mod,
  * and finds them by name: the jar starting with `forge-<mc>-<forge>` becomes the game, and the jar
@@ -66,7 +66,7 @@ val forgeDevJarDir = layout.buildDirectory.dir("minecheck/forge-dev")
 val stageForgeDevMinecraftJar by
   tasks.registering(Sync::class) {
     group = "minecheck"
-    description = "Stages the Minecraft-only dev jar Forge 52's launch expects."
+    description = "Stages the Minecraft-only dev jar Forge 54's launch expects."
     from({ zipTree(mergedForgeDevJar(devRunTask().classpath)) }) {
       exclude(
         "net/minecraftforge/**",
@@ -88,7 +88,7 @@ val stageForgeDevMinecraftJar by
 val forgeDevMinecraftJar by
   tasks.registering(Zip::class) {
     group = "minecheck"
-    description = "Packages the Minecraft-only dev jar Forge 52's launch expects."
+    description = "Packages the Minecraft-only dev jar Forge 54's launch expects."
     from(stageForgeDevMinecraftJar)
     // FML locates the game jar by this prefix, so it cannot be renamed freely.
     archiveFileName.set("forge-$mcVersion-$forgeVersion-minecheck-dev.jar")
@@ -104,7 +104,7 @@ val forgeUniversal: FileCollection =
   )
 
 /**
- * The classpath a Forge 52 dev run has to start with: the Minecraft-only jar in place of the merged
+ * The classpath a Forge 54 dev run has to start with: the Minecraft-only jar in place of the merged
  * one, and the universal jar after it for FML's mod locator to find.
  */
 fun devRunClasspath(task: JavaExec): List<File> {
@@ -115,7 +115,7 @@ fun devRunClasspath(task: JavaExec): List<File> {
 }
 
 /**
- * FML's own bootstrap; unimined picks the union relauncher instead, which cannot start Forge 52.
+ * FML's own bootstrap; unimined picks the union relauncher instead, which cannot start Forge 54.
  */
 val forgeBootstrapMain = "net.minecraftforge.bootstrap.ForgeBootstrap"
 
@@ -151,7 +151,6 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  implementation("mezz.jei:jei-1.21-forge:$jeiVersion") { isTransitive = false }
 }
 
 tasks.shadowJar {
@@ -453,7 +452,7 @@ tasks
       val exec = this
       dependsOn(forgeDevMinecraftJar)
       doFirst {
-        // The split jar Forge 52 needs (see forgeDevMinecraftJar), started by FML's own bootstrap.
+        // The split jar Forge 54 needs (see forgeDevMinecraftJar), started by FML's own bootstrap.
         // unimined's union relauncher is not used: it loads the game into a null-parent
         // classloader, where securemodules cannot see jdk.zipfs and the run dies on
         // `ClassNotFoundException: jdk.nio.zipfs.ZipPath` before Minecraft starts.

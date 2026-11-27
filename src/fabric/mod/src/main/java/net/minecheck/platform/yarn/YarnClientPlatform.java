@@ -17,8 +17,8 @@ import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.resource.DataConfiguration;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.integrated.IntegratedServerLoader;
@@ -257,7 +257,8 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     long serverTime = overworld.getTimeOfDay();
     if (world.getTimeOfDay() != serverTime) {
-      world.setTimeOfDay(serverTime);
+      // 1.21.2 replaced setTimeOfDay with one call that also carries the game time.
+      world.setTime(world.getTime(), serverTime, false);
     }
   }
 
@@ -331,9 +332,10 @@ public class YarnClientPlatform implements ClientPlatform {
    *
    * <p>1.21's counter is a {@code Dynamic} whose accumulator is private, and its {@code
    * beginRenderTick} already returns the whole ticks and keeps the fraction for the next frame. So
-   * the pinned counter leaves that method alone and overrides only {@code getTickDelta} — the value
-   * the renderer reads — which keeps the accumulator vanilla's own and stops the client from
-   * running one tick per rendered frame on a slow software renderer.
+   * the pinned counter leaves that method alone and overrides only the accessors the renderer reads
+   * — {@code getTickDelta} and the frame duration the lighting transition eases by — which keeps
+   * the accumulator vanilla's own and stops the client from running one tick per rendered frame on
+   * a slow software renderer.
    */
   private static final class PinnedRenderTickCounter
       extends net.minecraft.client.render.RenderTickCounter.Dynamic {
@@ -344,6 +346,23 @@ public class YarnClientPlatform implements ClientPlatform {
 
     @Override
     public float getTickDelta(boolean ignoreFreeze) {
+      return 1.0f;
+    }
+
+    /**
+     * The fraction of a tick this frame took, which the lighting transition reads to ease the
+     * lightmap toward its target. Left at vanilla's value it eases by a different amount on every
+     * frame, and two runs of the same held scene landed on slightly different lightmap colours: a
+     * level of red and green across every lit pixel, which no baseline update can settle.
+     */
+    @Override
+    public float getLastFrameDuration() {
+      return 1.0f;
+    }
+
+    /** The same frame duration on the real-time clock, which the renderer also reads. */
+    @Override
+    public float getLastDuration() {
       return 1.0f;
     }
   }
@@ -559,7 +578,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getColor(sx, sy);
+                pixels[at++] = source.getColorArgb(sx, sy);
               }
             }
             request.succeedFrame(
@@ -591,7 +610,7 @@ public class YarnClientPlatform implements ClientPlatform {
             out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setColor(dx, dy, pixels[dy * outWidth + dx]);
+                out.setColorArgb(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -663,7 +682,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setColor(dx, dy, source.getColor(sx, sy));
+                out.setColorArgb(dx, dy, source.getColorArgb(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -731,7 +750,8 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+    GameRules rules =
+        new GameRules(net.minecraft.resource.featuretoggle.FeatureFlags.VANILLA_FEATURES);
     if (!options.mobSpawning()) {
       rules.get(GameRules.DO_MOB_SPAWNING).set(false, null);
     }
@@ -768,16 +788,19 @@ public class YarnClientPlatform implements ClientPlatform {
                     levelInfo,
                     new GeneratorOptions(options.seed(), options.structures(), false),
                     registries -> {
-                      Registry<DimensionType> dimensionTypes =
-                          registries.get(RegistryKeys.DIMENSION_TYPE);
+                      RegistryWrapper<DimensionType> dimensionTypes =
+                          registries.getOrThrow(RegistryKeys.DIMENSION_TYPE);
                       WorldPreset preset =
-                          registries.get(RegistryKeys.WORLD_PRESET).getOrThrow(WorldPresets.FLAT);
+                          registries
+                              .getOrThrow(RegistryKeys.WORLD_PRESET)
+                              .getOrThrow(WorldPresets.FLAT)
+                              .value();
                       FlatChunkGenerator flat =
                           new FlatChunkGenerator(
                               FlatWorldSettings.config(
-                                  registries.getWrapperOrThrow(RegistryKeys.BIOME),
-                                  registries.getWrapperOrThrow(RegistryKeys.STRUCTURE_SET),
-                                  registries.getWrapperOrThrow(RegistryKeys.PLACED_FEATURE)));
+                                  registries.getOrThrow(RegistryKeys.BIOME),
+                                  registries.getOrThrow(RegistryKeys.STRUCTURE_SET),
+                                  registries.getOrThrow(RegistryKeys.PLACED_FEATURE)));
                       return new DimensionOptionsRegistryHolder(
                           DimensionOptionsRegistryHolder.createRegistry(
                               dimensionTypes,
@@ -823,7 +846,25 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public void quit() {
-    onClientThread(mc()::stop);
+    onClientThread(
+        () -> {
+          MinecraftClient mc = mc();
+          // Hand the clock back first: a held clock parks the server inside its own tick, and the
+          // shutdown below waits for that server thread to finish.
+          net.minecheck.common.tick.TickClock.get().resume();
+          // `stop()` only ends the client's loop. The integrated server has its own thread, and the
+          // client's shutdown ticks until that thread is dead, so it has to be told to stop too --
+          // otherwise the JVM stays up after the client has finished saving.
+          MinecraftServer server = mc.getServer();
+          if (server != null) {
+            server.stop(false);
+            // A halted server can still be parked in the loop's tick wait, whose condition only
+            // looks at the tick schedule. Wake it so it sees the stop, saves, and lets its thread
+            // die.
+            java.util.concurrent.locks.LockSupport.unpark(server.getThread());
+          }
+          mc.stop();
+        });
   }
 
   @Override
