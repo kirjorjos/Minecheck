@@ -1,7 +1,7 @@
 package net.minecheck.mixin.mojmap;
 
 import net.minecheck.loader.forge.ForgeCameraPlatform;
-import net.minecraft.client.player.Input;
+import net.minecraft.client.player.ClientInput;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -15,23 +15,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>Same {@code require = 0} reasoning as the yarn mixin: a renamed method costs the freeze, not
  * the client.
  */
-@Mixin(Input.class)
+@Mixin(ClientInput.class)
 public class InputMixin {
 
-  // 1.19.2 added the partial tick to Input#tick, so the handler has to take both parameters;
-  // Mixin matches by descriptor and would otherwise find nothing to inject into.
+  // 1.21.2 renamed the class to ClientInput, collapsed the key state into one `keyPresses`
+  // record and dropped tick's partial-tick parameter; Mixin matches the descriptor exactly.
   @Inject(method = "tick", at = @At("HEAD"), cancellable = true, require = 0)
-  private void minecheck$idlePlayer(boolean movingSlowly, float partialTick, CallbackInfo ci) {
+  private void minecheck$idlePlayer(CallbackInfo ci) {
     if (!ForgeCameraPlatform.steering()) {
       return;
     }
-    Input input = (Input) (Object) this;
-    input.up = false;
-    input.down = false;
-    input.left = false;
-    input.right = false;
-    input.jumping = false;
-    input.shiftKeyDown = false;
+    ClientInput input = (ClientInput) (Object) this;
+    input.keyPresses = net.minecraft.world.entity.player.Input.EMPTY;
     input.forwardImpulse = 0.0f;
     input.leftImpulse = 0.0f;
     ci.cancel();

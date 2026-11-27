@@ -256,7 +256,8 @@ public class ForgeClientPlatform implements ClientPlatform {
     }
     long serverTime = overworld.getDayTime();
     if (level.getDayTime() != serverTime) {
-      level.setDayTime(serverTime);
+      // 1.21.2 replaced setDayTime with the packet handler's own entry point.
+      level.setTimeFromServer(level.getGameTime(), serverTime, false);
     }
   }
 
@@ -551,7 +552,7 @@ public class ForgeClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getPixelRGBA(sx, sy);
+                pixels[at++] = source.getPixel(sx, sy);
               }
             }
             request.succeedFrame(
@@ -583,7 +584,7 @@ public class ForgeClientPlatform implements ClientPlatform {
             out = new com.mojang.blaze3d.platform.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setPixelRGBA(dx, dy, pixels[dy * outWidth + dx]);
+                out.setPixel(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -655,7 +656,7 @@ public class ForgeClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setPixelRGBA(dx, dy, source.getPixelRGBA(sx, sy));
+                out.setPixel(dx, dy, source.getPixel(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -750,7 +751,7 @@ public class ForgeClientPlatform implements ClientPlatform {
 
   @Override
   public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+    GameRules rules = new GameRules(net.minecraft.world.flag.FeatureFlags.VANILLA_SET);
     if (!options.mobSpawning()) {
       rules.getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
     }
@@ -789,8 +790,9 @@ public class ForgeClientPlatform implements ClientPlatform {
                     registryAccess -> {
                       WorldPreset preset =
                           registryAccess
-                              .registryOrThrow(Registries.WORLD_PRESET)
-                              .getOrThrow(WorldPresets.FLAT);
+                              .lookupOrThrow(Registries.WORLD_PRESET)
+                              .getOrThrow(WorldPresets.FLAT)
+                              .value();
                       FlatLevelSource flat =
                           new FlatLevelSource(
                               FlatWorldSettings.settings(

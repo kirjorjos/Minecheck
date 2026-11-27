@@ -79,7 +79,11 @@ final class FlatWorldSettings {
     Declaration declared = declaration();
     List<FlatLayerInfo> layers = new ArrayList<>();
     for (Layer layer : declared.layers) {
-      Block block = BuiltInRegistries.BLOCK.get(ResourceLocation.parse(layer.block));
+      Block block =
+          BuiltInRegistries.BLOCK
+              .get(ResourceLocation.parse(layer.block))
+              .map(Holder.Reference::value)
+              .orElse(null);
       layers.add(new FlatLayerInfo(layer.height, block));
     }
     FlatLevelGeneratorSettings base =

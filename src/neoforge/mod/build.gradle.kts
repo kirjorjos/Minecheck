@@ -20,19 +20,19 @@ val mcNext =
     if (parts.size >= 2) "${parts[0]}.${parts[1].toInt() + 1}" else mcVersion
   }
 
-val jeiVersion = "19.8.2.99"
-val emiVersion = "1.1.24+1.21.1+neoforge"
-val reiVersion = "16.0.799+neoforge"
+// 1.21.4 publishes JEI and REI for NeoForge only among the three viewers (no EMI build at all).
+val jeiVersion = "20.0.0.4"
+val reiVersion = "18.0.815+neoforge"
 
 // REI's mods.toml makes both mandatory.
-val clothConfigVersion = "15.0.140+neoforge"
-val architecturyVersion = "13.0.12+neoforge"
+val clothConfigVersion = "17.0.144+neoforge"
+val architecturyVersion = "15.0.3+neoforge"
 
 unimined.minecraft {
   version(mcVersion)
   mappings { mojmap() }
-  // Unimined expands the bare build number with the line's Minecraft version (1.21 -> 21.0).
-  neoForged { loader("268") }
+  // Unimined expands the bare build number with the line's Minecraft version (1.21.4 -> 21.4).
+  neoForged { loader("161") }
   mods { modImplementation {} }
   defaultRemapJar = false
 }
@@ -70,8 +70,7 @@ dependencies {
   implementation("org.luaj:luaj-jse:3.0.1")
   implementation(files(commonOutput))
   implementation(files(platformApiOutput))
-  implementation("mezz.jei:jei-1.21-neoforge:$jeiVersion")
-  implementation("maven.modrinth:emi:$emiVersion") { isTransitive = false }
+  implementation("mezz.jei:jei-1.21.4-neoforge:$jeiVersion")
   implementation("maven.modrinth:rei:$reiVersion") { isTransitive = false }
   implementation("maven.modrinth:cloth-config:$clothConfigVersion") { isTransitive = false }
   implementation("maven.modrinth:architectury-api:$architecturyVersion") { isTransitive = false }

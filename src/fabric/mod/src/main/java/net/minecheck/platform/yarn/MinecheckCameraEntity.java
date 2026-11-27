@@ -25,6 +25,15 @@ final class MinecheckCameraEntity extends Entity {
   @Override
   public void tick() {}
 
+  /** Nothing can hurt a camera: 1.21.2 made damage abstract on Entity. */
+  @Override
+  public boolean damage(
+      net.minecraft.server.world.ServerWorld world,
+      net.minecraft.entity.damage.DamageSource source,
+      float amount) {
+    return false;
+  }
+
   /** Nothing worth saving: the pose lives in the platform and is rebuilt on attach. */
   @Override
   public void writeCustomDataToNbt(NbtCompound nbt) {}

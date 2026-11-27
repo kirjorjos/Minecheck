@@ -12,10 +12,10 @@ import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
 import mezz.jei.api.recipe.IFocusGroup;
 import mezz.jei.api.recipe.IRecipeManager;
 import mezz.jei.api.recipe.RecipeIngredientRole;
-import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.recipe.category.IRecipeCategory;
 import mezz.jei.api.recipe.transfer.IRecipeTransferHandler;
 import mezz.jei.api.recipe.transfer.IRecipeTransferManager;
+import mezz.jei.api.recipe.types.IRecipeType;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecheck.platform.api.GhostSlot;
 import net.minecheck.platform.api.RecipeViewer;
@@ -150,9 +150,10 @@ public final class NeoForgeJeiRecipeViewer implements RecipeViewer {
 
   /** Diagnostic helper: how many recipes JEI holds for a given recipe type. */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  private static int countFor(IRecipeManager manager, RecipeType<?> type) {
+  private static int countFor(IRecipeManager manager, IRecipeType<?> type) {
     int n = 0;
-    Iterator<?> it = manager.createRecipeLookup((RecipeType) type).includeHidden().get().iterator();
+    Iterator<?> it =
+        manager.createRecipeLookup((IRecipeType) type).includeHidden().get().iterator();
     while (it.hasNext()) {
       it.next();
       n++;

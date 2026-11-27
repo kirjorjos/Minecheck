@@ -24,6 +24,15 @@ final class MinecheckCameraEntity extends Entity {
   @Override
   public void tick() {}
 
+  /** Nothing can hurt a camera: 1.21.2 made hurtServer abstract on Entity. */
+  @Override
+  public boolean hurtServer(
+      net.minecraft.server.level.ServerLevel level,
+      net.minecraft.world.damagesource.DamageSource source,
+      float amount) {
+    return false;
+  }
+
   @Override
   protected void defineSynchedData(
       net.minecraft.network.syncher.SynchedEntityData.Builder builder) {}

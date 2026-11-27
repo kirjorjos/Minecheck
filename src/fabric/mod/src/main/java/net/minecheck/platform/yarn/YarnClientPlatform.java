@@ -17,8 +17,8 @@ import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.resource.DataConfiguration;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.integrated.IntegratedServerLoader;
@@ -257,7 +257,8 @@ public class YarnClientPlatform implements ClientPlatform {
     }
     long serverTime = overworld.getTimeOfDay();
     if (world.getTimeOfDay() != serverTime) {
-      world.setTimeOfDay(serverTime);
+      // 1.21.2 replaced setTimeOfDay with one call that also carries the game time.
+      world.setTime(world.getTime(), serverTime, false);
     }
   }
 
@@ -559,7 +560,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                pixels[at++] = source.getColor(sx, sy);
+                pixels[at++] = source.getColorArgb(sx, sy);
               }
             }
             request.succeedFrame(
@@ -591,7 +592,7 @@ public class YarnClientPlatform implements ClientPlatform {
             out = new net.minecraft.client.texture.NativeImage(outWidth, outHeight, false);
             for (int dy = 0; dy < outHeight; dy++) {
               for (int dx = 0; dx < outWidth; dx++) {
-                out.setColor(dx, dy, pixels[dy * outWidth + dx]);
+                out.setColorArgb(dx, dy, pixels[dy * outWidth + dx]);
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -663,7 +664,7 @@ public class YarnClientPlatform implements ClientPlatform {
               int sy = y + (int) ((long) dy * cropHeight / outHeight);
               for (int dx = 0; dx < outWidth; dx++) {
                 int sx = x + (int) ((long) dx * cropWidth / outWidth);
-                out.setColor(dx, dy, source.getColor(sx, sy));
+                out.setColorArgb(dx, dy, source.getColorArgb(sx, sy));
               }
             }
             java.nio.file.Path directory = target.getParent();
@@ -731,7 +732,8 @@ public class YarnClientPlatform implements ClientPlatform {
 
   @Override
   public void createWorld(CreateWorldOptions options) {
-    GameRules rules = new GameRules();
+    GameRules rules =
+        new GameRules(net.minecraft.resource.featuretoggle.FeatureFlags.VANILLA_FEATURES);
     if (!options.mobSpawning()) {
       rules.get(GameRules.DO_MOB_SPAWNING).set(false, null);
     }
@@ -768,16 +770,19 @@ public class YarnClientPlatform implements ClientPlatform {
                     levelInfo,
                     new GeneratorOptions(options.seed(), options.structures(), false),
                     registries -> {
-                      Registry<DimensionType> dimensionTypes =
-                          registries.get(RegistryKeys.DIMENSION_TYPE);
+                      RegistryWrapper<DimensionType> dimensionTypes =
+                          registries.getOrThrow(RegistryKeys.DIMENSION_TYPE);
                       WorldPreset preset =
-                          registries.get(RegistryKeys.WORLD_PRESET).getOrThrow(WorldPresets.FLAT);
+                          registries
+                              .getOrThrow(RegistryKeys.WORLD_PRESET)
+                              .getOrThrow(WorldPresets.FLAT)
+                              .value();
                       FlatChunkGenerator flat =
                           new FlatChunkGenerator(
                               FlatWorldSettings.config(
-                                  registries.getWrapperOrThrow(RegistryKeys.BIOME),
-                                  registries.getWrapperOrThrow(RegistryKeys.STRUCTURE_SET),
-                                  registries.getWrapperOrThrow(RegistryKeys.PLACED_FEATURE)));
+                                  registries.getOrThrow(RegistryKeys.BIOME),
+                                  registries.getOrThrow(RegistryKeys.STRUCTURE_SET),
+                                  registries.getOrThrow(RegistryKeys.PLACED_FEATURE)));
                       return new DimensionOptionsRegistryHolder(
                           DimensionOptionsRegistryHolder.createRegistry(
                               dimensionTypes,
