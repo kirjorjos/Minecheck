@@ -1336,6 +1336,15 @@ Returns `"client"` or `"server"` depending on which side the script is running o
 
 ---
 
+### `minecheck.playerName() → string | nil`
+
+The player name the build pinned for this run — the lifecycle task's `playerName` property, passed to
+the game as `-Dminecheck.playerName`. A server script uses it so it waits for the player that
+actually joins instead of repeating a literal that a different dev config silently breaks. `nil`
+when the build pinned none, so a shared script writes `local name = minecheck.playerName() or "Dev"`.
+
+---
+
 ### `minecheck.minecraftVersion() → string`
 
 Returns the Minecraft version string, e.g. `"1.18.2"`.
