@@ -1294,7 +1294,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     server.execute(
-        () -> server.getCommandManager().executeWithPrefix(server.getCommandSource(), command));
+        () -> server.getCommandManager().execute(server.getCommandSource(), command));
     return true;
   }
 
