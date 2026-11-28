@@ -16,20 +16,6 @@
     },
     {
       "compare": "1.21.1/development",
-      "enqueued_at": "2026-11-28T03:21:04Z",
-      "fork": false,
-      "head_repo": "kirjorjos/Minecheck",
-      "id": "e-21",
-      "kind": "pr",
-      "overtaken": 0,
-      "pr": "308",
-      "seq": 21,
-      "sha": "d6fdfaaf4a6e9cd808590beaba3b3c71af1d2650",
-      "target": "1.21.1/development",
-      "tier": 0
-    },
-    {
-      "compare": "1.21.1/development",
       "enqueued_at": "2026-11-28T03:21:16Z",
       "fork": false,
       "head_repo": "kirjorjos/Minecheck",
