@@ -195,6 +195,15 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<Boolean> getScreenshotProfile();
 
+  /**
+   * When true, the staged {@code config.json} lets the script own the server's tick loop ({@code
+   * ownTickClock}), so a gameplay suite can settle a scene by stepping a fixed tick count without
+   * turning on the screenshot profile — which used to be the only thing that wrote the key.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getOwnTickClock();
+
   /** Captured frame width the profile pins the window to (default {@code 854}). */
   @Input
   @Optional
@@ -1127,9 +1136,13 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       config.put("screenshotGuiScale", screenshotGuiScale());
       config.put("screenshotScale", screenshotScale());
       config.put("screenshotChatVisible", screenshotChatVisible());
+    }
+    if (screenshotProfile() || getOwnTickClock().getOrElse(false)) {
       // The suite owns the clock: it settles a scene by stepping a fixed tick count and captures
       // while the world is held, so a frame is a function of the script rather than of how fast the
-      // runner drew frames. Every other run keeps vanilla's twenty ticks a second.
+      // runner drew frames. A gameplay suite that needs tick counts asks for the same thing with
+      // the task's ownTickClock property, without the capture profile. Every other run keeps
+      // vanilla's twenty ticks a second.
       config.put("ownTickClock", true);
     }
     Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
