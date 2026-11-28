@@ -18,22 +18,3 @@ Suggested shape, delete what you do not use:
 
 ## Fixed
 -->
-
-## Added
-
-- `minecheck.check` and `minecheck.checkEq`: assertions that record a result and end the run, so a
-  failure names itself instead of timing out.
-- `minecheck.phase`: a phase budgets its ticks, not just its waits, and every `expect` is attributed
-  to the phase it ran in.
-- `minecheck.ownTickClock`: a script can own the tick clock without the screenshot profile.
-- `minecheck.getWorldTime` / `setWorldTime` / `getWeather` / `setWeather`: read and pin the world's
-  time and weather from a script (client side).
-- `minecheck.worldExists`, `minecheck.deleteWorld`, `createWorld({ reuse = true })` and the
-  `keepWorld` task property: a local world can survive between runs instead of being regenerated.
-- `minecheck.startServer` / `serverStatus` / `waitForServer` / `stopServer`: a client script starts
-  and stops the dedicated server itself, after the integrated phases have passed.
-
-## Changed
-
-- The launch profile pins player name, view distance, simulation distance, spawn protection,
-  gamemode, difficulty and max tick time, defaulting to vanilla's values.
