@@ -314,7 +314,7 @@ public final class ForgeClientPlatform extends ClientPlatformBase {
   @Override
   public Long worldTime() {
     Minecraft client = mc();
-    return client.world == null ? null : client.world.getWorldTime() % 24000L;
+    return client.theWorld == null ? null : client.theWorld.getWorldTime() % 24000L;
   }
 
   @Override
@@ -325,13 +325,13 @@ public final class ForgeClientPlatform extends ClientPlatformBase {
   @Override
   public String weather() {
     Minecraft client = mc();
-    if (client.world == null) {
+    if (client.theWorld == null) {
       return null;
     }
-    if (client.world.isThundering()) {
+    if (client.theWorld.isThundering()) {
       return "thunder";
     }
-    return client.world.isRaining() ? "rain" : "clear";
+    return client.theWorld.isRaining() ? "rain" : "clear";
   }
 
   @Override
@@ -349,7 +349,7 @@ public final class ForgeClientPlatform extends ClientPlatformBase {
     if (server == null) {
       return false;
     }
-    server.addScheduledTask(() -> server.getCommandManager().executeCommand(server, command));
+    server.getCommandManager().executeCommand(server, command);
     return true;
   }
 

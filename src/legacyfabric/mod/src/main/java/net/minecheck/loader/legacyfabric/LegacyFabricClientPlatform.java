@@ -406,7 +406,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     if (server == null) {
       return false;
     }
-    server.submit(() -> server.getCommandManager().execute(server, command));
+    server.getCommandManager().execute(server, command);
     return true;
   }
 
