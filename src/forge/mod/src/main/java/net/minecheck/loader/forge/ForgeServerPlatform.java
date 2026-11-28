@@ -305,6 +305,41 @@ public class ForgeServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public Long worldTime() {
+    MinecraftServer s = server;
+    if (s == null) {
+      return null;
+    }
+    return onServerThread(() -> overworld().getWorldTime() % 24000L);
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return runCommand("time set " + ticks) > 0;
+  }
+
+  @Override
+  public String weather() {
+    MinecraftServer s = server;
+    if (s == null) {
+      return null;
+    }
+    return onServerThread(
+        () -> {
+          WorldServer level = overworld();
+          if (level.isThundering()) {
+            return "thunder";
+          }
+          return level.isRaining() ? "rain" : "clear";
+        });
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return runCommand("weather " + weather) > 0;
+  }
+
+  @Override
   public Integer groundHeight(int x, int z) {
     return onServerThread(
         () -> {
