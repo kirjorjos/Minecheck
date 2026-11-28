@@ -65,6 +65,9 @@ public final class TickClock {
   /** Set by the loader mixin that owns the loop's sleep; see {@link #pacingHook()}. */
   private volatile boolean pacingHookSeen;
 
+  /** Whether the running script asked for the clock itself; see {@link #scriptOwned()}. */
+  private final AtomicBoolean scriptOwned = new AtomicBoolean();
+
   /** Package-private: one global clock per JVM, and tests make their own. */
   TickClock() {}
 
@@ -139,6 +142,22 @@ public final class TickClock {
   /** True while the loop is free to run faster than twenty ticks a second. */
   public boolean uncapped() {
     return uncapped;
+  }
+
+  /**
+   * True when the running script asked for the clock with {@code minecheck.ownTickClock} rather
+   * than the run's config asking for it.
+   *
+   * <p>The answer lives here rather than in the config because the config is read once and never
+   * changes, while a script asks mid-run.
+   */
+  public boolean scriptOwned() {
+    return scriptOwned.get();
+  }
+
+  /** Records the script's own opt-in, or its withdrawal, which takes effect at once. */
+  public void setScriptOwnership(boolean owned) {
+    scriptOwned.set(owned);
   }
 
   /**
