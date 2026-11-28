@@ -195,6 +195,15 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<Boolean> getScreenshotProfile();
 
+  /**
+   * When true, the staged {@code config.json} lets the script own the server's tick loop ({@code
+   * ownTickClock}), so a gameplay suite can settle a scene by stepping a fixed tick count without
+   * turning on the screenshot profile — which used to be the only thing that wrote the key.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getOwnTickClock();
+
   /** Captured frame width the profile pins the window to (default {@code 854}). */
   @Input
   @Optional
@@ -219,6 +228,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getScreenshotChatVisible();
+
+  /**
+   * How long the harness waits for a run's verdict, in minutes (default {@code 20}).
+   *
+   * <p>The limit exists so a hung run is reported instead of waited on forever; it was a fixed
+   * twenty minutes, which made a suite of many in-world tests a wall rather than a choice. Both
+   * sides of a lifecycle use it: the server's verdict belongs to the same run.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getVerdictTimeout();
 
   /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
@@ -453,7 +473,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
             ? driveLive(getLiveDriverFile().get().getAsFile().toPath(), logFile, p)
             : List.of();
 
-    RunResultDto result = awaitVerdict(resultFile, Duration.ofMinutes(20), p);
+    RunResultDto result = awaitVerdict(resultFile, verdictTimeout(), p);
     int exit = waitExit(p, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [{}] client exited (code {})", phase, exit);
 
@@ -685,7 +705,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getServerLaunchFile()),
                 false),
             "server-generate");
-    RunResultDto verdict = awaitVerdict(serverResult, Duration.ofMinutes(20), server);
+    RunResultDto verdict = awaitVerdict(serverResult, verdictTimeout(), server);
     int exit = waitExit(server, Duration.ofSeconds(60));
     // Never the suite's `expectFailure` inversion: this run has to succeed on its own terms.
     RunVerdict outcome = RunVerdict.of(verdict, false);
@@ -783,7 +803,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getClientLaunchFile()),
                 getXvfbRun().getOrElse(true)),
             "client");
-    RunResultDto clientVerdict = awaitVerdict(clientResult, Duration.ofMinutes(20), client);
+    RunResultDto clientVerdict = awaitVerdict(clientResult, verdictTimeout(), client);
     int clientExit = waitExit(client, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [server] client exited (code {})", clientExit);
 
@@ -938,6 +958,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   }
 
   // ---------------------------------------------------------------- screenshot profile
+
+  private Duration verdictTimeout() {
+    return Duration.ofMinutes(getVerdictTimeout().getOrElse(20));
+  }
 
   private boolean screenshotProfile() {
     return getScreenshotProfile().getOrElse(false);
@@ -1163,9 +1187,13 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       config.put("screenshotGuiScale", screenshotGuiScale());
       config.put("screenshotScale", screenshotScale());
       config.put("screenshotChatVisible", screenshotChatVisible());
+    }
+    if (screenshotProfile() || getOwnTickClock().getOrElse(false)) {
       // The suite owns the clock: it settles a scene by stepping a fixed tick count and captures
       // while the world is held, so a frame is a function of the script rather than of how fast the
-      // runner drew frames. Every other run keeps vanilla's twenty ticks a second.
+      // runner drew frames. A gameplay suite that needs tick counts asks for the same thing with
+      // the task's ownTickClock property, without the capture profile. Every other run keeps
+      // vanilla's twenty ticks a second.
       config.put("ownTickClock", true);
     }
     Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");

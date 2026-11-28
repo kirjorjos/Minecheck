@@ -1017,6 +1017,56 @@ ok
 
 ---
 
+## Phases
+
+A lifecycle run has one timeout shape, and it does not fit a suite of many in-world tests:
+`config.defaultTimeout` is a **per-wait** ceiling, so every `waitFor`, `joinLocalWorld`, `joinServer`
+and `disconnect` gets that budget for itself, and a phase that is slow because it makes twenty
+correct waits has no total budget at all. Phases add one.
+
+### `minecheck.phase(name, body[, seconds]) → boolean`
+
+Runs `body` under `name` with a total budget of `seconds` (default `config.defaultTimeout`). The
+budget is tick-driven, like every other timeout: it is checked once per tick, and a body that
+spends it fails the run with `<name>: exceeded <n>s` — naming the test that ran out rather than the
+wait that happened to be in progress. Every `expect` or `check` recorded inside the phase carries
+the phase's name in `run-result.json` as well, so a forty-test suite's flat list still says which
+test a failure belonged to.
+
+```lua
+minecheck.phase("tunnels", function()
+    minecheck.check(minecheck.createWorld({ name = "suite" }), "the world")
+    minecheck.check(minecheck.joinLocalWorld("suite"), "the join")
+end, 120)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Phase name, used in the verdict and on the checks it records. |
+| `body` | function | The test body. |
+| `seconds` | number | Total budget (default: `config.defaultTimeout`). Must be positive. |
+
+**Returns:** `true` when the body returns. An overrun never returns: the run ends with the phase's
+name in the failure message.
+
+One honest limit: Lua cannot be preempted from Java, so a body that never yields — no `wait`,
+`waitFor`, `stepTicks`, join — cannot be interrupted by a tick-driven deadline. Every waiting action
+yields once per tick, so ordinary test bodies are covered.
+
+### `minecheck.withDeadline(seconds[, name], body) → boolean`
+
+The budget on its own, for a caller that already has its own phase names. Without a `name` it
+reports under the enclosing phase's name (then `MINECHECK_PHASE`, then `run`).
+
+```lua
+minecheck.withDeadline(30, "the transfer", function()
+    minecheck.stepTicks(600)
+end)
+```
+
+Budgets nest: an inner budget is checked as well as the outer one, and the innermost name is the one
+an overrun reports.
+
 ## Assertions and result reporting
 
 ### `minecheck.expect(cond[, name]) → boolean`
@@ -1111,7 +1161,27 @@ world's integrated server. The client keeps ticking, so the script and the rende
 the world stands still. The hold lasts until `resumeTicks` or the next `stepTicks`. A command is a
 server tick's work, so one sent while the clock is held stays queued until it moves again.
 
-Requires `ownTickClock: true`.
+Requires the tick clock to be owned — [`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true` in `config.json`.
+
+### `minecheck.ownTickClock([enabled]) → boolean`
+
+Opts the run into owning the server's tick loop from the script, instead of the `ownTickClock` key in `config.json` — the same contract `pauseTicks` / `stepTicks` / `resumeTicks` already need, asked for by the suite that needs it rather than set in a build config whose name only mentions screenshots. Call it at the start of a run, before a world is entered; the grant lasts for the rest of the run, and the engine hands the clock back when the run ends however it ends.
+
+```lua
+minecheck.ownTickClock()
+minecheck.joinLocalWorld("minecheck_world")
+minecheck.stepTicks(400)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `enabled` | boolean | Omit (or `true`) to own the clock; `false` withdraws this action's grant. |
+
+**Returns:** `true` when the clock is owned afterwards. `false` when asked to turn it off, and `false` on a loader that bound no tick gate — there is no clock to hold. Withdrawing only removes this action's grant: a run whose `config.json` already set `ownTickClock` keeps its clock.
+
+A build can also grant it without a script, with the lifecycle task's `ownTickClock` property.
+
+---
 
 ### `minecheck.stepTicks(ticks[, timeout]) → nil`
 
@@ -1129,14 +1199,14 @@ minecheck.stepTicks(400) -- settle a fresh world's lighting without waiting twen
 local shot = minecheck.captureScreenshot("world-settled")
 ```
 
-Requires `ownTickClock: true`, and a server this process runs. A client that is playing on somebody
+Requires the tick clock to be owned ([`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true`), and a server this process runs. A client that is playing on somebody
 else's server has no clock here to hold, and the action says so instead of hanging.
 
 ### `minecheck.resumeTicks() → nil`
 
 Hands the tick loop back to the wall clock, and un-parks a server thread already waiting in the gate.
 
-Requires `ownTickClock: true`.
+Requires the tick clock to be owned — [`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true` in `config.json`.
 
 ### `minecheck.uncappedTicks([enabled]) → nil`
 
@@ -1149,8 +1219,7 @@ The client is unaffected: frames are drawn at the renderer's own rate either way
 must be a specific picture still holds the clock with `pauseTicks` / `stepTicks`. `resumeTicks`
 leaves the mode alone; the end of the run turns it off, so a run cannot leave a server spinning.
 
-Requires `ownTickClock: true`. A loader whose loop has no pacing hook logs a warning when this is
-called and keeps the vanilla cadence.
+Requires the tick clock to be owned ([`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true`). A loader whose loop has no pacing hook logs a warning when this is called and keeps the vanilla cadence.
 
 ### `minecheck.sleep(seconds) → nil`
 
@@ -1244,6 +1313,40 @@ Returns a read-only snapshot of the current runtime config:
 `script` is an **empty string**, not `nil`, when the config names no script — including when a coordinator is the entry script, which is what `script` still reports. Only `coordinator` reads as `nil`, so branch on `minecheck.config().script == ""`. Each call returns a fresh table: mutating it does not change the config.
 
 ---
+
+## World state (both sides)
+
+A suite that shares one world across many tests has two clocks and, without these, no way to pin
+either: phases run at different in-game times, and the integrated phase and the dedicated-server
+phase start minutes apart. Each phase can now start from a pinned time instead of assuming relative
+time — the same reason the seed and the flat generator are pinned in `server.properties`.
+
+### `minecheck.getWorldTime() → number | nil`
+
+The daylight time in ticks — `0` sunrise, `6000` noon, `18000` midnight — of the world this side is
+in. `nil` when there is no world (the title screen, or a server that has not got one yet). On a
+client this is the time the client sees; vanilla keeps it in step with the server's.
+
+### `minecheck.setWorldTime(ticks) → boolean`
+
+Sets the daylight time, so the next phase starts from a pinned time rather than from whatever the
+previous one advanced it to. Requires a world this process owns — an integrated server on a client,
+or the dedicated server. A client playing on somebody else's server is told `false`, because that
+clock belongs to the other process. A negative count raises.
+
+```lua
+minecheck.setWorldTime(18000) -- midnight, whatever time the previous phase left
+```
+
+### `minecheck.getWeather() → string | nil`
+
+`"clear"`, `"rain"` or `"thunder"`, or `nil` when there is no world.
+
+### `minecheck.setWeather(weather) → boolean`
+
+Sets the weather to `"clear"`, `"rain"` or `"thunder"` — the same ownership rule as
+`setWorldTime`. An unknown name raises instead of silently doing nothing, because a suite that
+typo'd it would otherwise keep asserting against the old weather.
 
 ## Input (client)
 

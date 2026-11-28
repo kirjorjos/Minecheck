@@ -102,6 +102,8 @@ public final class LuaMinecheck {
     minecheck.set("expect", new Expect());
     minecheck.set("check", new Check());
     minecheck.set("checkEq", new CheckEq());
+    minecheck.set("phase", new Phase());
+    minecheck.set("withDeadline", new WithDeadline());
     minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
@@ -120,10 +122,17 @@ public final class LuaMinecheck {
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
 
+    // World state (both sides): the clocks a shared world carries from phase to phase.
+    minecheck.set("getWorldTime", new GetWorldTime());
+    minecheck.set("setWorldTime", new SetWorldTime());
+    minecheck.set("getWeather", new GetWeather());
+    minecheck.set("setWeather", new SetWeather());
+
     // Coordinators: run another staged script as a phase of this same session.
     minecheck.set("runScript", new RunScript());
 
     // The tick clock: the server this process runs, held and advanced by the script.
+    minecheck.set("ownTickClock", new OwnTickClock());
     minecheck.set("pauseTicks", new PauseTicks());
     minecheck.set("stepTicks", new StepTicks());
     minecheck.set("resumeTicks", new ResumeTicks());
@@ -944,6 +953,78 @@ public final class LuaMinecheck {
       }
       return LuaValue.TRUE;
     }
+  }
+
+  /**
+   * minecheck.phase(name, body[, seconds]) -> boolean
+   *
+   * <p>Runs {@code body} under a named phase whose total budget is checked once per tick. The
+   * per-wait ceiling ({@code config.defaultTimeout}) cannot budget a <em>test</em>, so a phase that
+   * is slow because it makes twenty correct waits had no bound of its own; this is that bound, and
+   * the phase's name is what an overrun (and every {@code expect} inside it) is reported against.
+   */
+  private final class Phase extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = args.arg1().checkjstring();
+      LuaFunction body = args.arg(2).checkfunction();
+      double seconds = args.arg(3).isnumber() ? args.arg(3).todouble() : config.defaultTimeout();
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /**
+   * minecheck.withDeadline(seconds[, name], body) -> boolean
+   *
+   * <p>The budget on its own, for a caller that already names its work: the name is optional, and
+   * without one the enclosing phase's name (or {@code MINECHECK_PHASE}, or {@code "run"}) is what
+   * an overrun reports.
+   */
+  private final class WithDeadline extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      double seconds = args.arg1().checkdouble();
+      LuaValue second = args.arg(2);
+      String name;
+      LuaFunction body;
+      if (second.isfunction()) {
+        name =
+            engine != null && engine.currentPhase() != null ? engine.currentPhase() : phaseLabel();
+        body = second.checkfunction();
+      } else {
+        name = second.optjstring("phase");
+        body = args.arg(3).checkfunction();
+      }
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /** The name a budget reports under when the caller gave none: the staged script, or "run". */
+  private String phaseLabel() {
+    LuaValue staged = globals.get("MINECHECK_PHASE");
+    return staged.isstring() ? staged.tojstring() : "run";
+  }
+
+  /**
+   * Runs a body under a name and a budget. The body is a plain call, like {@code runScript}: a
+   * waiting action inside it yields this same coroutine, and the engine notices the overrun at the
+   * next tick with the phase still on its stack.
+   */
+  private Varargs runPhase(String name, double seconds, LuaFunction body) {
+    if (seconds <= 0) {
+      throw new LuaError("phase \"" + name + "\": the budget must be a positive number of seconds");
+    }
+    if (engine == null) {
+      body.call();
+      return LuaValue.TRUE;
+    }
+    engine.beginPhase(name, seconds);
+    try {
+      body.call();
+    } finally {
+      engine.endPhase();
+    }
+    return LuaValue.TRUE;
   }
 
   /**
@@ -3310,6 +3391,35 @@ public final class LuaMinecheck {
     }
   }
 
+  /**
+   * minecheck.ownTickClock([enabled]) -> boolean
+   *
+   * <p>The script's own opt-in to owning the server's tick loop, instead of the {@code
+   * ownTickClock} key in {@code config.json}: the same contract, asked for by the suite that needs
+   * it rather than set by a build config whose name says "screenshots". Call it at the start of a
+   * run, before a world is entered; the grant applies to the rest of the run, and the engine hands
+   * the clock back when the run ends however it ends.
+   *
+   * <p>Omitting the argument turns ownership on; {@code false} withdraws it. Returns whether the
+   * clock is owned afterwards — false when asked to turn it off, and false on a loader that bound
+   * no tick gate, which has no clock to hold. Withdrawing only takes away this action's grant: a
+   * run whose {@code config.json} already said {@code ownTickClock} keeps its clock.
+   */
+  private final class OwnTickClock extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      boolean enabled = args.arg1().optboolean(true);
+      TickClock tickClock = TickClock.get();
+      if (enabled && !tickClock.bound()) {
+        LOG.warning(
+            "Minecheck: ownTickClock: this loader has no tick gate, so there is no clock to own");
+        return LuaValue.FALSE;
+      }
+      tickClock.setScriptOwnership(enabled);
+      return LuaValue.valueOf(enabled || config.ownTickClock());
+    }
+  }
+
   /** minecheck.resumeTicks() -> nil — hands the loop back to the wall clock. */
   private final class ResumeTicks extends VarArgFunction {
     @Override
@@ -3337,13 +3447,14 @@ public final class LuaMinecheck {
    * the script does it on its way out, when no tick has run recently by definition.
    */
   private void requireTickClock(String action, boolean requireLive) {
-    if (!config.ownTickClock()) {
+    TickClock tickClock = TickClock.get();
+    if (!config.ownTickClock() && !tickClock.scriptOwned()) {
       throw new LuaError(
           action
-              + ": the tick clock is disabled — set \"ownTickClock\": true in"
-              + " config/minecheck/config.json to let a script hold the world's ticks");
+              + ": the tick clock is disabled — call minecheck.ownTickClock() or set"
+              + " \"ownTickClock\": true in config/minecheck/config.json to let a script hold the"
+              + " world's ticks");
     }
-    TickClock tickClock = TickClock.get();
     if (!tickClock.bound()) {
       throw new LuaError(action + ": this loader has no tick gate, so the clock cannot be owned");
     }
@@ -3446,6 +3557,90 @@ public final class LuaMinecheck {
         return LuaValue.valueOf(server.isWorldGenSettled());
       }
       return LuaValue.valueOf(client.isWorldGenSettled());
+    }
+  }
+
+  /**
+   * minecheck.getWorldTime() -> number | nil
+   *
+   * <p>The world's daylight time in ticks ({@code 0} sunrise, {@code 6000} noon, {@code 18000}
+   * midnight), or {@code nil} outside a world. Both sides: on a client this is the time the client
+   * sees, which vanilla keeps in step with the server's.
+   */
+  private final class GetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      Long ticks;
+      try {
+        ticks = client != null ? client.worldTime() : server.worldTime();
+      } catch (RuntimeException e) {
+        throw wrap("getWorldTime", e);
+      }
+      return ticks == null ? LuaValue.NIL : LuaValue.valueOf(ticks.longValue());
+    }
+  }
+
+  /**
+   * minecheck.setWorldTime(ticks) -> boolean
+   *
+   * <p>Sets the daylight time, so the next phase starts from a pinned time rather than from
+   * whatever the previous one advanced it to. False when this process does not own the world's
+   * clock — a client playing on somebody else's server — and a negative count is rejected as not a
+   * time of day.
+   */
+  private final class SetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      long ticks = args.arg1().checklong();
+      if (ticks < 0) {
+        throw new LuaError("setWorldTime: " + ticks + " is not a time of day");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWorldTime(ticks) : server.setWorldTime(ticks);
+      } catch (RuntimeException e) {
+        throw wrap("setWorldTime", e);
+      }
+      return LuaValue.valueOf(ok);
+    }
+  }
+
+  /** minecheck.getWeather() -> "clear" | "rain" | "thunder" | nil (both sides). */
+  private final class GetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather;
+      try {
+        weather = client != null ? client.weather() : server.weather();
+      } catch (RuntimeException e) {
+        throw wrap("getWeather", e);
+      }
+      return weather == null ? LuaValue.NIL : LuaValue.valueOf(weather);
+    }
+  }
+
+  /**
+   * minecheck.setWeather(weather) -> boolean
+   *
+   * <p>Sets the weather to {@code "clear"}, {@code "rain"} or {@code "thunder"}, with the same
+   * ownership rule as {@code setWorldTime}. An unknown name raises rather than silently doing
+   * nothing, because a suite that mistyped it would otherwise keep asserting against the old
+   * weather.
+   */
+  private final class SetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather = args.arg1().checkjstring().toLowerCase(java.util.Locale.ROOT);
+      if (!weather.equals("clear") && !weather.equals("rain") && !weather.equals("thunder")) {
+        throw new LuaError("setWeather: \"" + weather + "\" is not clear, rain or thunder");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWeather(weather) : server.setWeather(weather);
+      } catch (RuntimeException e) {
+        throw wrap("setWeather", e);
+      }
+      return LuaValue.valueOf(ok);
     }
   }
 
