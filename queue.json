@@ -1,13 +1,6 @@
 {
   "entries": [],
-  "holder": {
-    "granted_at": "2026-11-28T06:43:57Z",
-    "id": "e-38",
-    "kind": "pr",
-    "lease_until": "2026-11-28T08:13:57Z",
-    "pr": "314",
-    "sha": "a2081cba0ed651efd5f2ad5f3b598cb10194efc4"
-  },
+  "holder": null,
   "last_runs": {
     "289": {
       "at": "2026-11-27T06:26:10Z",
@@ -48,6 +41,10 @@
     "311": {
       "at": "2026-11-28T04:47:10Z",
       "sha": "a7505a779e65baa9cd77d38db3ab2dc98d7b6f53"
+    },
+    "314": {
+      "at": "2026-11-28T07:05:47Z",
+      "sha": "a2081cba0ed651efd5f2ad5f3b598cb10194efc4"
     }
   },
   "mc": "1.21.1",
