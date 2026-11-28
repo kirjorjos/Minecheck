@@ -1037,6 +1037,42 @@ end
 
 ---
 
+### `minecheck.check(cond[, name]) → boolean`
+
+The fail-fast sibling of [`expect`](#minecheckexpectcond-name--boolean): records the same observation, and on a false `cond` fails the run with `name` and stops the script. That is what a suite sharing one world wants — the first failure ends the run instead of leaving a half-set-up world behind to produce a cascade of misleading verdicts.
+
+```lua
+minecheck.check(minecheck.isInWorld(), "joined the world")
+minecheck.check(#minecheck.findNearbyEntities("minecraft:zombie") == 0, "no zombies")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `cond` | any | Evaluated as boolean (`nil`/`false` = fail, anything else = pass). |
+| `name` | string | Label for the run result, and the run's failure message (default: `"check #<n>"`, sharing one sequence with `expect`'s numbering). |
+
+**Returns:** `true`. A false `cond` never returns: the run ends with `name` as its failure message, exactly as if `minecheck.fail(name)` had been called.
+
+---
+
+### `minecheck.checkEq(actual, expected[, name]) → boolean`
+
+`check` with the comparison done for you: records one observation, and unless `actual == expected` fails the run with `<name>: expected <expected>, got <actual>`, so the verdict carries both values instead of leaving the reader to reconstruct them. Equality is Lua's `==`: numbers compare by value, strings by content, tables by identity.
+
+```lua
+minecheck.checkEq(minecheck.getSlot(0).count, 64, "the stack filled")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `actual` | any | The value the run measured. |
+| `expected` | any | The value it must equal. |
+| `name` | string | Label for the run result (default: `"checkEq #<n>"`). |
+
+**Returns:** `true`. A mismatch never returns: the run ends with the expected/got message.
+
+---
+
 ### `minecheck.fail(message) → never`
 
 Unconditionally marks the current run **failed** with the given message and stops the script. What happens next depends on [`config.failMode`](#configjson):
