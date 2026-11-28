@@ -13,20 +13,6 @@
       "sha": "aa464b5711fc40c112de75795214a3f2dc2e83cb",
       "target": "1.21.1/development",
       "tier": -1
-    },
-    {
-      "compare": "1.21.1/development",
-      "enqueued_at": "2026-11-28T04:07:19Z",
-      "fork": false,
-      "head_repo": "kirjorjos/Minecheck",
-      "id": "e-28",
-      "kind": "pr",
-      "overtaken": 0,
-      "pr": "308",
-      "seq": 28,
-      "sha": "bd5f11ec57df4538b921ca5a80b3b96f9132ef35",
-      "target": "1.21.1/development",
-      "tier": 0
     }
   ],
   "holder": {
