@@ -102,6 +102,8 @@ public final class LuaMinecheck {
     minecheck.set("expect", new Expect());
     minecheck.set("check", new Check());
     minecheck.set("checkEq", new CheckEq());
+    minecheck.set("phase", new Phase());
+    minecheck.set("withDeadline", new WithDeadline());
     minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
@@ -951,6 +953,78 @@ public final class LuaMinecheck {
       }
       return LuaValue.TRUE;
     }
+  }
+
+  /**
+   * minecheck.phase(name, body[, seconds]) -> boolean
+   *
+   * <p>Runs {@code body} under a named phase whose total budget is checked once per tick. The
+   * per-wait ceiling ({@code config.defaultTimeout}) cannot budget a <em>test</em>, so a phase that
+   * is slow because it makes twenty correct waits had no bound of its own; this is that bound, and
+   * the phase's name is what an overrun (and every {@code expect} inside it) is reported against.
+   */
+  private final class Phase extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = args.arg1().checkjstring();
+      LuaFunction body = args.arg(2).checkfunction();
+      double seconds = args.arg(3).isnumber() ? args.arg(3).todouble() : config.defaultTimeout();
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /**
+   * minecheck.withDeadline(seconds[, name], body) -> boolean
+   *
+   * <p>The budget on its own, for a caller that already names its work: the name is optional, and
+   * without one the enclosing phase's name (or {@code MINECHECK_PHASE}, or {@code "run"}) is what
+   * an overrun reports.
+   */
+  private final class WithDeadline extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      double seconds = args.arg1().checkdouble();
+      LuaValue second = args.arg(2);
+      String name;
+      LuaFunction body;
+      if (second.isfunction()) {
+        name =
+            engine != null && engine.currentPhase() != null ? engine.currentPhase() : phaseLabel();
+        body = second.checkfunction();
+      } else {
+        name = second.optjstring("phase");
+        body = args.arg(3).checkfunction();
+      }
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /** The name a budget reports under when the caller gave none: the staged script, or "run". */
+  private String phaseLabel() {
+    LuaValue staged = globals.get("MINECHECK_PHASE");
+    return staged.isstring() ? staged.tojstring() : "run";
+  }
+
+  /**
+   * Runs a body under a name and a budget. The body is a plain call, like {@code runScript}: a
+   * waiting action inside it yields this same coroutine, and the engine notices the overrun at the
+   * next tick with the phase still on its stack.
+   */
+  private Varargs runPhase(String name, double seconds, LuaFunction body) {
+    if (seconds <= 0) {
+      throw new LuaError("phase \"" + name + "\": the budget must be a positive number of seconds");
+    }
+    if (engine == null) {
+      body.call();
+      return LuaValue.TRUE;
+    }
+    engine.beginPhase(name, seconds);
+    try {
+      body.call();
+    } finally {
+      engine.endPhase();
+    }
+    return LuaValue.TRUE;
   }
 
   /**
