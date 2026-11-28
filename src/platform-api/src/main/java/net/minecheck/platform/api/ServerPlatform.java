@@ -109,6 +109,24 @@ public interface ServerPlatform {
   boolean loadChunk(int chunkX, int chunkZ);
 
   /**
+   * The overworld's daylight time, in ticks: {@code 0} is sunrise, {@code 6000} noon, {@code 18000}
+   * midnight. {@code null} when this server has no overworld.
+   */
+  Long worldTime();
+
+  /**
+   * Sets the overworld's daylight time, so a phase can start from a pinned time instead of from
+   * whatever the clock happened to reach. False when the server refused the change.
+   */
+  boolean setWorldTime(long ticks);
+
+  /** The overworld's weather as {@code "clear"}, {@code "rain"} or {@code "thunder"}. */
+  String weather();
+
+  /** Sets the overworld's weather. False when the server refused the change. */
+  boolean setWeather(String weather);
+
+  /**
    * True once this server's own overworld chunk generation has settled (no pending chunk work).
    * Mirrors {@link ClientPlatform#isWorldGenSettled()} for the dedicated-server case: a server
    * script can wait on this before e.g. asserting worldgen-related state, and it is never "not

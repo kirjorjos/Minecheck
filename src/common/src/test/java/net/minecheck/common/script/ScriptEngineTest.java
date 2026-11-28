@@ -40,6 +40,45 @@ class ScriptEngineTest {
     Integer groundY = 64;
     String groundArgs;
 
+    Long worldTimeTicks = 6000L;
+    String weatherState = "clear";
+
+    /**
+     * True when this client hosts the world; false models one playing on somebody else's server.
+     */
+    boolean ownsWorld = true;
+
+    final java.util.List<String> weatherChanges = new java.util.ArrayList<>();
+
+    @Override
+    public Long worldTime() {
+      return worldTimeTicks;
+    }
+
+    @Override
+    public boolean setWorldTime(long ticks) {
+      if (!ownsWorld) {
+        return false;
+      }
+      worldTimeTicks = ticks;
+      return true;
+    }
+
+    @Override
+    public String weather() {
+      return weatherState;
+    }
+
+    @Override
+    public boolean setWeather(String weather) {
+      if (!ownsWorld) {
+        return false;
+      }
+      weatherChanges.add(weather);
+      weatherState = weather;
+      return true;
+    }
+
     @Override
     public Integer groundHeight(int x, int z) {
       groundArgs = x + "|" + z;
@@ -558,6 +597,31 @@ class ScriptEngineTest {
   static final class FakeServer extends ServerPlatformBase {
     Integer groundY = 64;
     String groundArgs;
+
+    Long worldTimeTicks = 6000L;
+    String weatherState = "clear";
+
+    @Override
+    public Long worldTime() {
+      return worldTimeTicks;
+    }
+
+    @Override
+    public boolean setWorldTime(long ticks) {
+      worldTimeTicks = ticks;
+      return true;
+    }
+
+    @Override
+    public String weather() {
+      return weatherState;
+    }
+
+    @Override
+    public boolean setWeather(String weather) {
+      weatherState = weather;
+      return true;
+    }
 
     @Override
     public Integer groundHeight(int x, int z) {
@@ -3014,6 +3078,82 @@ class ScriptEngineTest {
     assertTrue(engine.isFinished());
     assertTrue(engine.isFailed());
     assertEquals("slots filled: expected 3, got 4", engine.failureMessage());
+  }
+
+  @Test
+  void worldTimeAndWeatherReadAndWriteTheClientsWorld() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.getWorldTime() == 6000, 'the time it started at')\n"
+                + "assert(minecheck.setWorldTime(18000), 'the client owns its world')\n"
+                + "assert(minecheck.getWorldTime() == 18000, 'time set')\n"
+                + "assert(minecheck.getWeather() == 'clear', 'clear to begin with')\n"
+                + "assert(minecheck.setWeather('rain'), 'weather set')\n"
+                + "assert(minecheck.getWeather() == 'rain', 'rain afterwards')\n"
+                + "assert(minecheck.setWeather('THUNDER'), 'weather names are case-insensitive')\n"
+                + "assert(minecheck.getWeather() == 'thunder')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void aClientOnSomebodyElsesServerDoesNotOwnTheWorldsClocks() throws Exception {
+    FakeClient client = new FakeClient();
+    client.ownsWorld = false;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(not minecheck.setWorldTime(18000), 'the clock belongs to the other process')\n"
+                + "assert(not minecheck.setWeather('rain'), 'and so does the weather')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void setWeatherRejectsANameItDoesNotKnow() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "local ok, err = pcall(function() minecheck.setWeather('snow') end)\n"
+                + "assert(not ok, 'an unknown weather must raise')\n"
+                + "assert(string.find(err, 'snow', 1, true), err)\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void worldTimeAndWeatherWorkOnADedicatedServerToo() throws Exception {
+    FakeServer server = new FakeServer();
+    ScriptEngine engine =
+        serverEngine(
+            server,
+            ConfigData.defaults(),
+            "assert(minecheck.getWorldTime() == 6000)\n"
+                + "assert(minecheck.setWorldTime(1000))\n"
+                + "assert(minecheck.getWorldTime() == 1000)\n"
+                + "assert(minecheck.getWeather() == 'clear')\n"
+                + "assert(minecheck.setWeather('thunder'))\n"
+                + "assert(minecheck.getWeather() == 'thunder')\n",
+            new AtomicLong(0));
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
   }
 
   /**
