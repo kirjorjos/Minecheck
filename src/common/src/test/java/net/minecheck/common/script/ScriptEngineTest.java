@@ -79,6 +79,14 @@ class ScriptEngineTest {
       return true;
     }
 
+    /** The saves this client can see; null models a platform with no saves directory. */
+    FakeWorldStorage storage;
+
+    @Override
+    public net.minecheck.platform.api.WorldStorage worlds() {
+      return storage;
+    }
+
     @Override
     public Integer groundHeight(int x, int z) {
       groundArgs = x + "|" + z;
@@ -563,6 +571,46 @@ class ScriptEngineTest {
     }
   }
 
+  /** Fake saves directory: a set of world names, and the deletes it was asked for. */
+  static final class FakeWorldStorage implements net.minecheck.platform.api.WorldStorage {
+    final java.util.Set<String> names = new java.util.HashSet<>();
+    final java.util.List<String> deleted = new java.util.ArrayList<>();
+
+    FakeWorldStorage(String... worlds) {
+      names.addAll(java.util.List.of(worlds));
+    }
+
+    @Override
+    public java.util.List<String> worlds() {
+      return java.util.List.copyOf(names);
+    }
+
+    @Override
+    public boolean exists(String name) {
+      return names.contains(name);
+    }
+
+    @Override
+    public boolean copy(String from, String to) {
+      if (!names.contains(from)) {
+        return false;
+      }
+      names.add(to);
+      return true;
+    }
+
+    @Override
+    public boolean delete(String name) {
+      deleted.add(name);
+      return names.remove(name);
+    }
+
+    @Override
+    public java.nio.file.Path directory(String name) {
+      return java.nio.file.Path.of("/saves", name);
+    }
+  }
+
   /** Fake recipe viewer: returns canned slots and records fill requests. */
   static final class FakeRecipeViewer implements RecipeViewer {
     String id = "fake";
@@ -967,6 +1015,80 @@ class ScriptEngineTest {
     } finally {
       System.clearProperty("minecheck.playerName");
     }
+  }
+
+  @Test
+  void createWorldWithReuseJoinsAWorldThatIsAlreadyOnDisk() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local ok = minecheck.createWorld({ name = 'suite', reuse = true })\n"
+                + "assert(ok, 'the existing world was joined')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals("suite", client.joinedWorld, "joined, not created over");
+    assertEquals(null, client.createdWorld);
+  }
+
+  @Test
+  void createWorldWithReuseCreatesTheWorldWhenThereIsNone() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local ok = minecheck.createWorld({ name = 'fresh', reuse = true })\n"
+                + "assert(ok)\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals("fresh", client.createdWorld.name());
+    assertEquals(null, client.joinedWorld);
+  }
+
+  @Test
+  void worldExistsAndDeleteWorldGoThroughTheSavesDirectory() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.worldExists('suite'), 'the world is there')\n"
+                + "assert(minecheck.deleteWorld('suite'), 'deleted')\n"
+                + "assert(not minecheck.worldExists('suite'), 'and gone')\n"
+                + "assert(not minecheck.deleteWorld('suite'), 'deleting a missing world is false')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals(java.util.List.of("suite", "suite"), client.storage.deleted);
+  }
+
+  @Test
+  void deleteWorldRefusesWhileAWorldIsOpen() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.joinLocalWorld('suite'))\n"
+                + "local ok, err = pcall(function() minecheck.deleteWorld('suite') end)\n"
+                + "assert(not ok, 'a world with its server open must not be deleted')\n"
+                + "assert(string.find(err, 'leave the world first', 1, true), err)\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertTrue(client.storage.deleted.isEmpty(), "nothing was deleted");
   }
 
   @Test

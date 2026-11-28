@@ -535,6 +535,16 @@ public interface ClientPlatform {
   boolean setWeather(String weather);
 
   /**
+   * The saves this client can list, copy and delete — the directory the game writes worlds to.
+   *
+   * <p>A platform that cannot name the directory answers {@code null}, and the world actions say so
+   * instead of guessing at a path.
+   */
+  default WorldStorage worlds() {
+    return null;
+  }
+
+  /**
    * True when a screen matching {@code screenId} is currently open. {@code screenId} selects which
    * screen must be open: {@code null}/{@code ""} accepts any container/handled screen, a known id
    * ({@code "inventory"}, {@code "beacon"}, {@code "chest"}, {@code "crafting"}, {@code "furnace"},
