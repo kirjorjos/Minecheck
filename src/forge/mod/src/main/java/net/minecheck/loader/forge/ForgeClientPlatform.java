@@ -1202,6 +1202,203 @@ public class ForgeClientPlatform implements ClientPlatform {
   }
 
   @Override
+<<<<<<< HEAD
+=======
+  public net.minecheck.platform.api.BlockInfo getBlock(
+      net.minecheck.platform.api.BlockPosition pos) {
+    Minecraft mc = mc();
+    if (mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.core.BlockPos blockPos =
+        new net.minecraft.core.BlockPos(pos.x(), pos.y(), pos.z());
+    if (!mc.level.isLoaded(blockPos)) {
+      return null;
+    }
+    net.minecraft.world.level.block.state.BlockState state = mc.level.getBlockState(blockPos);
+    net.minecraft.world.level.block.entity.BlockEntity blockEntity =
+        mc.level.getBlockEntity(blockPos);
+    java.util.Map<String, Object> nbt =
+        blockEntity == null
+            ? null
+            : nbtToMap(blockEntity.saveWithoutMetadata(mc.level.registryAccess()));
+    return new net.minecheck.platform.api.BlockInfo(
+        BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(), nbt);
+  }
+
+  @Override
+  public Long worldTime() {
+    Minecraft client = mc();
+    return client.level == null ? null : client.level.getDayTime();
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return integratedCommand("time set " + ticks);
+  }
+
+  @Override
+  public String weather() {
+    Minecraft client = mc();
+    if (client.level == null) {
+      return null;
+    }
+    if (client.level.isThundering()) {
+      return "thunder";
+    }
+    return client.level.isRaining() ? "rain" : "clear";
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return integratedCommand("weather " + weather);
+  }
+
+  /**
+   * Queues a command on the integrated server this client hosts, and reports whether there was one
+   * to queue it on. A client playing on somebody else's server owns neither the time nor the
+   * weather, so it answers false rather than pretending the change happened.
+   */
+  private boolean integratedCommand(String command) {
+    MinecraftServer server = mc().getSingleplayerServer();
+    if (server == null) {
+      return false;
+    }
+    server.execute(
+        () -> {
+          try {
+            server
+                .getCommands()
+                .getDispatcher()
+                .execute(command, server.createCommandSourceStack());
+          } catch (com.mojang.brigadier.exceptions.CommandSyntaxException e) {
+            LOG.warning("Minecheck: command failed: " + command + ": " + e.getMessage());
+          }
+        });
+    return true;
+  }
+
+  @Override
+  public Integer groundHeight(int x, int z) {
+    Minecraft mc = mc();
+    if (mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    // Asked of the chunk, the same way `isChunkLoaded` answers: "does this column have a height"
+    // is a property of the loaded chunk, not of one block in it.
+    if (!mc.level.hasChunk(x >> 4, z >> 4)) {
+      return null;
+    }
+    return mc.level.getHeight(
+        net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z);
+  }
+
+  @Override
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    Minecraft mc = mc();
+    return mc.level != null && mc.level.hasChunk(chunkX, chunkZ);
+  }
+
+  // ------------------------------------------------------------ GUI / inventory
+
+  @Override
+  public void useItemOnTarget() {
+    Minecraft mc = mc();
+    if (mc.player == null || mc.gameMode == null || mc.level == null) {
+      throw new IllegalStateException("not in a world");
+    }
+    net.minecraft.world.phys.HitResult hit = mc.player.pick(5.0, 1.0F, false);
+    if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+      mc.gameMode.useItemOn(
+          mc.player,
+          net.minecraft.world.InteractionHand.MAIN_HAND,
+          (net.minecraft.world.phys.BlockHitResult) hit);
+    }
+  }
+
+  @Override
+  public boolean clickSlot(int slot, int button, String actionType) {
+    Minecraft mc = mc();
+    if (!(mc.screen
+        instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?> acs)) {
+      return false;
+    }
+    mc.gameMode.handleInventoryMouseClick(
+        acs.getMenu().containerId, slot, button, clickType(actionType), mc.player);
+    return true;
+  }
+
+  private static net.minecraft.world.inventory.ClickType clickType(String type) {
+    return switch (type.toLowerCase(java.util.Locale.ROOT)) {
+      case "quick_move" -> net.minecraft.world.inventory.ClickType.QUICK_MOVE;
+      case "swap" -> net.minecraft.world.inventory.ClickType.SWAP;
+      case "clone" -> net.minecraft.world.inventory.ClickType.CLONE;
+      case "throw" -> net.minecraft.world.inventory.ClickType.THROW;
+      case "quick_craft" -> net.minecraft.world.inventory.ClickType.QUICK_CRAFT;
+      case "pickup_all" -> net.minecraft.world.inventory.ClickType.PICKUP_ALL;
+      default -> net.minecraft.world.inventory.ClickType.PICKUP;
+    };
+  }
+
+  @Override
+  public boolean clickGui(int button, double x, double y) {
+    Minecraft mc = mc();
+    net.minecraft.client.gui.screens.Screen screen = mc.screen;
+    if (screen == null) {
+      return false;
+    }
+    screen.mouseClicked(x, y, button);
+    return true;
+  }
+
+  @Override
+  public boolean clickGuiElement(String elementId, int button, int index) {
+    Minecraft mc = mc();
+    net.minecraft.client.gui.screens.Screen screen = mc.screen;
+    if (screen == null) {
+      return false;
+    }
+    String wanted = elementId.trim().toLowerCase(java.util.Locale.ROOT);
+    if (wanted.isEmpty()) {
+      return false;
+    }
+    // Label matches beat class-name matches: the label is the same string on every loader, the
+    // class
+    // name is not (`Button` here, `ButtonWidget` on yarn).
+    java.util.List<net.minecraft.client.gui.components.AbstractWidget> byLabel =
+        new java.util.ArrayList<>();
+    java.util.List<net.minecraft.client.gui.components.AbstractWidget> byClass =
+        new java.util.ArrayList<>();
+    for (net.minecraft.client.gui.components.events.GuiEventListener element : screen.children()) {
+      if (!(element instanceof net.minecraft.client.gui.components.AbstractWidget widget)) {
+        continue;
+      }
+      String label = widget.getMessage().getString().trim().toLowerCase(java.util.Locale.ROOT);
+      if (label.equals(wanted)) {
+        byLabel.add(widget);
+      } else if (widget
+          .getClass()
+          .getSimpleName()
+          .toLowerCase(java.util.Locale.ROOT)
+          .equals(wanted)) {
+        byClass.add(widget);
+      }
+    }
+    java.util.List<net.minecraft.client.gui.components.AbstractWidget> matches =
+        byLabel.isEmpty() ? byClass : byLabel;
+    int at = index <= 1 ? 0 : index - 1;
+    if (at >= matches.size()) {
+      return false;
+    }
+    net.minecraft.client.gui.components.AbstractWidget target = matches.get(at);
+    // The centre is inside the widget, so its own isMouseOver/clicked check passes.
+    target.mouseClicked(
+        target.getX() + target.getWidth() / 2.0, target.getY() + target.getHeight() / 2.0, button);
+    return true;
+  }
+
+  @Override
+>>>>>>> 3dac3d1 (Read and pin world time and weather from a script)
   public void runCommand(String command) {
     Minecraft mc = mc();
     if (mc.player == null || mc.getConnection() == null) {
