@@ -120,6 +120,50 @@ public final class ScriptEngine {
     this.packets = new PacketChannel(services.network(), PacketInbox.instance(), this::failScript);
   }
 
+  /** The phases whose bodies are running, innermost first; see {@code minecheck.phase}. */
+  private final java.util.ArrayDeque<PhaseState> phases = new java.util.ArrayDeque<>();
+
+  /** One open phase: what it is called, its budget, and when that budget expires. */
+  private record PhaseState(String name, double seconds, long deadline) {}
+
+  /**
+   * Opens a phase: a named body whose total budget is checked once per tick, so a phase that is
+   * slow because it makes twenty correct waits is still bounded as a test.
+   */
+  public void beginPhase(String name, double seconds) {
+    phases.push(new PhaseState(name, seconds, clock.getAsLong() + (long) (seconds * 1000)));
+  }
+
+  /** Closes the innermost phase, whether its body returned or the run ended inside it. */
+  public void endPhase() {
+    phases.poll();
+  }
+
+  /** The innermost phase a check would be attributed to; {@code null} outside one. */
+  public String currentPhase() {
+    PhaseState phase = phases.peek();
+    return phase == null ? null : phase.name();
+  }
+
+  /**
+   * Fails the run when the current phase has spent its budget. Called once per tick, before the
+   * script is resumed: every waiting action parks the coroutine at a yield, so between two waits of
+   * a slow phase this is where the overrun is noticed.
+   *
+   * <p>A script that never yields cannot be interrupted this way — Lua cannot be preempted from
+   * Java — which the reference documents rather than pretending otherwise.
+   */
+  private void checkPhaseDeadline() {
+    PhaseState phase = phases.peek();
+    if (phase == null || clock.getAsLong() <= phase.deadline()) {
+      return;
+    }
+    double seconds = phase.seconds();
+    String budget =
+        seconds == Math.floor(seconds) ? String.valueOf((long) seconds) : String.valueOf(seconds);
+    fail(phase.name() + ": exceeded " + budget + "s");
+  }
+
   /**
    * Records one {@code minecheck.expect} result (called from the Lua action).
    *
@@ -129,7 +173,9 @@ public final class ScriptEngine {
    * to record the identical name {@code "expect"}, so the CI report could not tell them apart.
    */
   public void recordExpect(String name, boolean ok) {
-    expects.add(new ExpectRecord(name != null ? name : "expect #" + (expects.size() + 1), ok));
+    expects.add(
+        new ExpectRecord(
+            name != null ? name : "expect #" + (expects.size() + 1), ok, currentPhase()));
   }
 
   /**
@@ -192,6 +238,10 @@ public final class ScriptEngine {
 
   /** Advance the script one step. Called once per client tick (or directly in tests). */
   public void tick() {
+    if (finished) {
+      return;
+    }
+    checkPhaseDeadline();
     if (finished) {
       return;
     }
