@@ -67,6 +67,13 @@ public final class LuaMinecheck {
    */
   private final PluginRegistry plugins;
 
+  /**
+   * The dedicated server this run can start, or {@code null} when the build staged none. One per
+   * script run: the process belongs to the run that started it.
+   */
+  private final net.minecheck.common.server.ServerProcess dedicatedServer =
+      net.minecheck.common.server.ServerProcess.fromSystemProperties();
+
   public LuaMinecheck(
       Globals globals,
       PlatformServices services,
@@ -93,6 +100,8 @@ public final class LuaMinecheck {
     // World entry / exit
     minecheck.set("joinLocalWorld", new JoinLocalWorld());
     minecheck.set("createWorld", new CreateWorld());
+    minecheck.set("worldExists", new WorldExists());
+    minecheck.set("deleteWorld", new DeleteWorld());
     minecheck.set("joinServer", new JoinServer());
     minecheck.set("leaveWorld", new LeaveWorld());
     minecheck.set("disconnect", new Disconnect());
@@ -100,6 +109,10 @@ public final class LuaMinecheck {
 
     // Assertions / result reporting
     minecheck.set("expect", new Expect());
+    minecheck.set("check", new Check());
+    minecheck.set("checkEq", new CheckEq());
+    minecheck.set("phase", new Phase());
+    minecheck.set("withDeadline", new WithDeadline());
     minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
@@ -112,16 +125,24 @@ public final class LuaMinecheck {
     minecheck.set("waitForChunk", new WaitForChunk());
     minecheck.set("worldGenSettled", new WorldGenSettled());
     minecheck.set("side", new Side());
+    minecheck.set("playerName", new PlayerName());
     minecheck.set("minecraftVersion", new MinecraftVersion());
     minecheck.set("isModLoaded", new IsModLoaded());
     minecheck.set("isInWorld", new IsInWorld());
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
 
+    // World state (both sides): the clocks a shared world carries from phase to phase.
+    minecheck.set("getWorldTime", new GetWorldTime());
+    minecheck.set("setWorldTime", new SetWorldTime());
+    minecheck.set("getWeather", new GetWeather());
+    minecheck.set("setWeather", new SetWeather());
+
     // Coordinators: run another staged script as a phase of this same session.
     minecheck.set("runScript", new RunScript());
 
     // The tick clock: the server this process runs, held and advanced by the script.
+    minecheck.set("ownTickClock", new OwnTickClock());
     minecheck.set("pauseTicks", new PauseTicks());
     minecheck.set("stepTicks", new StepTicks());
     minecheck.set("resumeTicks", new ResumeTicks());
@@ -175,6 +196,10 @@ public final class LuaMinecheck {
     minecheck.set("fillFromRecipe", new FillFromRecipe());
 
     // Dedicated-server actions
+    minecheck.set("startServer", new StartServer());
+    minecheck.set("serverStatus", new ServerStatus());
+    minecheck.set("waitForServer", new WaitForServer());
+    minecheck.set("stopServer", new StopServer());
     minecheck.set("runCommand", new RunCommand());
     minecheck.set("waitForPlayer", new WaitForPlayer());
     minecheck.set("waitForPlayerLeave", new WaitForPlayerLeave());
@@ -327,6 +352,18 @@ public final class LuaMinecheck {
     }
   }
 
+  /** The saves directory, or a sentence saying why this side has none. */
+  private net.minecheck.platform.api.WorldStorage requireWorlds(String action) {
+    net.minecheck.platform.api.WorldStorage worlds = services.worldStorage();
+    if (worlds == null) {
+      throw new LuaError(
+          action
+              + ": this side has no saves directory — worlds are created, reused and deleted on a"
+              + " client, not on a dedicated server");
+    }
+    return worlds;
+  }
+
   /**
    * Timeout deadline in millis for the optional timeout argument (seconds) at {@code argIndex},
    * defaulting to config.defaultTimeout.
@@ -435,6 +472,58 @@ public final class LuaMinecheck {
   private static LuaError wrap(String action, RuntimeException e) {
     String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     return new LuaError(action + ": " + msg);
+  }
+
+  /**
+   * A check's label, or {@code null} for "let the caller number it".
+   *
+   * <p>This deliberately does not use {@code optjstring}: LuaJ's base implementation
+   * <em>raises</em> for anything that is not nil/boolean/number/string, and {@code LuaTable} does
+   * not override it. Since an int64 is a table, {@code expect(cond, minecheck.int64("5"))} used to
+   * abort the whole script with <code>bad argument: String expected, got table</code> — the
+   * opposite of that action's documented "never aborts the script". A label that is not text is now
+   * reported and the check is numbered instead, so a run always keeps its recorded outcomes.
+   */
+  private String checkName(LuaValue arg, String action) {
+    if (arg.isnil()) {
+      return null;
+    }
+    if (arg.isstring()) {
+      // True for numbers as well, which read as their digits — the same as every other string
+      // context in Lua.
+      return arg.tojstring();
+    }
+    LOG.warning(
+        String.format(
+            "Minecheck: %s: a %s is not a check name — using the numbered default instead",
+            action, arg.typename()));
+    return null;
+  }
+
+  /**
+   * The label for a check: the caller's text, or {@code "<prefix> #<n>"} where {@code n} is the
+   * position the record will take — so {@code check} and {@code expect} number one sequence.
+   */
+  private String named(LuaValue arg, String prefix) {
+    String given = checkName(arg, prefix);
+    if (given != null) {
+      return given;
+    }
+    return prefix + " #" + (engine != null ? engine.nextExpectNumber() : 1);
+  }
+
+  /**
+   * Fails the run and stops the script: the ending {@code minecheck.fail} has, shared so a failing
+   * {@code check} ends a run exactly the way the documented escape hatch does.
+   */
+  private void failAndStop(String message) {
+    if (engine != null) {
+      engine.failScript(message);
+    }
+    // Stop the script regardless: yield forever (never resumed finished).
+    while (true) {
+      globals.yield(LuaValue.NIL);
+    }
   }
 
   /** Parses a Lua position table {@code { x =, y =, z = }} into an SNBT-safe double array. */
@@ -589,11 +678,20 @@ public final class LuaMinecheck {
       LuaTable opts = args.arg1().checktable();
       WaitBudget budget = new WaitBudget(deadline(args, 2), clock.getAsLong());
       CreateWorldOptions options = parseOptions(opts);
+      // reuse: join the world of that name when it is already on disk rather than create a fresh
+      // one over it — the "pay worldgen once" half of a suite that keeps its world between runs.
+      net.minecheck.platform.api.WorldStorage worlds = services.worldStorage();
+      boolean joinExisting =
+          opts.get("reuse").optboolean(false) && worlds != null && worlds.exists(options.name());
       boolean initiated = false;
       try {
         while (true) {
           if (!initiated) {
-            client.createWorld(options);
+            if (joinExisting) {
+              client.joinLocalWorld(options.name());
+            } else {
+              client.createWorld(options);
+            }
             initiated = true;
           }
           if (client.isWorldReady()) {
@@ -650,6 +748,42 @@ public final class LuaMinecheck {
       } catch (NumberFormatException e) {
         return s.hashCode();
       }
+    }
+  }
+
+  /**
+   * minecheck.worldExists(name) -> boolean
+   *
+   * <p>Client only: whether a world of that name is on disk, so a suite can decide between creating
+   * it and {@code createWorld({ name = ..., reuse = true })} joining it.
+   */
+  private final class WorldExists extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = args.arg1().checkjstring();
+      return LuaValue.valueOf(requireWorlds("worldExists").exists(name));
+    }
+  }
+
+  /**
+   * minecheck.deleteWorld(name) -> boolean
+   *
+   * <p>Client only, and only with no world open: deleting the save a running integrated server has
+   * open is a torn tree, so the action refuses rather than corrupting it. False when there was no
+   * such world.
+   */
+  private final class DeleteWorld extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = args.arg1().checkjstring();
+      if (client.isInWorld()) {
+        throw new LuaError(
+            "deleteWorld: leave the world first — deleting a save while its server has it open"
+                + " would corrupt it");
+      }
+      return LuaValue.valueOf(requireWorlds("deleteWorld").delete(name));
     }
   }
 
@@ -839,36 +973,129 @@ public final class LuaMinecheck {
     public Varargs invoke(Varargs args) {
       boolean ok = args.arg1().toboolean();
       if (engine != null) {
-        engine.recordExpect(checkName(args.arg(2)), ok);
+        engine.recordExpect(checkName(args.arg(2), "expect"), ok);
       }
       return LuaValue.valueOf(ok);
     }
+  }
 
-    /**
-     * The check's label, or {@code null} for "let the engine number it".
-     *
-     * <p>This deliberately does not use {@code optjstring}: LuaJ's base implementation
-     * <em>raises</em> for anything that is not nil/boolean/number/string, and {@code LuaTable} does
-     * not override it. Since an int64 is a table, {@code expect(cond, minecheck.int64("5"))} used
-     * to abort the whole script with <code>bad argument: String expected, got table</code> — the
-     * opposite of this action's documented "never aborts the script". A label that is not text is
-     * now reported and the check is numbered instead, so a run always keeps its recorded outcomes.
-     */
-    private String checkName(LuaValue arg) {
-      if (arg.isnil()) {
-        return null;
+  /**
+   * minecheck.check(cond[, name]) -> boolean
+   *
+   * <p>{@code expect} records and carries on; {@code check} records and, when the condition is
+   * false, fails the run with the check's label and stops the script. That is the assertion a suite
+   * sharing one world wants: the first failure ends the run instead of leaving a half-set-up world
+   * behind to produce a cascade of misleading verdicts.
+   */
+  private final class Check extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      boolean ok = args.arg1().toboolean();
+      String name = named(args.arg(2), "check");
+      if (engine != null) {
+        engine.recordExpect(name, ok);
       }
-      if (arg.isstring()) {
-        // True for numbers as well, which read as their digits — the same as every other string
-        // context in Lua.
-        return arg.tojstring();
+      if (!ok) {
+        failAndStop(name);
       }
-      LOG.warning(
-          String.format(
-              "Minecheck: expect: a %s is not a check name — using the numbered default instead",
-              arg.typename()));
-      return null;
+      return LuaValue.TRUE;
     }
+  }
+
+  /**
+   * minecheck.checkEq(actual, expected[, name]) -> boolean
+   *
+   * <p>{@code check} with the comparison done here, so the verdict reads <code>expected 3, got
+   * 4</code> instead of whatever sentence each suite assembled by hand.
+   */
+  private final class CheckEq extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      LuaValue actual = args.arg1();
+      LuaValue expected = args.arg(2);
+      // Lua's own equality: numbers by value, strings by content, tables by identity.
+      boolean ok = actual.raweq(expected);
+      String name = named(args.arg(3), "checkEq");
+      if (engine != null) {
+        engine.recordExpect(name, ok);
+      }
+      if (!ok) {
+        failAndStop(name + ": expected " + expected.tojstring() + ", got " + actual.tojstring());
+      }
+      return LuaValue.TRUE;
+    }
+  }
+
+  /**
+   * minecheck.phase(name, body[, seconds]) -> boolean
+   *
+   * <p>Runs {@code body} under a named phase whose total budget is checked once per tick. The
+   * per-wait ceiling ({@code config.defaultTimeout}) cannot budget a <em>test</em>, so a phase that
+   * is slow because it makes twenty correct waits had no bound of its own; this is that bound, and
+   * the phase's name is what an overrun (and every {@code expect} inside it) is reported against.
+   */
+  private final class Phase extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = args.arg1().checkjstring();
+      LuaFunction body = args.arg(2).checkfunction();
+      double seconds = args.arg(3).isnumber() ? args.arg(3).todouble() : config.defaultTimeout();
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /**
+   * minecheck.withDeadline(seconds[, name], body) -> boolean
+   *
+   * <p>The budget on its own, for a caller that already names its work: the name is optional, and
+   * without one the enclosing phase's name (or {@code MINECHECK_PHASE}, or {@code "run"}) is what
+   * an overrun reports.
+   */
+  private final class WithDeadline extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      double seconds = args.arg1().checkdouble();
+      LuaValue second = args.arg(2);
+      String name;
+      LuaFunction body;
+      if (second.isfunction()) {
+        name =
+            engine != null && engine.currentPhase() != null ? engine.currentPhase() : phaseLabel();
+        body = second.checkfunction();
+      } else {
+        name = second.optjstring("phase");
+        body = args.arg(3).checkfunction();
+      }
+      return runPhase(name, seconds, body);
+    }
+  }
+
+  /** The name a budget reports under when the caller gave none: the staged script, or "run". */
+  private String phaseLabel() {
+    LuaValue staged = globals.get("MINECHECK_PHASE");
+    return staged.isstring() ? staged.tojstring() : "run";
+  }
+
+  /**
+   * Runs a body under a name and a budget. The body is a plain call, like {@code runScript}: a
+   * waiting action inside it yields this same coroutine, and the engine notices the overrun at the
+   * next tick with the phase still on its stack.
+   */
+  private Varargs runPhase(String name, double seconds, LuaFunction body) {
+    if (seconds <= 0) {
+      throw new LuaError("phase \"" + name + "\": the budget must be a positive number of seconds");
+    }
+    if (engine == null) {
+      body.call();
+      return LuaValue.TRUE;
+    }
+    engine.beginPhase(name, seconds);
+    try {
+      body.call();
+    } finally {
+      engine.endPhase();
+    }
+    return LuaValue.TRUE;
   }
 
   /**
@@ -881,14 +1108,8 @@ public final class LuaMinecheck {
   private final class Fail extends VarArgFunction {
     @Override
     public Varargs invoke(Varargs args) {
-      String message = args.optjstring(1, "minecheck.fail called");
-      if (engine != null) {
-        engine.failScript(message);
-      }
-      // Stop the script regardless: yield forever (never resume finished).
-      while (true) {
-        globals.yield(LuaValue.NIL);
-      }
+      failAndStop(args.optjstring(1, "minecheck.fail called"));
+      return LuaValue.NIL;
     }
   }
 
@@ -2538,6 +2759,125 @@ public final class LuaMinecheck {
   // ------------------------------------------------------------ server actions
 
   /**
+   * minecheck.startServer(opts) -> boolean
+   *
+   * <p>Launches the run's dedicated server from the client, after the integrated phases have
+   * passed: the harness stages the launch descriptor and a server template, and this stages the
+   * script (and, with {@code setupDir}, the world) before starting the process.
+   *
+   * <p>opts: {@code script} (name in the client's scripts directory), {@code setupDir} (a world
+   * tree to boot instead of generating one), {@code world} (the level folder), {@code timeout} (how
+   * long to wait for {@code Done}; {@code false} returns as soon as the process is up).
+   */
+  private final class StartServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError(
+            "startServer: this run has no dedicated server staged — the build must configure"
+                + " serverLoaderTask and a server launch descriptor");
+      }
+      LuaTable opts = args.arg1().checktable();
+      String script = opts.get("script").checkjstring();
+      Path scriptsDir =
+          engine == null || engine.scriptFile() == null
+              ? null
+              : engine.scriptFile().toAbsolutePath().getParent();
+      if (scriptsDir == null) {
+        throw new LuaError("startServer: the running script has no scripts directory");
+      }
+      Path setupDir =
+          opts.get("setupDir").isnil() ? null : Path.of(opts.get("setupDir").tojstring());
+      String level =
+          opts.get("world")
+              .optjstring(System.getProperty("minecheck.serverWorld", "minecheck_world"));
+      if (!dedicatedServer.start(scriptsDir, script, setupDir, level)) {
+        return LuaValue.FALSE;
+      }
+      LuaValue timeout = opts.get("timeout");
+      if (timeout.isboolean() && !timeout.toboolean()) {
+        return LuaValue.TRUE;
+      }
+      int seconds = timeout.isnumber() ? timeout.toint() : 120;
+      return LuaValue.valueOf(dedicatedServer.waitFor(seconds));
+    }
+  }
+
+  /** minecheck.serverStatus() -> "stopped" | "starting" | "ready" | "failed" */
+  private final class ServerStatus extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      return LuaValue.valueOf(
+          dedicatedServer == null ? "stopped" : dedicatedServer.status().jsonName());
+    }
+  }
+
+  /** minecheck.waitForServer([timeout]) -> boolean — Done reported, or a connection accepted. */
+  private final class WaitForServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError("waitForServer: this run has no dedicated server staged");
+      }
+      long deadline = deadline(args, 1);
+      while (true) {
+        net.minecheck.common.server.ServerProcess.Status now = dedicatedServer.status();
+        if (now == net.minecheck.common.server.ServerProcess.Status.READY) {
+          return LuaValue.TRUE;
+        }
+        if (now == net.minecheck.common.server.ServerProcess.Status.FAILED
+            || now == net.minecheck.common.server.ServerProcess.Status.STOPPED) {
+          return LuaValue.FALSE;
+        }
+        if (clock.getAsLong() > deadline) {
+          return LuaValue.FALSE;
+        }
+        globals.yield(LuaValue.NIL);
+      }
+    }
+  }
+
+  /**
+   * minecheck.stopServer([timeout]) -> boolean
+   *
+   * <p>Writes {@code stop} to the child's console and waits, a tick at a time, for it to exit — the
+   * client keeps running, so a server that takes a while to save does not freeze the run. False
+   * when the budget ran out and the process had to be killed.
+   */
+  private final class StopServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError("stopServer: this run has no dedicated server staged");
+      }
+      long deadline = deadline(args, 1);
+      boolean asked = false;
+      try {
+        while (true) {
+          if (!asked) {
+            asked = true;
+            dedicatedServer.requestStop();
+          }
+          if (!dedicatedServer.running()) {
+            return LuaValue.TRUE;
+          }
+          if (clock.getAsLong() > deadline) {
+            dedicatedServer.kill();
+            return LuaValue.FALSE;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("stopServer", e);
+      }
+    }
+  }
+
+  /**
    * minecheck.runCommand(cmd) -> table
    *
    * <p>Executes {@code cmd} (no leading '/') and returns {@code { success = true, result = <result
@@ -3241,6 +3581,35 @@ public final class LuaMinecheck {
     }
   }
 
+  /**
+   * minecheck.ownTickClock([enabled]) -> boolean
+   *
+   * <p>The script's own opt-in to owning the server's tick loop, instead of the {@code
+   * ownTickClock} key in {@code config.json}: the same contract, asked for by the suite that needs
+   * it rather than set by a build config whose name says "screenshots". Call it at the start of a
+   * run, before a world is entered; the grant applies to the rest of the run, and the engine hands
+   * the clock back when the run ends however it ends.
+   *
+   * <p>Omitting the argument turns ownership on; {@code false} withdraws it. Returns whether the
+   * clock is owned afterwards — false when asked to turn it off, and false on a loader that bound
+   * no tick gate, which has no clock to hold. Withdrawing only takes away this action's grant: a
+   * run whose {@code config.json} already said {@code ownTickClock} keeps its clock.
+   */
+  private final class OwnTickClock extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      boolean enabled = args.arg1().optboolean(true);
+      TickClock tickClock = TickClock.get();
+      if (enabled && !tickClock.bound()) {
+        LOG.warning(
+            "Minecheck: ownTickClock: this loader has no tick gate, so there is no clock to own");
+        return LuaValue.FALSE;
+      }
+      tickClock.setScriptOwnership(enabled);
+      return LuaValue.valueOf(enabled || config.ownTickClock());
+    }
+  }
+
   /** minecheck.resumeTicks() -> nil — hands the loop back to the wall clock. */
   private final class ResumeTicks extends VarArgFunction {
     @Override
@@ -3268,13 +3637,14 @@ public final class LuaMinecheck {
    * the script does it on its way out, when no tick has run recently by definition.
    */
   private void requireTickClock(String action, boolean requireLive) {
-    if (!config.ownTickClock()) {
+    TickClock tickClock = TickClock.get();
+    if (!config.ownTickClock() && !tickClock.scriptOwned()) {
       throw new LuaError(
           action
-              + ": the tick clock is disabled — set \"ownTickClock\": true in"
-              + " config/minecheck/config.json to let a script hold the world's ticks");
+              + ": the tick clock is disabled — call minecheck.ownTickClock() or set"
+              + " \"ownTickClock\": true in config/minecheck/config.json to let a script hold the"
+              + " world's ticks");
     }
-    TickClock tickClock = TickClock.get();
     if (!tickClock.bound()) {
       throw new LuaError(action + ": this loader has no tick gate, so the clock cannot be owned");
     }
@@ -3348,6 +3718,22 @@ public final class LuaMinecheck {
     }
   }
 
+  /**
+   * minecheck.playerName() -> string | nil
+   *
+   * <p>The player name the build launched this run with ({@code -Dminecheck.playerName}), so a
+   * server script waits for the player it actually expects instead of repeating a literal that a
+   * different dev config silently breaks. {@code nil} when the build pinned none, which lets a
+   * script fall back: {@code local name = minecheck.playerName() or "Dev"}.
+   */
+  private final class PlayerName extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = System.getProperty("minecheck.playerName");
+      return name == null || name.isBlank() ? LuaValue.NIL : LuaValue.valueOf(name);
+    }
+  }
+
   /** minecheck.side() -> "client" | "server" */
   private final class Side extends VarArgFunction {
     @Override
@@ -3377,6 +3763,90 @@ public final class LuaMinecheck {
         return LuaValue.valueOf(server.isWorldGenSettled());
       }
       return LuaValue.valueOf(client.isWorldGenSettled());
+    }
+  }
+
+  /**
+   * minecheck.getWorldTime() -> number | nil
+   *
+   * <p>The world's daylight time in ticks ({@code 0} sunrise, {@code 6000} noon, {@code 18000}
+   * midnight), or {@code nil} outside a world. Both sides: on a client this is the time the client
+   * sees, which vanilla keeps in step with the server's.
+   */
+  private final class GetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      Long ticks;
+      try {
+        ticks = client != null ? client.worldTime() : server.worldTime();
+      } catch (RuntimeException e) {
+        throw wrap("getWorldTime", e);
+      }
+      return ticks == null ? LuaValue.NIL : LuaValue.valueOf(ticks.longValue());
+    }
+  }
+
+  /**
+   * minecheck.setWorldTime(ticks) -> boolean
+   *
+   * <p>Sets the daylight time, so the next phase starts from a pinned time rather than from
+   * whatever the previous one advanced it to. False when this process does not own the world's
+   * clock — a client playing on somebody else's server — and a negative count is rejected as not a
+   * time of day.
+   */
+  private final class SetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      long ticks = args.arg1().checklong();
+      if (ticks < 0) {
+        throw new LuaError("setWorldTime: " + ticks + " is not a time of day");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWorldTime(ticks) : server.setWorldTime(ticks);
+      } catch (RuntimeException e) {
+        throw wrap("setWorldTime", e);
+      }
+      return LuaValue.valueOf(ok);
+    }
+  }
+
+  /** minecheck.getWeather() -> "clear" | "rain" | "thunder" | nil (both sides). */
+  private final class GetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather;
+      try {
+        weather = client != null ? client.weather() : server.weather();
+      } catch (RuntimeException e) {
+        throw wrap("getWeather", e);
+      }
+      return weather == null ? LuaValue.NIL : LuaValue.valueOf(weather);
+    }
+  }
+
+  /**
+   * minecheck.setWeather(weather) -> boolean
+   *
+   * <p>Sets the weather to {@code "clear"}, {@code "rain"} or {@code "thunder"}, with the same
+   * ownership rule as {@code setWorldTime}. An unknown name raises rather than silently doing
+   * nothing, because a suite that mistyped it would otherwise keep asserting against the old
+   * weather.
+   */
+  private final class SetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather = args.arg1().checkjstring().toLowerCase(java.util.Locale.ROOT);
+      if (!weather.equals("clear") && !weather.equals("rain") && !weather.equals("thunder")) {
+        throw new LuaError("setWeather: \"" + weather + "\" is not clear, rain or thunder");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWeather(weather) : server.setWeather(weather);
+      } catch (RuntimeException e) {
+        throw wrap("setWeather", e);
+      }
+      return LuaValue.valueOf(ok);
     }
   }
 
