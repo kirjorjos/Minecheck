@@ -271,7 +271,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
     if (server == null) {
       return false;
     }
-    server.submit(() -> server.getCommandManager().execute(server.getCommandSource(), command));
+    server.submit(() -> server.getCommandManager().execute(server, command));
     return true;
   }
 
