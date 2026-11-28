@@ -233,6 +233,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<Integer> getMaxTickTime();
 
+  /**
+   * When true, the client's own world directory ({@code saves/<world>}) is left in place instead of
+   * being deleted before the run, so a suite that keeps its world between {@code ./gradlew} runs
+   * pays world creation once. What a suite does with it is the script's business: {@code
+   * createWorld({ name = ..., reuse = true })} joins it, and {@code deleteWorld} is how a run that
+   * wants a clean world starts one.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getKeepWorld();
+
   /** Whether to prepend {@code xvfb-run -a} (headless no-display environments). */
   @Input
   @Optional
@@ -499,7 +510,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path configDir = runDir.resolve("config/minecheck");
 
     try {
-      deleteRecursively(runDir.resolve("saves").resolve(world()));
+      if (!getKeepWorld().getOrElse(false)) {
+        deleteRecursively(runDir.resolve("saves").resolve(world()));
+      }
       if (getCleanScreenshots().getOrElse(false)) {
         deleteRecursively(runDir.resolve("screenshots"));
       }
