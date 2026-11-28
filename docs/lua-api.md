@@ -200,8 +200,14 @@ minecheck.createWorld({
     daylightCycle = false,      -- true | false (deterministic default)
     weatherCycle = false,       -- true | false (deterministic default)
     insomnia = false,           -- true | false (deterministic default)
+    reuse = false,              -- true | false: join the existing world of that name
 })
 ```
+
+With `reuse = true`, a world of that name that is already on disk is joined instead of created over
+— the "pay world creation once" half of a suite that keeps its world between runs. The lifecycle
+task's `keepWorld` property stops the harness deleting `saves/<world>` before the run; a suite that
+wants a clean world calls [`minecheck.deleteWorld`](#minecheckdeleteworldname--boolean) itself.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -214,6 +220,25 @@ minecheck.createWorld({
 > The dedicated server generates its world using the normal server jar + installed world-gen mods.
 > Determinism comes from a pinned `level-seed` in `server.properties`; the loader also forces the
 > same deterministic gamerules (mob spawning, daylight/weather cycle, insomnia off) at server start.
+
+---
+
+### `minecheck.worldExists(name) → boolean`
+
+Client only: whether a world of that name is on disk (its folder has a `level.dat`). A suite uses it
+to decide between creating a world and joining the one an earlier run left behind.
+
+### `minecheck.deleteWorld(name) → boolean`
+
+Client only, and only with no world open: deleting the save a running integrated server has open is
+a torn tree, so the call raises `leave the world first` rather than corrupting it. `false` when
+there was no such world.
+
+```lua
+minecheck.disconnect()
+minecheck.deleteWorld("suite")
+minecheck.createWorld({ name = "suite" }) -- a clean world, once
+```
 
 ---
 
