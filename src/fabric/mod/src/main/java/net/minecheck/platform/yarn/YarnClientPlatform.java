@@ -1295,7 +1295,7 @@ public class YarnClientPlatform extends ClientPlatformBase {
       return false;
     }
     server.execute(
-        () -> server.getCommandManager().executeWithPrefix(server.getCommandSource(), command));
+        () -> server.getCommandManager().execute(server.getCommandSource(), command));
     return true;
   }
 
