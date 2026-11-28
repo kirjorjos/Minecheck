@@ -230,6 +230,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getScreenshotChatVisible();
 
   /**
+<<<<<<< HEAD
    * The UI language the screenshot profile pins (default {@code en_us}).
    *
    * <p>Not one spelling for every line: 1.4.7 ships its language file as {@code en_US.lang} and
@@ -263,6 +264,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getViewWindow();
+=======
+   * How long the harness waits for a run's verdict, in minutes (default {@code 20}).
+   *
+   * <p>The limit exists so a hung run is reported instead of waited on forever; it was a fixed
+   * twenty minutes, which made a suite of many in-world tests a wall rather than a choice. Both
+   * sides of a lifecycle use it: the server's verdict belongs to the same run.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getVerdictTimeout();
+>>>>>>> 5462974 (Budget phases, not just waits, and attribute checks to them)
 
   /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
@@ -497,7 +509,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
             ? driveLive(getLiveDriverFile().get().getAsFile().toPath(), logFile, p)
             : List.of();
 
-    RunResultDto result = awaitVerdict(resultFile, Duration.ofMinutes(20), p);
+    RunResultDto result = awaitVerdict(resultFile, verdictTimeout(), p);
     int exit = waitExit(p, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [{}] client exited (code {})", phase, exit);
 
@@ -728,7 +740,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getServerLaunchFile()),
                 false),
             "server-generate");
-    RunResultDto verdict = awaitVerdict(serverResult, Duration.ofMinutes(20), server);
+    RunResultDto verdict = awaitVerdict(serverResult, verdictTimeout(), server);
     int exit = waitExit(server, Duration.ofSeconds(60));
     // Never the suite's `expectFailure` inversion: this run has to succeed on its own terms.
     RunVerdict outcome = RunVerdict.of(verdict, false);
@@ -825,7 +837,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getClientLaunchFile()),
                 getXvfbRun().getOrElse(true)),
             "client");
-    RunResultDto clientVerdict = awaitVerdict(clientResult, Duration.ofMinutes(20), client);
+    RunResultDto clientVerdict = awaitVerdict(clientResult, verdictTimeout(), client);
     int clientExit = waitExit(client, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [server] client exited (code {})", clientExit);
 
@@ -975,6 +987,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   }
 
   // ---------------------------------------------------------------- screenshot profile
+
+  private Duration verdictTimeout() {
+    return Duration.ofMinutes(getVerdictTimeout().getOrElse(20));
+  }
 
   private boolean screenshotProfile() {
     return getScreenshotProfile().getOrElse(false);
