@@ -259,6 +259,41 @@ public class LegacyFabricServerPlatform implements ServerPlatform {
   }
 
   @Override
+  public Long worldTime() {
+    MinecraftServer s = server;
+    if (s == null) {
+      return null;
+    }
+    return onServerThread(() -> overworld().getTimeOfDay());
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return runCommand("time set " + ticks) > 0;
+  }
+
+  @Override
+  public String weather() {
+    MinecraftServer s = server;
+    if (s == null) {
+      return null;
+    }
+    return onServerThread(
+        () -> {
+          ServerWorld level = overworld();
+          if (level.isThundering()) {
+            return "thunder";
+          }
+          return level.isRaining() ? "rain" : "clear";
+        });
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return runCommand("weather " + weather) > 0;
+  }
+
+  @Override
   public int spawnEntity(String id, double x, double y, double z, String nbt) {
     return onServerThread(() -> spawnEntityOnServerThread(id, x, y, z, nbt));
   }
