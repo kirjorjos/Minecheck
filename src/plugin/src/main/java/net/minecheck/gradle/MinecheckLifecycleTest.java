@@ -177,6 +177,62 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<String> getServerWorldScript();
 
+  /**
+   * The player name this run is launched with, passed to the game as {@code -Dminecheck.playerName}
+   * and readable from a script as {@code minecheck.playerName()}. A server script waits for the
+   * player it actually expects instead of repeating a literal that a different dev config silently
+   * breaks. Unset means scripts get nil and fall back themselves.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getPlayerName();
+
+  /**
+   * Pinned {@code view-distance} for the server (default {@code 10}, the same radius the client's
+   * options are pinned to). A test that reaches beyond the simulation distance is not ticking on
+   * the server, and reads as a mod bug.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getViewDistance();
+
+  /** Pinned {@code simulation-distance} for the server (default {@code 10}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getSimulationDistance();
+
+  /**
+   * Pinned {@code spawn-protection} for the server (default {@code 16}, vanilla's). Set it to
+   * {@code 0} when a test builds at spawn as a non-op.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getSpawnProtection();
+
+  /**
+   * Pinned {@code gamemode} for the server (default {@code survival}, vanilla's). Careful with
+   * {@code creative}: the client's inventory key then opens the item palette rather than the
+   * player's own slots, so a suite that reads its hotbar through an open inventory will not find
+   * what the server gave it.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getGamemode();
+
+  /** Pinned {@code difficulty} for the server (default {@code easy}, vanilla's). */
+  @Input
+  @Optional
+  public abstract Property<String> getDifficulty();
+
+  /**
+   * Pinned {@code max-tick-time} for the server, in milliseconds (default {@code 60000},
+   * vanilla's). Set it to {@code -1} to turn the watchdog off when a heavy test legitimately stalls
+   * a tick: a watchdog kill reads as "hung" rather than as the assertion that was running.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getMaxTickTime();
+
   /** Whether to prepend {@code xvfb-run -a} (headless no-display environments). */
   @Input
   @Optional
@@ -1094,6 +1150,19 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     } catch (IOException e) {
       throw new GradleException("could not read the flat world declaration " + flatWorld, e);
     }
+    // The rest of the launch profile. Each of these is something a suite can otherwise trip over
+    // and read as a mod bug: a test beyond the simulation distance is not ticking on the server, a
+    // non-op cannot build inside spawn protection, and a stall kills a server whose watchdog is on.
+    // Pinned here rather than left to the dev run's defaults, so "the test failed" and "the world
+    // was set up differently" stay different sentences.
+    sb.append("view-distance=").append(getViewDistance().getOrElse(10)).append('\n');
+    sb.append("simulation-distance=").append(getSimulationDistance().getOrElse(10)).append('\n');
+    // Vanilla's own values are the defaults, so pinning the profile changes nothing a suite
+    // already relies on: a build opts into a different world by setting one of these.
+    sb.append("spawn-protection=").append(getSpawnProtection().getOrElse(16)).append('\n');
+    sb.append("gamemode=").append(getGamemode().getOrElse("survival")).append('\n');
+    sb.append("difficulty=").append(getDifficulty().getOrElse("easy")).append('\n');
+    sb.append("max-tick-time=").append(getMaxTickTime().getOrElse(60000)).append('\n');
     String seed = getLevelSeed().getOrNull();
     if (seed != null && !seed.isBlank()) {
       sb.append("level-seed=").append(seed).append('\n');
@@ -1246,6 +1315,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   // ---------------------------------------------------------------- process helpers
 
   /**
+   * The launch's system properties plus the pinned player name, when the build set one: the game
+   * reads it back as {@code minecheck.playerName()}, on both sides, so a server script and a client
+   * script agree on who is joining without either repeating the literal.
+   */
+  private List<String> withPlayerName(List<String> systemProps) {
+    if (!getPlayerName().isPresent()) {
+      return systemProps;
+    }
+    List<String> all = new ArrayList<>(systemProps);
+    all.add("-Dminecheck.playerName=" + getPlayerName().get());
+    return all;
+  }
+
+  /**
    * Builds the launch command. When the loader produced a launch descriptor ({@code
    * devHelper*Launch} task), the game runs as a plain {@code java} process launched directly by
    * this build — true OS-process parallelism with no child {@code ./gradlew} (so no Gradle
@@ -1258,6 +1341,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    */
   private ProcessBuilder launcherBuilder(
       String gradleTask, List<String> systemProps, Path descriptorFile, boolean useDisplay) {
+    systemProps = withPlayerName(systemProps);
     List<String> cmd = new ArrayList<>();
     if (useDisplay) {
       cmd.add(resolveExecutable("xvfb-run"));
