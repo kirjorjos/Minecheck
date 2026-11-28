@@ -1109,7 +1109,27 @@ world's integrated server. The client keeps ticking, so the script and the rende
 the world stands still. The hold lasts until `resumeTicks` or the next `stepTicks`. A command is a
 server tick's work, so one sent while the clock is held stays queued until it moves again.
 
-Requires `ownTickClock: true`.
+Requires the tick clock to be owned — [`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true` in `config.json`.
+
+### `minecheck.ownTickClock([enabled]) → boolean`
+
+Opts the run into owning the server's tick loop from the script, instead of the `ownTickClock` key in `config.json` — the same contract `pauseTicks` / `stepTicks` / `resumeTicks` already need, asked for by the suite that needs it rather than set in a build config whose name only mentions screenshots. Call it at the start of a run, before a world is entered; the grant lasts for the rest of the run, and the engine hands the clock back when the run ends however it ends.
+
+```lua
+minecheck.ownTickClock()
+minecheck.joinLocalWorld("minecheck_world")
+minecheck.stepTicks(400)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `enabled` | boolean | Omit (or `true`) to own the clock; `false` withdraws this action's grant. |
+
+**Returns:** `true` when the clock is owned afterwards. `false` when asked to turn it off, and `false` on a loader that bound no tick gate — there is no clock to hold. Withdrawing only removes this action's grant: a run whose `config.json` already set `ownTickClock` keeps its clock.
+
+A build can also grant it without a script, with the lifecycle task's `ownTickClock` property.
+
+---
 
 ### `minecheck.stepTicks(ticks[, timeout]) → nil`
 
@@ -1127,14 +1147,14 @@ minecheck.stepTicks(400) -- settle a fresh world's lighting without waiting twen
 local shot = minecheck.captureScreenshot("world-settled")
 ```
 
-Requires `ownTickClock: true`, and a server this process runs. A client that is playing on somebody
+Requires the tick clock to be owned ([`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true`), and a server this process runs. A client that is playing on somebody
 else's server has no clock here to hold, and the action says so instead of hanging.
 
 ### `minecheck.resumeTicks() → nil`
 
 Hands the tick loop back to the wall clock, and un-parks a server thread already waiting in the gate.
 
-Requires `ownTickClock: true`.
+Requires the tick clock to be owned — [`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true` in `config.json`.
 
 ### `minecheck.uncappedTicks([enabled]) → nil`
 
@@ -1147,8 +1167,7 @@ The client is unaffected: frames are drawn at the renderer's own rate either way
 must be a specific picture still holds the clock with `pauseTicks` / `stepTicks`. `resumeTicks`
 leaves the mode alone; the end of the run turns it off, so a run cannot leave a server spinning.
 
-Requires `ownTickClock: true`. A loader whose loop has no pacing hook logs a warning when this is
-called and keeps the vanilla cadence.
+Requires the tick clock to be owned ([`minecheck.ownTickClock()`](#minecheckowntickclockenabled--boolean) or `ownTickClock: true`). A loader whose loop has no pacing hook logs a warning when this is called and keeps the vanilla cadence.
 
 ### `minecheck.sleep(seconds) → nil`
 

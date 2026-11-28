@@ -124,6 +124,7 @@ public final class LuaMinecheck {
     minecheck.set("runScript", new RunScript());
 
     // The tick clock: the server this process runs, held and advanced by the script.
+    minecheck.set("ownTickClock", new OwnTickClock());
     minecheck.set("pauseTicks", new PauseTicks());
     minecheck.set("stepTicks", new StepTicks());
     minecheck.set("resumeTicks", new ResumeTicks());
@@ -3310,6 +3311,35 @@ public final class LuaMinecheck {
     }
   }
 
+  /**
+   * minecheck.ownTickClock([enabled]) -> boolean
+   *
+   * <p>The script's own opt-in to owning the server's tick loop, instead of the {@code
+   * ownTickClock} key in {@code config.json}: the same contract, asked for by the suite that needs
+   * it rather than set by a build config whose name says "screenshots". Call it at the start of a
+   * run, before a world is entered; the grant applies to the rest of the run, and the engine hands
+   * the clock back when the run ends however it ends.
+   *
+   * <p>Omitting the argument turns ownership on; {@code false} withdraws it. Returns whether the
+   * clock is owned afterwards — false when asked to turn it off, and false on a loader that bound
+   * no tick gate, which has no clock to hold. Withdrawing only takes away this action's grant: a
+   * run whose {@code config.json} already said {@code ownTickClock} keeps its clock.
+   */
+  private final class OwnTickClock extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      boolean enabled = args.arg1().optboolean(true);
+      TickClock tickClock = TickClock.get();
+      if (enabled && !tickClock.bound()) {
+        LOG.warning(
+            "Minecheck: ownTickClock: this loader has no tick gate, so there is no clock to own");
+        return LuaValue.FALSE;
+      }
+      tickClock.setScriptOwnership(enabled);
+      return LuaValue.valueOf(enabled || config.ownTickClock());
+    }
+  }
+
   /** minecheck.resumeTicks() -> nil — hands the loop back to the wall clock. */
   private final class ResumeTicks extends VarArgFunction {
     @Override
@@ -3337,13 +3367,14 @@ public final class LuaMinecheck {
    * the script does it on its way out, when no tick has run recently by definition.
    */
   private void requireTickClock(String action, boolean requireLive) {
-    if (!config.ownTickClock()) {
+    TickClock tickClock = TickClock.get();
+    if (!config.ownTickClock() && !tickClock.scriptOwned()) {
       throw new LuaError(
           action
-              + ": the tick clock is disabled — set \"ownTickClock\": true in"
-              + " config/minecheck/config.json to let a script hold the world's ticks");
+              + ": the tick clock is disabled — call minecheck.ownTickClock() or set"
+              + " \"ownTickClock\": true in config/minecheck/config.json to let a script hold the"
+              + " world's ticks");
     }
-    TickClock tickClock = TickClock.get();
     if (!tickClock.bound()) {
       throw new LuaError(action + ": this loader has no tick gate, so the clock cannot be owned");
     }
