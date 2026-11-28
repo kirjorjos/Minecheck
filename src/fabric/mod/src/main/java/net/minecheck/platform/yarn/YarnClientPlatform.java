@@ -1133,6 +1133,53 @@ public class YarnClientPlatform implements ClientPlatform {
         net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString(), nbt);
   }
 
+  /**
+   * The daylight time the client sees. Vanilla keeps a client's world time in step with the
+   * server's, so this is the same clock a dedicated-server phase reads.
+   */
+  @Override
+  public Long worldTime() {
+    MinecraftClient mc = mc();
+    return mc.world == null ? null : mc.world.getTimeOfDay();
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return integratedCommand("time set " + ticks);
+  }
+
+  @Override
+  public String weather() {
+    MinecraftClient mc = mc();
+    if (mc.world == null) {
+      return null;
+    }
+    if (mc.world.isThundering()) {
+      return "thunder";
+    }
+    return mc.world.isRaining() ? "rain" : "clear";
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return integratedCommand("weather " + weather);
+  }
+
+  /**
+   * Queues a command on the integrated server this client hosts, and reports whether there was one
+   * to queue it on. A client playing on somebody else's server owns neither the time nor the
+   * weather, so it answers false rather than pretending the change happened.
+   */
+  private boolean integratedCommand(String command) {
+    MinecraftServer server = mc().getServer();
+    if (server == null) {
+      return false;
+    }
+    server.execute(
+        () -> server.getCommandManager().executeWithPrefix(server.getCommandSource(), command));
+    return true;
+  }
+
   @Override
   public Integer groundHeight(int x, int z) {
     MinecraftClient mc = mc();
