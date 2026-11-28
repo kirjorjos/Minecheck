@@ -177,6 +177,73 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<String> getServerWorldScript();
 
+  /**
+   * The player name this run is launched with, passed to the game as {@code -Dminecheck.playerName}
+   * and readable from a script as {@code minecheck.playerName()}. A server script waits for the
+   * player it actually expects instead of repeating a literal that a different dev config silently
+   * breaks. Unset means scripts get nil and fall back themselves.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getPlayerName();
+
+  /**
+   * Pinned {@code view-distance} for the server (default {@code 10}, the same radius the client's
+   * options are pinned to). A test that reaches beyond the simulation distance is not ticking on
+   * the server, and reads as a mod bug.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getViewDistance();
+
+  /** Pinned {@code simulation-distance} for the server (default {@code 10}). */
+  @Input
+  @Optional
+  public abstract Property<Integer> getSimulationDistance();
+
+  /**
+   * Pinned {@code spawn-protection} for the server (default {@code 16}, vanilla's). Set it to
+   * {@code 0} when a test builds at spawn as a non-op.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getSpawnProtection();
+
+  /**
+   * Pinned {@code gamemode} for the server (default {@code survival}, vanilla's). Careful with
+   * {@code creative}: the client's inventory key then opens the item palette rather than the
+   * player's own slots, so a suite that reads its hotbar through an open inventory will not find
+   * what the server gave it.
+   */
+  @Input
+  @Optional
+  public abstract Property<String> getGamemode();
+
+  /** Pinned {@code difficulty} for the server (default {@code easy}, vanilla's). */
+  @Input
+  @Optional
+  public abstract Property<String> getDifficulty();
+
+  /**
+   * Pinned {@code max-tick-time} for the server, in milliseconds (default {@code 60000},
+   * vanilla's). Set it to {@code -1} to turn the watchdog off when a heavy test legitimately stalls
+   * a tick: a watchdog kill reads as "hung" rather than as the assertion that was running.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getMaxTickTime();
+
+  /**
+   * When true, the client's own world directory ({@code saves/<world>}) is left in place instead of
+   * being deleted before the run, so a suite that keeps its world between {@code ./gradlew} runs
+   * pays world creation once. What a suite does with it is the script's business: {@code
+   * createWorld({ name = ..., reuse = true })} joins it, and {@code deleteWorld} is how a run that
+   * wants a clean world starts one.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getKeepWorld();
+
   /** Whether to prepend {@code xvfb-run -a} (headless no-display environments). */
   @Input
   @Optional
@@ -194,6 +261,15 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getScreenshotProfile();
+
+  /**
+   * When true, the staged {@code config.json} lets the script own the server's tick loop ({@code
+   * ownTickClock}), so a gameplay suite can settle a scene by stepping a fixed tick count without
+   * turning on the screenshot profile — which used to be the only thing that wrote the key.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getOwnTickClock();
 
   /** Captured frame width the profile pins the window to (default {@code 854}). */
   @Input
@@ -219,6 +295,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getScreenshotChatVisible();
+
+  /**
+   * How long the harness waits for a run's verdict, in minutes (default {@code 20}).
+   *
+   * <p>The limit exists so a hung run is reported instead of waited on forever; it was a fixed
+   * twenty minutes, which made a suite of many in-world tests a wall rather than a choice. Both
+   * sides of a lifecycle use it: the server's verdict belongs to the same run.
+   */
+  @Input
+  @Optional
+  public abstract Property<Integer> getVerdictTimeout();
 
   /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
@@ -404,12 +491,15 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path configDir = runDir.resolve("config/minecheck");
 
     try {
-      deleteRecursively(runDir.resolve("saves").resolve(world()));
+      if (!getKeepWorld().getOrElse(false)) {
+        deleteRecursively(runDir.resolve("saves").resolve(world()));
+      }
       if (getCleanScreenshots().getOrElse(false)) {
         deleteRecursively(runDir.resolve("screenshots"));
       }
       stageClientOptions(runDir);
       stageVoiceChatConfig(runDir);
+      stageServerStart();
       if (getServerScript().isPresent()) {
         Path setupDir = null;
         if (getWorldGeneratorScript().isPresent()) {
@@ -453,7 +543,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
             ? driveLive(getLiveDriverFile().get().getAsFile().toPath(), logFile, p)
             : List.of();
 
-    RunResultDto result = awaitVerdict(resultFile, Duration.ofMinutes(20), p);
+    RunResultDto result = awaitVerdict(resultFile, verdictTimeout(), p);
     int exit = waitExit(p, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [{}] client exited (code {})", phase, exit);
 
@@ -685,7 +775,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getServerLaunchFile()),
                 false),
             "server-generate");
-    RunResultDto verdict = awaitVerdict(serverResult, Duration.ofMinutes(20), server);
+    RunResultDto verdict = awaitVerdict(serverResult, verdictTimeout(), server);
     int exit = waitExit(server, Duration.ofSeconds(60));
     // Never the suite's `expectFailure` inversion: this run has to succeed on its own terms.
     RunVerdict outcome = RunVerdict.of(verdict, false);
@@ -783,7 +873,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
                 descriptorPath(getClientLaunchFile()),
                 getXvfbRun().getOrElse(true)),
             "client");
-    RunResultDto clientVerdict = awaitVerdict(clientResult, Duration.ofMinutes(20), client);
+    RunResultDto clientVerdict = awaitVerdict(clientResult, verdictTimeout(), client);
     int clientExit = waitExit(client, Duration.ofSeconds(60));
     getLogger().lifecycle("Minecheck: [server] client exited (code {})", clientExit);
 
@@ -817,6 +907,50 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    * player spawns, the save is always complete, and the rejoin loads from disk instead of
    * regenerating.
    */
+  /**
+   * The template a client-started dedicated server boots from — the same eula and pinned {@code
+   * server.properties} the orchestrator writes for a server it launches itself, so a server started
+   * by the script and one started by the task are the same server.
+   */
+  private void stageServerStart() throws IOException {
+    if (descriptorPath(getServerLaunchFile()) == null) {
+      return;
+    }
+    Path template = serverStartTemplate();
+    Files.createDirectories(template);
+    Files.writeString(template.resolve("eula.txt"), "eula=true\n");
+    Files.writeString(template.resolve("server.properties"), serverProperties());
+  }
+
+  private Path serverStartTemplate() {
+    return getProject()
+        .getLayout()
+        .getBuildDirectory()
+        .dir("minecheck/server-start")
+        .get()
+        .getAsFile()
+        .toPath();
+  }
+
+  /**
+   * What the client needs to start the run's dedicated server itself: the descriptor, the run dir,
+   * the template, and the level it serves. Empty when the build stages no server or the paths are
+   * not resolvable yet (a task run outside the orchestrator).
+   */
+  private List<String> serverControlProps() {
+    Path descriptor = descriptorPath(getServerLaunchFile());
+    String runDir = getServerRunDir().getOrNull();
+    if (descriptor == null || runDir == null || runDir.isBlank()) {
+      return List.of();
+    }
+    return List.of(
+        "-Dminecheck.serverLaunch=" + descriptor,
+        "-Dminecheck.serverRunDir=" + runDir,
+        "-Dminecheck.serverTemplate=" + serverStartTemplate(),
+        "-Dminecheck.serverPort=" + port(),
+        "-Dminecheck.serverWorld=" + world());
+  }
+
   private void stageClientOptions(Path runDir) throws IOException {
     Files.createDirectories(runDir);
     StringBuilder options = new StringBuilder();
@@ -939,6 +1073,10 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
 
   // ---------------------------------------------------------------- screenshot profile
 
+  private Duration verdictTimeout() {
+    return Duration.ofMinutes(getVerdictTimeout().getOrElse(20));
+  }
+
   private boolean screenshotProfile() {
     return getScreenshotProfile().getOrElse(false);
   }
@@ -1006,6 +1144,19 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     } catch (IOException e) {
       throw new GradleException("could not read the flat world declaration " + flatWorld, e);
     }
+    // The rest of the launch profile. Each of these is something a suite can otherwise trip over
+    // and read as a mod bug: a test beyond the simulation distance is not ticking on the server, a
+    // non-op cannot build inside spawn protection, and a stall kills a server whose watchdog is on.
+    // Pinned here rather than left to the dev run's defaults, so "the test failed" and "the world
+    // was set up differently" stay different sentences.
+    sb.append("view-distance=").append(getViewDistance().getOrElse(10)).append('\n');
+    sb.append("simulation-distance=").append(getSimulationDistance().getOrElse(10)).append('\n');
+    // Vanilla's own values are the defaults, so pinning the profile changes nothing a suite
+    // already relies on: a build opts into a different world by setting one of these.
+    sb.append("spawn-protection=").append(getSpawnProtection().getOrElse(16)).append('\n');
+    sb.append("gamemode=").append(getGamemode().getOrElse("survival")).append('\n');
+    sb.append("difficulty=").append(getDifficulty().getOrElse("easy")).append('\n');
+    sb.append("max-tick-time=").append(getMaxTickTime().getOrElse(60000)).append('\n');
     String seed = getLevelSeed().getOrNull();
     if (seed != null && !seed.isBlank()) {
       sb.append("level-seed=").append(seed).append('\n');
@@ -1163,9 +1314,13 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       config.put("screenshotGuiScale", screenshotGuiScale());
       config.put("screenshotScale", screenshotScale());
       config.put("screenshotChatVisible", screenshotChatVisible());
+    }
+    if (screenshotProfile() || getOwnTickClock().getOrElse(false)) {
       // The suite owns the clock: it settles a scene by stepping a fixed tick count and captures
       // while the world is held, so a frame is a function of the script rather than of how fast the
-      // runner drew frames. Every other run keeps vanilla's twenty ticks a second.
+      // runner drew frames. A gameplay suite that needs tick counts asks for the same thing with
+      // the task's ownTickClock property, without the capture profile. Every other run keeps
+      // vanilla's twenty ticks a second.
       config.put("ownTickClock", true);
     }
     Files.writeString(configDir.resolve("config.json"), GSON.toJson(config) + "\n");
@@ -1180,6 +1335,20 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   // ---------------------------------------------------------------- process helpers
 
   /**
+   * The launch's system properties plus the pinned player name, when the build set one: the game
+   * reads it back as {@code minecheck.playerName()}, on both sides, so a server script and a client
+   * script agree on who is joining without either repeating the literal.
+   */
+  private List<String> withPlayerName(List<String> systemProps) {
+    if (!getPlayerName().isPresent()) {
+      return systemProps;
+    }
+    List<String> all = new ArrayList<>(systemProps);
+    all.add("-Dminecheck.playerName=" + getPlayerName().get());
+    return all;
+  }
+
+  /**
    * Builds the launch command. When the loader produced a launch descriptor ({@code
    * devHelper*Launch} task), the game runs as a plain {@code java} process launched directly by
    * this build — true OS-process parallelism with no child {@code ./gradlew} (so no Gradle
@@ -1192,6 +1361,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    */
   private ProcessBuilder launcherBuilder(
       String gradleTask, List<String> systemProps, Path descriptorFile, boolean useDisplay) {
+    systemProps = withPlayerName(systemProps);
     List<String> cmd = new ArrayList<>();
     if (useDisplay) {
       cmd.add(resolveExecutable("xvfb-run"));
@@ -1227,6 +1397,12 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     cmd.add(classpath);
     for (String p : systemProps) {
       cmd.add(p);
+    }
+    if (useDisplay) {
+      // A client may start the run's dedicated server itself (minecheck.startServer).
+      for (String p : serverControlProps()) {
+        cmd.add(p);
+      }
     }
     for (String p : LaunchDescriptor.splitList(d.get("jvmArgs"))) {
       cmd.add(p);

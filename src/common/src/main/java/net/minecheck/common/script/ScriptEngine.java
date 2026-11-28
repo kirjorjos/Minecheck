@@ -120,6 +120,50 @@ public final class ScriptEngine {
     this.packets = new PacketChannel(services.network(), PacketInbox.instance(), this::failScript);
   }
 
+  /** The phases whose bodies are running, innermost first; see {@code minecheck.phase}. */
+  private final java.util.ArrayDeque<PhaseState> phases = new java.util.ArrayDeque<>();
+
+  /** One open phase: what it is called, its budget, and when that budget expires. */
+  private record PhaseState(String name, double seconds, long deadline) {}
+
+  /**
+   * Opens a phase: a named body whose total budget is checked once per tick, so a phase that is
+   * slow because it makes twenty correct waits is still bounded as a test.
+   */
+  public void beginPhase(String name, double seconds) {
+    phases.push(new PhaseState(name, seconds, clock.getAsLong() + (long) (seconds * 1000)));
+  }
+
+  /** Closes the innermost phase, whether its body returned or the run ended inside it. */
+  public void endPhase() {
+    phases.poll();
+  }
+
+  /** The innermost phase a check would be attributed to; {@code null} outside one. */
+  public String currentPhase() {
+    PhaseState phase = phases.peek();
+    return phase == null ? null : phase.name();
+  }
+
+  /**
+   * Fails the run when the current phase has spent its budget. Called once per tick, before the
+   * script is resumed: every waiting action parks the coroutine at a yield, so between two waits of
+   * a slow phase this is where the overrun is noticed.
+   *
+   * <p>A script that never yields cannot be interrupted this way — Lua cannot be preempted from
+   * Java — which the reference documents rather than pretending otherwise.
+   */
+  private void checkPhaseDeadline() {
+    PhaseState phase = phases.peek();
+    if (phase == null || clock.getAsLong() <= phase.deadline()) {
+      return;
+    }
+    double seconds = phase.seconds();
+    String budget =
+        seconds == Math.floor(seconds) ? String.valueOf((long) seconds) : String.valueOf(seconds);
+    fail(phase.name() + ": exceeded " + budget + "s");
+  }
+
   /**
    * Records one {@code minecheck.expect} result (called from the Lua action).
    *
@@ -129,7 +173,18 @@ public final class ScriptEngine {
    * to record the identical name {@code "expect"}, so the CI report could not tell them apart.
    */
   public void recordExpect(String name, boolean ok) {
-    expects.add(new ExpectRecord(name != null ? name : "expect #" + (expects.size() + 1), ok));
+    expects.add(
+        new ExpectRecord(
+            name != null ? name : "expect #" + (expects.size() + 1), ok, currentPhase()));
+  }
+
+  /**
+   * The position the next recorded expectation will take. A check that numbers itself ({@code
+   * minecheck.check}, whose default label is {@code check #<n>} rather than {@code expect #<n>})
+   * asks for it so one run keeps one sequence of numbers.
+   */
+  public int nextExpectNumber() {
+    return expects.size() + 1;
   }
 
   /**
@@ -186,6 +241,10 @@ public final class ScriptEngine {
     if (finished) {
       return;
     }
+    checkPhaseDeadline();
+    if (finished) {
+      return;
+    }
     try {
       if (coroutine == null) {
         prepare();
@@ -239,6 +298,9 @@ public final class ScriptEngine {
     // so both go back even when the script never said so.
     TickClock.get().resume();
     TickClock.get().setUncapped(false);
+    // The script's own opt-in dies with the run it asked for: the clock is global, and a later run
+    // in this process did not ask for anything.
+    TickClock.get().setScriptOwnership(false);
     LOG.info(
         String.format(
             "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));
@@ -268,9 +330,9 @@ public final class ScriptEngine {
    * only reloads a config edited on disk mid-run, and the run is over. Its class is absent on
    * Fabric and Quilt, where there is nothing to stop.
    *
-   * <p>The wait is for the server thread to stop ticking, not a fixed delay: the last save is
-   * still running at that point, and stopping the watcher early would only let FML start it again
-   * during its own shutdown.
+   * <p>The wait is for the server thread to stop ticking, not a fixed delay: the last save is still
+   * running at that point, and stopping the watcher early would only let FML start it again during
+   * its own shutdown.
    */
   private void scheduleConfigWatcherStop() {
     Thread watcher =
@@ -304,7 +366,8 @@ public final class ScriptEngine {
     } catch (ClassNotFoundException | NoSuchMethodException e) {
       // NightConfig is not on Fabric or Quilt; nothing started a watcher there.
     } catch (ReflectiveOperationException | RuntimeException e) {
-      LOG.log(java.util.logging.Level.WARNING, "Minecheck: could not stop the config file watcher", e);
+      LOG.log(
+          java.util.logging.Level.WARNING, "Minecheck: could not stop the config file watcher", e);
     }
   }
 
