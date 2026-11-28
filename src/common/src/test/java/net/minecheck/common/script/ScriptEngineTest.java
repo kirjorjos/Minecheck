@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.result.ExpectRecord;
 import net.minecheck.common.result.RunResult;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ConfigDirProvider;
 import net.minecheck.platform.api.CreateWorldOptions;
@@ -3011,6 +3012,40 @@ class ScriptEngineTest {
     assertTrue(engine.isFinished());
     assertTrue(engine.isFailed());
     assertEquals("slots filled: expected 3, got 4", engine.failureMessage());
+  }
+
+  /**
+   * The tick clock's opt-in, from the script rather than from a config key a build staged: the same
+   * contract, granted for the rest of the run and handed back with it.
+   */
+  @Test
+  void ownTickClockOptsInFromTheScriptAndCanBeWithdrawnAgain() throws Exception {
+    TickClock clock = TickClock.get();
+    clock.bind("test");
+    clock.countTick(); // a live clock, as a running integrated server has
+    clock.setScriptOwnership(false);
+    try {
+      ScriptEngine engine =
+          engine(
+              new FakeClient(),
+              // ownTickClock is false in the config: the script is the only thing opting in.
+              ConfigData.defaults(),
+              "assert(minecheck.ownTickClock(), 'the script opted in')\n"
+                  + "minecheck.pauseTicks()\n"
+                  + "assert(minecheck.ownTickClock(false) == false, 'the grant is withdrawn')\n"
+                  + "local ok, err = pcall(function() minecheck.pauseTicks() end)\n"
+                  + "assert(not ok, 'the clock is no longer owned here')\n"
+                  + "assert(string.find(err, 'ownTickClock', 1, true), err)\n");
+
+      runUntilFinished(engine, 10);
+
+      assertTrue(engine.isFinished());
+      assertFalse(engine.isFailed(), engine.failureMessage());
+      assertFalse(clock.scriptOwned(), "the engine hands the grant back with the run");
+    } finally {
+      clock.resume();
+      clock.setScriptOwnership(false);
+    }
   }
 
   /** A name is free text: a byte string, quotes, a backslash, a newline — the file stays valid. */
