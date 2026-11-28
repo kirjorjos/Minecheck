@@ -133,6 +133,15 @@ public final class ScriptEngine {
   }
 
   /**
+   * The position the next recorded expectation will take. A check that numbers itself ({@code
+   * minecheck.check}, whose default label is {@code check #<n>} rather than {@code expect #<n>})
+   * asks for it so one run keeps one sequence of numbers.
+   */
+  public int nextExpectNumber() {
+    return expects.size() + 1;
+  }
+
+  /**
    * Records one named observation (called from the Lua {@code minecheck.observe}).
    *
    * <p>An observation is a <em>value</em>, not a verdict: what the script measured — the surface it
