@@ -292,7 +292,7 @@ public final class ForgeClientPlatform implements ClientPlatform {
     if (server == null) {
       return false;
     }
-    server.addScheduledTask(() -> server.getCommandManager().executeCommand(server, command));
+    server.getCommandManager().executeCommand(server, command);
     return true;
   }
 
