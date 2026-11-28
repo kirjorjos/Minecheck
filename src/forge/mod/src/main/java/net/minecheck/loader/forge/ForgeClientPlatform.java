@@ -710,16 +710,6 @@ public class ForgeClientPlatform implements ClientPlatform {
     onClientThread(() -> mc().displayGuiScreen(new GuiChat(command ? "/" : "")));
   }
 
-  /**
-   * The worlds under the game's own {@code saves/}, which is where {@code joinLocalWorld} looks for
-   * a world and where a script creates them.
-   */
-  @Override
-  public net.minecheck.platform.api.WorldStorage worlds() {
-    return new net.minecheck.common.world.SavesWorldStorage(
-        mc().gameDirectory.toPath().resolve("saves"));
-  }
-
   @Override
   public void joinLocalWorld(String worldName) {
     Minecraft mc = mc();
