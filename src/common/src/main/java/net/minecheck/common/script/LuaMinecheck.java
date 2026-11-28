@@ -100,6 +100,8 @@ public final class LuaMinecheck {
     // World entry / exit
     minecheck.set("joinLocalWorld", new JoinLocalWorld());
     minecheck.set("createWorld", new CreateWorld());
+    minecheck.set("worldExists", new WorldExists());
+    minecheck.set("deleteWorld", new DeleteWorld());
     minecheck.set("joinServer", new JoinServer());
     minecheck.set("leaveWorld", new LeaveWorld());
     minecheck.set("disconnect", new Disconnect());
@@ -348,6 +350,18 @@ public final class LuaMinecheck {
     if (server == null) {
       throw new LuaError("server-only function called on client");
     }
+  }
+
+  /** The saves directory, or a sentence saying why this side has none. */
+  private net.minecheck.platform.api.WorldStorage requireWorlds(String action) {
+    net.minecheck.platform.api.WorldStorage worlds = services.worldStorage();
+    if (worlds == null) {
+      throw new LuaError(
+          action
+              + ": this side has no saves directory — worlds are created, reused and deleted on a"
+              + " client, not on a dedicated server");
+    }
+    return worlds;
   }
 
   /**
@@ -664,11 +678,20 @@ public final class LuaMinecheck {
       LuaTable opts = args.arg1().checktable();
       WaitBudget budget = new WaitBudget(deadline(args, 2), clock.getAsLong());
       CreateWorldOptions options = parseOptions(opts);
+      // reuse: join the world of that name when it is already on disk rather than create a fresh
+      // one over it — the "pay worldgen once" half of a suite that keeps its world between runs.
+      net.minecheck.platform.api.WorldStorage worlds = services.worldStorage();
+      boolean joinExisting =
+          opts.get("reuse").optboolean(false) && worlds != null && worlds.exists(options.name());
       boolean initiated = false;
       try {
         while (true) {
           if (!initiated) {
-            client.createWorld(options);
+            if (joinExisting) {
+              client.joinLocalWorld(options.name());
+            } else {
+              client.createWorld(options);
+            }
             initiated = true;
           }
           if (client.isWorldReady()) {
@@ -725,6 +748,42 @@ public final class LuaMinecheck {
       } catch (NumberFormatException e) {
         return s.hashCode();
       }
+    }
+  }
+
+  /**
+   * minecheck.worldExists(name) -> boolean
+   *
+   * <p>Client only: whether a world of that name is on disk, so a suite can decide between creating
+   * it and {@code createWorld({ name = ..., reuse = true })} joining it.
+   */
+  private final class WorldExists extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = args.arg1().checkjstring();
+      return LuaValue.valueOf(requireWorlds("worldExists").exists(name));
+    }
+  }
+
+  /**
+   * minecheck.deleteWorld(name) -> boolean
+   *
+   * <p>Client only, and only with no world open: deleting the save a running integrated server has
+   * open is a torn tree, so the action refuses rather than corrupting it. False when there was no
+   * such world.
+   */
+  private final class DeleteWorld extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      String name = args.arg1().checkjstring();
+      if (client.isInWorld()) {
+        throw new LuaError(
+            "deleteWorld: leave the world first — deleting a save while its server has it open"
+                + " would corrupt it");
+      }
+      return LuaValue.valueOf(requireWorlds("deleteWorld").delete(name));
     }
   }
 
