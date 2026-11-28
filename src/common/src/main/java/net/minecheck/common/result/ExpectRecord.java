@@ -9,5 +9,13 @@ package net.minecheck.common.result;
  *
  * @param name the labelled check (e.g. "joined world")
  * @param ok whether the check passed
+ * @param phase the {@code minecheck.phase} the check ran under, or {@code null} outside one — so a
+ *     forty-test suite's flat list still says which test a failure belonged to
  */
-public record ExpectRecord(String name, boolean ok) {}
+public record ExpectRecord(String name, boolean ok, String phase) {
+
+  /** A check recorded outside any phase, which is what every run wrote before phases existed. */
+  public ExpectRecord(String name, boolean ok) {
+    this(name, ok, null);
+  }
+}
