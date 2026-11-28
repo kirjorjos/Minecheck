@@ -297,7 +297,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getScreenshotChatVisible();
 
   /**
-<<<<<<< HEAD
    * The camera mode the run boots with (default {@code "off"}). The client-features suites set
    * {@code "assist"} so the camera is installed; a lifecycle run has no human at the controls, so
    * only Lua drives it.
@@ -314,7 +313,8 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getViewWindow();
-=======
+
+  /**
    * How long the harness waits for a run's verdict, in minutes (default {@code 20}).
    *
    * <p>The limit exists so a hung run is reported instead of waited on forever; it was a fixed
@@ -324,7 +324,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Integer> getVerdictTimeout();
->>>>>>> 5462974 (Budget phases, not just waits, and attribute checks to them)
 
   /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
