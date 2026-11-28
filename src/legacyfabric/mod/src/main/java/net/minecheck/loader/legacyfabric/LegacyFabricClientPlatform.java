@@ -252,7 +252,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public Long worldTime() {
-    Minecraft client = mc();
+    MinecraftClient client = mc();
     return client.world == null ? null : client.world.getTimeOfDay();
   }
 
@@ -263,7 +263,7 @@ public final class LegacyFabricClientPlatform implements ClientPlatform {
 
   @Override
   public String weather() {
-    Minecraft client = mc();
+    MinecraftClient client = mc();
     if (client.world == null) {
       return null;
     }
