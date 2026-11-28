@@ -15,14 +15,7 @@
       "tier": 0
     }
   ],
-  "holder": {
-    "granted_at": "2026-11-28T04:23:40Z",
-    "id": "e-27",
-    "kind": "chore",
-    "lease_until": "2026-11-28T05:53:40Z",
-    "pr": "",
-    "sha": "aa464b5711fc40c112de75795214a3f2dc2e83cb"
-  },
+  "holder": null,
   "last_runs": {
     "289": {
       "at": "2026-11-27T06:26:10Z",
