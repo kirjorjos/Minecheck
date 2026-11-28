@@ -48,6 +48,15 @@ public interface PlatformServices {
   }
 
   /**
+   * The client's saves directory as a script sees it, or {@code null} on a dedicated server — whose
+   * level is a directory in its own run dir, not a save a client would open.
+   */
+  default WorldStorage worldStorage() {
+    ClientPlatform client = client();
+    return client == null ? null : client.worlds();
+  }
+
+  /**
    * True when the loader has the mod with the given id loaded (e.g. {@code "jei"}), on either side.
    * Scripts branch on soft dependencies with this. Loaders override it with their own mod list.
    */
