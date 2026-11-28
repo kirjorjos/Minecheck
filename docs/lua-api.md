@@ -262,6 +262,53 @@ Shuts down the client process. Use only as the **final** action in a script — 
 
 ## Server actions
 
+### `minecheck.startServer(options) → boolean`
+
+Starts the run's **dedicated server from the client script**, so the integrated phases run first and
+the server only boots once they passed. The build stages a launch descriptor and a server template;
+the action stages the server's script (and a world, when asked) into the server's run directory and
+launches it as a child process.
+
+```lua
+assert(minecheck.startServer({ script = "suite-server.lua", timeout = 120 }))
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `script` | string | The script the server runs, a file name in the client's own scripts directory. |
+| `setupDir` | string | Optional world tree to boot instead of generating one (e.g. the integrated world from `side = "both"`). |
+| `world` | string | Optional level folder name (default: the run's `worldName`). |
+| `timeout` | number \| false | Seconds to wait for `Done` (default `120`); `false` returns as soon as the process is up. |
+
+**Returns:** `true` when the server reported `Done` (or was started, with `timeout = false`).
+
+> A child JVM is killed by a shutdown hook if the client exits without stopping it, so a failed run
+> cannot leave a server on the port behind it.
+
+### `minecheck.serverStatus() → string`
+
+One of `"stopped"`, `"starting"`, `"ready"` (its log says `Done`) or `"failed"` (it exited first).
+
+### `minecheck.waitForServer([timeout]) → boolean`
+
+Waits, a tick at a time, for the server to become `ready`. `false` when it failed, exited or the
+budget ran out (default: `config.defaultTimeout`).
+
+### `minecheck.stopServer([timeout]) → boolean`
+
+Writes `stop` to the server's console and waits for it to exit, yielding a tick at a time so the
+client keeps rendering while the server saves. `false` when the budget ran out and the process had
+to be killed.
+
+```lua
+assert(minecheck.leaveWorld())
+assert(minecheck.startServer({ script = "suite-server.lua" }))
+assert(minecheck.joinServer("localhost:25565"))
+-- ... assertions against a real server ...
+assert(minecheck.leaveWorld())
+assert(minecheck.stopServer(120))
+```
+
 ### `minecheck.runCommand(cmd) → table`
 
 Executes a command (no leading `/` needed). On the **dedicated server** it runs as a console command; on the **client** it is sent as the local player's command (game-changing commands need cheats enabled in a local world, or op on a dedicated server).
