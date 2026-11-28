@@ -707,6 +707,16 @@ public class ForgeClientPlatform implements ClientPlatform {
         () -> mc().setScreen(new net.minecraft.client.gui.screens.ChatScreen(command ? "/" : "")));
   }
 
+  /**
+   * The worlds under the game's own {@code saves/}, which is where {@code joinLocalWorld} looks for
+   * a world and where a script creates them.
+   */
+  @Override
+  public net.minecheck.platform.api.WorldStorage worlds() {
+    return new net.minecheck.common.world.SavesWorldStorage(
+        mc().gameDirectory.toPath().resolve("saves"));
+  }
+
   @Override
   public void joinLocalWorld(String worldName) {
     Minecraft mc = mc();
@@ -1154,6 +1164,58 @@ public class ForgeClientPlatform implements ClientPlatform {
         blockEntity == null ? null : nbtToMap(blockEntity.saveWithoutMetadata());
     return new net.minecheck.platform.api.BlockInfo(
         BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(), nbt);
+  }
+
+  @Override
+  public Long worldTime() {
+    Minecraft client = mc();
+    return client.level == null ? null : client.level.getDayTime();
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return integratedCommand("time set " + ticks);
+  }
+
+  @Override
+  public String weather() {
+    Minecraft client = mc();
+    if (client.level == null) {
+      return null;
+    }
+    if (client.level.isThundering()) {
+      return "thunder";
+    }
+    return client.level.isRaining() ? "rain" : "clear";
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return integratedCommand("weather " + weather);
+  }
+
+  /**
+   * Queues a command on the integrated server this client hosts, and reports whether there was one
+   * to queue it on. A client playing on somebody else's server owns neither the time nor the
+   * weather, so it answers false rather than pretending the change happened.
+   */
+  private boolean integratedCommand(String command) {
+    MinecraftServer server = mc().getSingleplayerServer();
+    if (server == null) {
+      return false;
+    }
+    server.execute(
+        () -> {
+          try {
+            server
+                .getCommands()
+                .getDispatcher()
+                .execute(command, server.createCommandSourceStack());
+          } catch (com.mojang.brigadier.exceptions.CommandSyntaxException e) {
+            LOG.warning("Minecheck: command failed: " + command + ": " + e.getMessage());
+          }
+        });
+    return true;
   }
 
   @Override
