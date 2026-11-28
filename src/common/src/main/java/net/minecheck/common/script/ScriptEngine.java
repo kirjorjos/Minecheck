@@ -330,9 +330,9 @@ public final class ScriptEngine {
    * only reloads a config edited on disk mid-run, and the run is over. Its class is absent on
    * Fabric and Quilt, where there is nothing to stop.
    *
-   * <p>The wait is for the server thread to stop ticking, not a fixed delay: the last save is
-   * still running at that point, and stopping the watcher early would only let FML start it again
-   * during its own shutdown.
+   * <p>The wait is for the server thread to stop ticking, not a fixed delay: the last save is still
+   * running at that point, and stopping the watcher early would only let FML start it again during
+   * its own shutdown.
    */
   private void scheduleConfigWatcherStop() {
     Thread watcher =
@@ -366,7 +366,8 @@ public final class ScriptEngine {
     } catch (ClassNotFoundException | NoSuchMethodException e) {
       // NightConfig is not on Fabric or Quilt; nothing started a watcher there.
     } catch (ReflectiveOperationException | RuntimeException e) {
-      LOG.log(java.util.logging.Level.WARNING, "Minecheck: could not stop the config file watcher", e);
+      LOG.log(
+          java.util.logging.Level.WARNING, "Minecheck: could not stop the config file watcher", e);
     }
   }
 
