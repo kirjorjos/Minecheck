@@ -41,7 +41,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.network.ClientLoopbackPlayNetworkHandler;
 import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.theWorld.ClientWorld;
+import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.player.ControllablePlayerEntity;
@@ -371,7 +371,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public Long worldTime() {
     Minecraft client = mc();
-    return client.theWorld == null ? null : client.theWorld.getTimeOfDay();
+    return client.world == null ? null : client.world.getTimeOfDay();
   }
 
   @Override
@@ -382,13 +382,13 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public String weather() {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       return null;
     }
-    if (client.theWorld.isThundering()) {
+    if (client.world.isThundering()) {
       return "thunder";
     }
-    return client.theWorld.isRaining() ? "rain" : "clear";
+    return client.world.isRaining() ? "rain" : "clear";
   }
 
   @Override
@@ -525,7 +525,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     quitRequested = false;
     // A held clock parks the server thread, and the save runs there.
     net.minecheck.common.tick.TickClock.get().resume();
-    if (client.theWorld != null && client.isIntegratedServerRunning()) {
+    if (client.world != null && client.isIntegratedServerRunning()) {
       net.minecraft.server.MinecraftServer server = LegacyFabricEntrypoint.server();
       if (server != null) {
         for (net.minecraft.server.world.ServerWorld world : server.worlds) {
@@ -891,7 +891,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
         () -> {
           Minecraft client = mc();
           ControllablePlayerEntity player = client.playerEntity;
-          if (player == null || client.theWorld == null) {
+          if (player == null || client.world == null) {
             return null;
           }
           // The feet, from the bounding box: this line's y field sits an eye height above them (see
@@ -963,7 +963,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   public BlockPosition getTargetBlock(String entityName) {
     Minecraft client = mc();
     if (client.playerEntity == null
-        || client.theWorld == null
+        || client.world == null
         || !client.playerEntity.username.equals(entityName)) {
       return null;
     }
@@ -975,7 +975,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     return onClientThreadAndWait(
         () -> {
           Minecraft client = mc();
-          if (client.theWorld == null || client.playerEntity == null) {
+          if (client.world == null || client.playerEntity == null) {
             return null;
           }
           // This line's own mouse-over is refreshed by the frame loop, and a script asks right
@@ -986,7 +986,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
           Vec3d start = Vec3d.fromXYZ(player.x, LegacyEntitySpace.eyeY(player), player.z);
           Vec3d direction = directionOf(player);
           Vec3d end = start.offset(direction.x * 5.0, direction.y * 5.0, direction.z * 5.0);
-          BlockHitResult hit = client.theWorld.rayTrace(start, end);
+          BlockHitResult hit = client.world.rayTrace(start, end);
           if (hit == null || hit.hitResult != HitResultType.TILE) {
             return null;
           }
@@ -1007,7 +1007,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public List<EntityInfo> findNearbyEntities(String type) {
     Minecraft client = mc();
-    ClientWorld level = client.theWorld;
+    ClientWorld level = client.world;
     if (level == null) {
       return java.util.Collections.emptyList();
     }
@@ -1113,7 +1113,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     Minecraft client = mc();
     if (client.playerEntity == null
         || client.interactionManager == null
-        || client.theWorld == null) {
+        || client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     BlockHitResult hit = client.result;
@@ -1124,7 +1124,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     // the item's use-on-block callback takes.
     client.interactionManager.method_1229(
         client.playerEntity,
-        client.theWorld,
+        client.world,
         client.playerEntity.getMainHandStack(),
         hit.x,
         hit.y,
@@ -1136,10 +1136,10 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public boolean openSignEditor(BlockPosition pos) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
-    BlockEntity blockEntity = client.theWorld.getBlockEntity(pos.x(), pos.y(), pos.z());
+    BlockEntity blockEntity = client.world.getBlockEntity(pos.x(), pos.y(), pos.z());
     if (!(blockEntity instanceof SignBlockEntity)) {
       return false;
     }
@@ -1557,7 +1557,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public BlockInfo getBlock(BlockPosition pos) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     BlockPos blockPos = new BlockPos(pos.x(), pos.y(), pos.z());
@@ -1566,10 +1566,10 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     }
     // No block states here: the block, placed with its metadata, is what the newer lines' state
     // resolves to, and the id a script reads is the block's own.
-    int blockIdRaw = client.theWorld.getBlock(blockPos.x, blockPos.y, blockPos.z);
+    int blockIdRaw = client.world.getBlock(blockPos.x, blockPos.y, blockPos.z);
     Block block =
         blockIdRaw >= 0 && blockIdRaw < Block.BLOCKS.length ? Block.BLOCKS[blockIdRaw] : null;
-    BlockEntity blockEntity = client.theWorld.getBlockEntity(blockPos.x, blockPos.y, blockPos.z);
+    BlockEntity blockEntity = client.world.getBlockEntity(blockPos.x, blockPos.y, blockPos.z);
     String blockId = LegacyFabricNames.blockId(block);
     NbtCompound blockEntityTag = new NbtCompound();
     if (blockEntity != null) {
@@ -1584,7 +1584,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public Integer groundHeight(int x, int z) {
     Minecraft client = mc();
-    if (client.theWorld == null) {
+    if (client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     if (!isChunkLoaded(x >> 4, z >> 4)) {
@@ -1595,8 +1595,8 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
     // platform and the newer lines' MOTION_BLOCKING read.
     // This line has no column-top query: the column is scanned down from the build limit and the
     // first block that is not air is the surface, whose height is one above it.
-    for (int y = client.theWorld.getEffectiveHeight() - 1; y >= 0; y--) {
-      if (!client.theWorld.isAir(x, y, z)) {
+    for (int y = client.world.getEffectiveHeight() - 1; y >= 0; y--) {
+      if (!client.world.isAir(x, y, z)) {
         return y + 1;
       }
     }
@@ -1606,8 +1606,8 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public boolean isChunkLoaded(int chunkX, int chunkZ) {
     Minecraft client = mc();
-    return client.theWorld != null
-        && client.theWorld.getChunkProvider().chunkExists(chunkX, chunkZ);
+    return client.world != null
+        && client.world.getChunkProvider().chunkExists(chunkX, chunkZ);
   }
 
   // ------------------------------------------------------------ clock and render
@@ -1616,7 +1616,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   public void pinClientClock() {
     Minecraft client = mc();
     applyPendingWorldSettings(client);
-    ClientWorld level = client.theWorld;
+    ClientWorld level = client.world;
     if (level == null) {
       return;
     }
@@ -1859,7 +1859,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   /** One attempt at a capture, on the client thread. */
   private void captureScreenshot(ScreenshotRequest request, boolean write) {
     Minecraft client = mc();
-    boolean clearChat = !request.chatVisible() && client.theWorld != null;
+    boolean clearChat = !request.chatVisible() && client.world != null;
     if (clearChat && !request.prepared()) {
       client.inGameHud.getChatHud().clear();
       chatClearedAtFrame = DRAWN_FRAMES.get();
