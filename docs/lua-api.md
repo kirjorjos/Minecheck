@@ -1017,6 +1017,56 @@ ok
 
 ---
 
+## Phases
+
+A lifecycle run has one timeout shape, and it does not fit a suite of many in-world tests:
+`config.defaultTimeout` is a **per-wait** ceiling, so every `waitFor`, `joinLocalWorld`, `joinServer`
+and `disconnect` gets that budget for itself, and a phase that is slow because it makes twenty
+correct waits has no total budget at all. Phases add one.
+
+### `minecheck.phase(name, body[, seconds]) → boolean`
+
+Runs `body` under `name` with a total budget of `seconds` (default `config.defaultTimeout`). The
+budget is tick-driven, like every other timeout: it is checked once per tick, and a body that
+spends it fails the run with `<name>: exceeded <n>s` — naming the test that ran out rather than the
+wait that happened to be in progress. Every `expect` or `check` recorded inside the phase carries
+the phase's name in `run-result.json` as well, so a forty-test suite's flat list still says which
+test a failure belonged to.
+
+```lua
+minecheck.phase("tunnels", function()
+    minecheck.check(minecheck.createWorld({ name = "suite" }), "the world")
+    minecheck.check(minecheck.joinLocalWorld("suite"), "the join")
+end, 120)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Phase name, used in the verdict and on the checks it records. |
+| `body` | function | The test body. |
+| `seconds` | number | Total budget (default: `config.defaultTimeout`). Must be positive. |
+
+**Returns:** `true` when the body returns. An overrun never returns: the run ends with the phase's
+name in the failure message.
+
+One honest limit: Lua cannot be preempted from Java, so a body that never yields — no `wait`,
+`waitFor`, `stepTicks`, join — cannot be interrupted by a tick-driven deadline. Every waiting action
+yields once per tick, so ordinary test bodies are covered.
+
+### `minecheck.withDeadline(seconds[, name], body) → boolean`
+
+The budget on its own, for a caller that already has its own phase names. Without a `name` it
+reports under the enclosing phase's name (then `MINECHECK_PHASE`, then `run`).
+
+```lua
+minecheck.withDeadline(30, "the transfer", function()
+    minecheck.stepTicks(600)
+end)
+```
+
+Budgets nest: an inner budget is checked as well as the outer one, and the innermost name is the one
+an overrun reports.
+
 ## Assertions and result reporting
 
 ### `minecheck.expect(cond[, name]) → boolean`
