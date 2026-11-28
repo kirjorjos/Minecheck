@@ -317,7 +317,7 @@ public class ForgeServerPlatform extends ServerPlatformBase {
     if (s == null) {
       return null;
     }
-    return onServerThread(() -> overworld().getDayTime());
+    return onServerThread(() -> overworld().getWorldTime() % 24000L);
   }
 
   @Override
@@ -333,7 +333,7 @@ public class ForgeServerPlatform extends ServerPlatformBase {
     }
     return onServerThread(
         () -> {
-          ServerLevel level = overworld();
+          WorldServer level = overworld();
           if (level.isThundering()) {
             return "thunder";
           }
