@@ -3079,6 +3079,78 @@ class ScriptEngineTest {
   }
 
   @Test
+  void aPhaseNamesTheChecksRecordedInsideIt() throws Exception {
+    Path resultFile = tempDir.resolve("phase-result.json");
+    Path scriptFile = tempDir.resolve("phase-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.phase('tunnels', function()\n"
+            + "  minecheck.expect(true, 'inside')\n"
+            + "end, 30)\n"
+            + "minecheck.expect(true, 'outside')\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(new FakeClient()),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(new ExpectRecord("inside", true, "tunnels"), new ExpectRecord("outside", true)),
+        result.expects());
+  }
+
+  @Test
+  void aPhaseThatOverrunsItsBudgetFailsTheRunWithItsName() throws Exception {
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.phase('slow transfer', function()\n"
+                + "  while true do minecheck.wait() end\n"
+                + "end, 1)\n",
+            clock);
+
+    engine.tick(); // starts the phase; its body parks at a waiting action
+    assertFalse(engine.isFinished());
+    clock.addAndGet(2000); // past the phase's one-second budget
+    engine.tick();
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("slow transfer: exceeded 1s", engine.failureMessage());
+  }
+
+  @Test
+  void withDeadlineReportsUnderTheEnclosingPhasesName() throws Exception {
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.phase('outer', function()\n"
+                + "  minecheck.withDeadline(1, function()\n"
+                + "    while true do minecheck.wait() end\n"
+                + "  end)\n"
+                + "end, 300)\n",
+            clock);
+
+    engine.tick();
+    clock.addAndGet(2000);
+    engine.tick();
+
+    assertTrue(engine.isFinished());
+    assertEquals("outer: exceeded 1s", engine.failureMessage());
+  }
+
+  @Test
   void worldTimeAndWeatherReadAndWriteTheClientsWorld() throws Exception {
     FakeClient client = new FakeClient();
     ScriptEngine engine =
