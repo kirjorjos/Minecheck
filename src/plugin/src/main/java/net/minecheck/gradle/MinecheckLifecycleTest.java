@@ -233,6 +233,17 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Optional
   public abstract Property<Integer> getMaxTickTime();
 
+  /**
+   * When true, the client's own world directory ({@code saves/<world>}) is left in place instead of
+   * being deleted before the run, so a suite that keeps its world between {@code ./gradlew} runs
+   * pays world creation once. What a suite does with it is the script's business: {@code
+   * createWorld({ name = ..., reuse = true })} joins it, and {@code deleteWorld} is how a run that
+   * wants a clean world starts one.
+   */
+  @Input
+  @Optional
+  public abstract Property<Boolean> getKeepWorld();
+
   /** Whether to prepend {@code xvfb-run -a} (headless no-display environments). */
   @Input
   @Optional
@@ -286,7 +297,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   public abstract Property<Boolean> getScreenshotChatVisible();
 
   /**
-<<<<<<< HEAD
    * The camera mode the run boots with (default {@code "off"}). The client-features suites set
    * {@code "assist"} so the camera is installed; a lifecycle run has no human at the controls, so
    * only Lua drives it.
@@ -303,7 +313,8 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Boolean> getViewWindow();
-=======
+
+  /**
    * How long the harness waits for a run's verdict, in minutes (default {@code 20}).
    *
    * <p>The limit exists so a hung run is reported instead of waited on forever; it was a fixed
@@ -313,7 +324,6 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
   @Input
   @Optional
   public abstract Property<Integer> getVerdictTimeout();
->>>>>>> 5462974 (Budget phases, not just waits, and attribute checks to them)
 
   /**
    * When true, the client's {@code screenshots/} directory is emptied before the run, so a capture
@@ -499,7 +509,9 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     Path configDir = runDir.resolve("config/minecheck");
 
     try {
-      deleteRecursively(runDir.resolve("saves").resolve(world()));
+      if (!getKeepWorld().getOrElse(false)) {
+        deleteRecursively(runDir.resolve("saves").resolve(world()));
+      }
       if (getCleanScreenshots().getOrElse(false)) {
         deleteRecursively(runDir.resolve("screenshots"));
       }

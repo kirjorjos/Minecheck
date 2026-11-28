@@ -759,6 +759,16 @@ public class YarnClientPlatform implements ClientPlatform {
         () -> mc().openScreen(new net.minecraft.client.gui.screen.ChatScreen(command ? "/" : "")));
   }
 
+  /**
+   * The worlds under the game's own {@code saves/}, which is where {@code joinLocalWorld} looks for
+   * a world and where a script creates them.
+   */
+  @Override
+  public net.minecheck.platform.api.WorldStorage worlds() {
+    return new net.minecheck.common.world.SavesWorldStorage(
+        mc().runDirectory.toPath().resolve("saves"));
+  }
+
   @Override
   public void joinLocalWorld(String worldName) {
     MinecraftClient mc = mc();
@@ -1284,7 +1294,7 @@ public class YarnClientPlatform implements ClientPlatform {
       return false;
     }
     server.execute(
-        () -> server.getCommandManager().executeWithPrefix(server.getCommandSource(), command));
+        () -> server.getCommandManager().execute(server.getCommandSource(), command));
     return true;
   }
 
