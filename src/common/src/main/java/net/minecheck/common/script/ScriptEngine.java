@@ -248,6 +248,9 @@ public final class ScriptEngine {
     // so both go back even when the script never said so.
     TickClock.get().resume();
     TickClock.get().setUncapped(false);
+    // The script's own opt-in dies with the run it asked for: the clock is global, and a later run
+    // in this process did not ask for anything.
+    TickClock.get().setScriptOwnership(false);
     LOG.info(
         String.format(
             "Minecheck script %s: %s", failed ? "failed" : "finished", scriptFile.getFileName()));
