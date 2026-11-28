@@ -246,6 +246,58 @@ public final class ForgeClientPlatform implements ClientPlatform {
 
   // ------------------------------------------------------------ world entry
 
+  /**
+   * The worlds under the game's own {@code saves/}, which is where {@code joinLocalWorld} looks for
+   * a world and where a script creates them.
+   */
+  @Override
+  public net.minecheck.platform.api.WorldStorage worlds() {
+    return new net.minecheck.common.world.SavesWorldStorage(
+        new java.io.File(mc().mcDataDir, "saves").toPath());
+  }
+
+  @Override
+  public Long worldTime() {
+    Minecraft client = mc();
+    return client.world == null ? null : client.world.getWorldTime() % 24000L;
+  }
+
+  @Override
+  public boolean setWorldTime(long ticks) {
+    return integratedCommand("time set " + ticks);
+  }
+
+  @Override
+  public String weather() {
+    Minecraft client = mc();
+    if (client.world == null) {
+      return null;
+    }
+    if (client.world.isThundering()) {
+      return "thunder";
+    }
+    return client.world.isRaining() ? "rain" : "clear";
+  }
+
+  @Override
+  public boolean setWeather(String weather) {
+    return integratedCommand("weather " + weather);
+  }
+
+  /**
+   * Queues a command on the integrated server this client hosts, and reports whether there was one
+   * to queue it on. A client playing on somebody else's server owns neither the time nor the
+   * weather, so it answers false rather than pretending the change happened.
+   */
+  private boolean integratedCommand(String command) {
+    net.minecraft.server.MinecraftServer server = mc().getIntegratedServer();
+    if (server == null) {
+      return false;
+    }
+    server.addScheduledTask(() -> server.getCommandManager().executeCommand(server, command));
+    return true;
+  }
+
   @Override
   public void joinLocalWorld(String worldName) {
     File save = new File(new File(mc().mcDataDir, "saves"), worldName + "/level.dat");
