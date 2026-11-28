@@ -549,6 +549,33 @@ public interface ClientPlatform {
   boolean isChunkLoaded(int chunkX, int chunkZ);
 
   /**
+   * The world's daylight time in ticks: {@code 0} is sunrise, {@code 6000} noon, {@code 18000}
+   * midnight. {@code null} outside a world. This is the time the client sees, which vanilla keeps
+   * in step with the server's.
+   */
+  Long worldTime();
+
+  /**
+   * Sets the world's daylight time so a phase can start from a pinned time instead of from whatever
+   * the clock happened to reach. Only a client that hosts the world — one with an integrated server
+   * — can do this; on somebody else's server the clock belongs to the other process and the answer
+   * is {@code false}.
+   */
+  boolean setWorldTime(long ticks);
+
+  /**
+   * The world's weather as {@code "clear"}, {@code "rain"} or {@code "thunder"}; null outside a
+   * world.
+   */
+  String weather();
+
+  /**
+   * Sets the world's weather, with the same ownership rule as {@link #setWorldTime(long)}. {@code
+   * false} when this client does not own the world's weather.
+   */
+  boolean setWeather(String weather);
+
+  /**
    * True when a screen matching {@code screenId} is currently open. {@code screenId} selects which
    * screen must be open: {@code null}/{@code ""} accepts any container/handled screen, a known id
    * ({@code "inventory"}, {@code "beacon"}, {@code "chest"}, {@code "crafting"}, {@code "furnace"},
