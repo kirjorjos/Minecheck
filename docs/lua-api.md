@@ -1245,6 +1245,40 @@ Returns a read-only snapshot of the current runtime config:
 
 ---
 
+## World state (both sides)
+
+A suite that shares one world across many tests has two clocks and, without these, no way to pin
+either: phases run at different in-game times, and the integrated phase and the dedicated-server
+phase start minutes apart. Each phase can now start from a pinned time instead of assuming relative
+time — the same reason the seed and the flat generator are pinned in `server.properties`.
+
+### `minecheck.getWorldTime() → number | nil`
+
+The daylight time in ticks — `0` sunrise, `6000` noon, `18000` midnight — of the world this side is
+in. `nil` when there is no world (the title screen, or a server that has not got one yet). On a
+client this is the time the client sees; vanilla keeps it in step with the server's.
+
+### `minecheck.setWorldTime(ticks) → boolean`
+
+Sets the daylight time, so the next phase starts from a pinned time rather than from whatever the
+previous one advanced it to. Requires a world this process owns — an integrated server on a client,
+or the dedicated server. A client playing on somebody else's server is told `false`, because that
+clock belongs to the other process. A negative count raises.
+
+```lua
+minecheck.setWorldTime(18000) -- midnight, whatever time the previous phase left
+```
+
+### `minecheck.getWeather() → string | nil`
+
+`"clear"`, `"rain"` or `"thunder"`, or `nil` when there is no world.
+
+### `minecheck.setWeather(weather) → boolean`
+
+Sets the weather to `"clear"`, `"rain"` or `"thunder"` — the same ownership rule as
+`setWorldTime`. An unknown name raises instead of silently doing nothing, because a suite that
+typo'd it would otherwise keep asserting against the old weather.
+
 ## Input (client)
 
 Simulates real keyboard/mouse input through the vanilla input pipeline, so synthetic presses behave exactly like a real player's (keybindings, GUI click handling, held-key movement all apply). Client-only; calling from a server script raises "client-only function called on dedicated server".
