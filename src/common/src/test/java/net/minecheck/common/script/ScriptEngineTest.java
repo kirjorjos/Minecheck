@@ -943,6 +943,31 @@ class ScriptEngineTest {
   }
 
   @Test
+  void playerNameReadsTheNameTheBuildPinned() throws Exception {
+    System.setProperty("minecheck.playerName", "Suite");
+    try {
+      ScriptEngine named =
+          engine(
+              new FakeClient(),
+              ConfigData.defaults(),
+              "assert(minecheck.playerName() == 'Suite', 'the pinned name')\n");
+      runUntilFinished(named, 5);
+      assertFalse(named.isFailed(), named.failureMessage());
+
+      System.clearProperty("minecheck.playerName");
+      ScriptEngine unpinned =
+          engine(
+              new FakeClient(),
+              ConfigData.defaults(),
+              "assert(minecheck.playerName() == nil, 'nothing pinned, so the script falls back')\n");
+      runUntilFinished(unpinned, 5);
+      assertFalse(unpinned.isFailed(), unpinned.failureMessage());
+    } finally {
+      System.clearProperty("minecheck.playerName");
+    }
+  }
+
+  @Test
   void runScriptRunsAStagedScriptAsAPhaseInTheCallersGlobals() throws Exception {
     Files.writeString(
         tempDir.resolve("phase.lua"),
