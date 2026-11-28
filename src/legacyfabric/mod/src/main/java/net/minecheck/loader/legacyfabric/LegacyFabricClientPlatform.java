@@ -1111,9 +1111,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public void useItemOnTarget() {
     Minecraft client = mc();
-    if (client.playerEntity == null
-        || client.interactionManager == null
-        || client.world == null) {
+    if (client.playerEntity == null || client.interactionManager == null || client.world == null) {
       throw new IllegalStateException("not in a world");
     }
     BlockHitResult hit = client.result;
@@ -1606,8 +1604,7 @@ public final class LegacyFabricClientPlatform extends ClientPlatformBase {
   @Override
   public boolean isChunkLoaded(int chunkX, int chunkZ) {
     Minecraft client = mc();
-    return client.world != null
-        && client.world.getChunkProvider().chunkExists(chunkX, chunkZ);
+    return client.world != null && client.world.getChunkProvider().chunkExists(chunkX, chunkZ);
   }
 
   // ------------------------------------------------------------ clock and render
