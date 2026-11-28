@@ -430,6 +430,7 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
       }
       stageClientOptions(runDir);
       stageVoiceChatConfig(runDir);
+      stageServerStart();
       if (getServerScript().isPresent()) {
         Path setupDir = null;
         if (getWorldGeneratorScript().isPresent()) {
@@ -835,6 +836,50 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
    * player spawns, the save is always complete, and the rejoin loads from disk instead of
    * regenerating.
    */
+  /**
+   * The template a client-started dedicated server boots from — the same eula and pinned {@code
+   * server.properties} the orchestrator writes for a server it launches itself, so a server started
+   * by the script and one started by the task are the same server.
+   */
+  private void stageServerStart() throws IOException {
+    if (descriptorPath(getServerLaunchFile()) == null) {
+      return;
+    }
+    Path template = serverStartTemplate();
+    Files.createDirectories(template);
+    Files.writeString(template.resolve("eula.txt"), "eula=true\n");
+    Files.writeString(template.resolve("server.properties"), serverProperties());
+  }
+
+  private Path serverStartTemplate() {
+    return getProject()
+        .getLayout()
+        .getBuildDirectory()
+        .dir("minecheck/server-start")
+        .get()
+        .getAsFile()
+        .toPath();
+  }
+
+  /**
+   * What the client needs to start the run's dedicated server itself: the descriptor, the run dir,
+   * the template, and the level it serves. Empty when the build stages no server or the paths are
+   * not resolvable yet (a task run outside the orchestrator).
+   */
+  private List<String> serverControlProps() {
+    Path descriptor = descriptorPath(getServerLaunchFile());
+    String runDir = getServerRunDir().getOrNull();
+    if (descriptor == null || runDir == null || runDir.isBlank()) {
+      return List.of();
+    }
+    return List.of(
+        "-Dminecheck.serverLaunch=" + descriptor,
+        "-Dminecheck.serverRunDir=" + runDir,
+        "-Dminecheck.serverTemplate=" + serverStartTemplate(),
+        "-Dminecheck.serverPort=" + port(),
+        "-Dminecheck.serverWorld=" + world());
+  }
+
   private void stageClientOptions(Path runDir) throws IOException {
     Files.createDirectories(runDir);
     StringBuilder options = new StringBuilder();
@@ -1215,6 +1260,12 @@ public abstract class MinecheckLifecycleTest extends DefaultTask {
     cmd.add(classpath);
     for (String p : systemProps) {
       cmd.add(p);
+    }
+    if (useDisplay) {
+      // A client may start the run's dedicated server itself (minecheck.startServer).
+      for (String p : serverControlProps()) {
+        cmd.add(p);
+      }
     }
     for (String p : LaunchDescriptor.splitList(d.get("jvmArgs"))) {
       cmd.add(p);
