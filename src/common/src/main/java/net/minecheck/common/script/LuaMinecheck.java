@@ -67,6 +67,13 @@ public final class LuaMinecheck {
    */
   private final PluginRegistry plugins;
 
+  /**
+   * The dedicated server this run can start, or {@code null} when the build staged none. One per
+   * script run: the process belongs to the run that started it.
+   */
+  private final net.minecheck.common.server.ServerProcess dedicatedServer =
+      net.minecheck.common.server.ServerProcess.fromSystemProperties();
+
   public LuaMinecheck(
       Globals globals,
       PlatformServices services,
@@ -186,6 +193,10 @@ public final class LuaMinecheck {
     minecheck.set("fillFromRecipe", new FillFromRecipe());
 
     // Dedicated-server actions
+    minecheck.set("startServer", new StartServer());
+    minecheck.set("serverStatus", new ServerStatus());
+    minecheck.set("waitForServer", new WaitForServer());
+    minecheck.set("stopServer", new StopServer());
     minecheck.set("runCommand", new RunCommand());
     minecheck.set("waitForPlayer", new WaitForPlayer());
     minecheck.set("waitForPlayerLeave", new WaitForPlayerLeave());
@@ -2686,6 +2697,125 @@ public final class LuaMinecheck {
   }
 
   // ------------------------------------------------------------ server actions
+
+  /**
+   * minecheck.startServer(opts) -> boolean
+   *
+   * <p>Launches the run's dedicated server from the client, after the integrated phases have
+   * passed: the harness stages the launch descriptor and a server template, and this stages the
+   * script (and, with {@code setupDir}, the world) before starting the process.
+   *
+   * <p>opts: {@code script} (name in the client's scripts directory), {@code setupDir} (a world
+   * tree to boot instead of generating one), {@code world} (the level folder), {@code timeout} (how
+   * long to wait for {@code Done}; {@code false} returns as soon as the process is up).
+   */
+  private final class StartServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError(
+            "startServer: this run has no dedicated server staged — the build must configure"
+                + " serverLoaderTask and a server launch descriptor");
+      }
+      LuaTable opts = args.arg1().checktable();
+      String script = opts.get("script").checkjstring();
+      Path scriptsDir =
+          engine == null || engine.scriptFile() == null
+              ? null
+              : engine.scriptFile().toAbsolutePath().getParent();
+      if (scriptsDir == null) {
+        throw new LuaError("startServer: the running script has no scripts directory");
+      }
+      Path setupDir =
+          opts.get("setupDir").isnil() ? null : Path.of(opts.get("setupDir").tojstring());
+      String level =
+          opts.get("world")
+              .optjstring(System.getProperty("minecheck.serverWorld", "minecheck_world"));
+      if (!dedicatedServer.start(scriptsDir, script, setupDir, level)) {
+        return LuaValue.FALSE;
+      }
+      LuaValue timeout = opts.get("timeout");
+      if (timeout.isboolean() && !timeout.toboolean()) {
+        return LuaValue.TRUE;
+      }
+      int seconds = timeout.isnumber() ? timeout.toint() : 120;
+      return LuaValue.valueOf(dedicatedServer.waitFor(seconds));
+    }
+  }
+
+  /** minecheck.serverStatus() -> "stopped" | "starting" | "ready" | "failed" */
+  private final class ServerStatus extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      return LuaValue.valueOf(
+          dedicatedServer == null ? "stopped" : dedicatedServer.status().jsonName());
+    }
+  }
+
+  /** minecheck.waitForServer([timeout]) -> boolean — Done reported, or a connection accepted. */
+  private final class WaitForServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError("waitForServer: this run has no dedicated server staged");
+      }
+      long deadline = deadline(args, 1);
+      while (true) {
+        net.minecheck.common.server.ServerProcess.Status now = dedicatedServer.status();
+        if (now == net.minecheck.common.server.ServerProcess.Status.READY) {
+          return LuaValue.TRUE;
+        }
+        if (now == net.minecheck.common.server.ServerProcess.Status.FAILED
+            || now == net.minecheck.common.server.ServerProcess.Status.STOPPED) {
+          return LuaValue.FALSE;
+        }
+        if (clock.getAsLong() > deadline) {
+          return LuaValue.FALSE;
+        }
+        globals.yield(LuaValue.NIL);
+      }
+    }
+  }
+
+  /**
+   * minecheck.stopServer([timeout]) -> boolean
+   *
+   * <p>Writes {@code stop} to the child's console and waits, a tick at a time, for it to exit — the
+   * client keeps running, so a server that takes a while to save does not freeze the run. False
+   * when the budget ran out and the process had to be killed.
+   */
+  private final class StopServer extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      requireClient();
+      if (dedicatedServer == null) {
+        throw new LuaError("stopServer: this run has no dedicated server staged");
+      }
+      long deadline = deadline(args, 1);
+      boolean asked = false;
+      try {
+        while (true) {
+          if (!asked) {
+            asked = true;
+            dedicatedServer.requestStop();
+          }
+          if (!dedicatedServer.running()) {
+            return LuaValue.TRUE;
+          }
+          if (clock.getAsLong() > deadline) {
+            dedicatedServer.kill();
+            return LuaValue.FALSE;
+          }
+          globals.yield(LuaValue.NIL);
+        }
+      } catch (RuntimeException e) {
+        throw wrap("stopServer", e);
+      }
+    }
+  }
 
   /**
    * minecheck.runCommand(cmd) -> table
