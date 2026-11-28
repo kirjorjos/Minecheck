@@ -100,6 +100,8 @@ public final class LuaMinecheck {
 
     // Assertions / result reporting
     minecheck.set("expect", new Expect());
+    minecheck.set("check", new Check());
+    minecheck.set("checkEq", new CheckEq());
     minecheck.set("observe", new Observe());
     minecheck.set("fail", new Fail());
 
@@ -435,6 +437,58 @@ public final class LuaMinecheck {
   private static LuaError wrap(String action, RuntimeException e) {
     String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     return new LuaError(action + ": " + msg);
+  }
+
+  /**
+   * A check's label, or {@code null} for "let the caller number it".
+   *
+   * <p>This deliberately does not use {@code optjstring}: LuaJ's base implementation
+   * <em>raises</em> for anything that is not nil/boolean/number/string, and {@code LuaTable} does
+   * not override it. Since an int64 is a table, {@code expect(cond, minecheck.int64("5"))} used to
+   * abort the whole script with <code>bad argument: String expected, got table</code> — the
+   * opposite of that action's documented "never aborts the script". A label that is not text is now
+   * reported and the check is numbered instead, so a run always keeps its recorded outcomes.
+   */
+  private String checkName(LuaValue arg, String action) {
+    if (arg.isnil()) {
+      return null;
+    }
+    if (arg.isstring()) {
+      // True for numbers as well, which read as their digits — the same as every other string
+      // context in Lua.
+      return arg.tojstring();
+    }
+    LOG.warning(
+        String.format(
+            "Minecheck: %s: a %s is not a check name — using the numbered default instead",
+            action, arg.typename()));
+    return null;
+  }
+
+  /**
+   * The label for a check: the caller's text, or {@code "<prefix> #<n>"} where {@code n} is the
+   * position the record will take — so {@code check} and {@code expect} number one sequence.
+   */
+  private String named(LuaValue arg, String prefix) {
+    String given = checkName(arg, prefix);
+    if (given != null) {
+      return given;
+    }
+    return prefix + " #" + (engine != null ? engine.nextExpectNumber() : 1);
+  }
+
+  /**
+   * Fails the run and stops the script: the ending {@code minecheck.fail} has, shared so a failing
+   * {@code check} ends a run exactly the way the documented escape hatch does.
+   */
+  private void failAndStop(String message) {
+    if (engine != null) {
+      engine.failScript(message);
+    }
+    // Stop the script regardless: yield forever (never resumed finished).
+    while (true) {
+      globals.yield(LuaValue.NIL);
+    }
   }
 
   /** Parses a Lua position table {@code { x =, y =, z = }} into an SNBT-safe double array. */
@@ -839,35 +893,56 @@ public final class LuaMinecheck {
     public Varargs invoke(Varargs args) {
       boolean ok = args.arg1().toboolean();
       if (engine != null) {
-        engine.recordExpect(checkName(args.arg(2)), ok);
+        engine.recordExpect(checkName(args.arg(2), "expect"), ok);
       }
       return LuaValue.valueOf(ok);
     }
+  }
 
-    /**
-     * The check's label, or {@code null} for "let the engine number it".
-     *
-     * <p>This deliberately does not use {@code optjstring}: LuaJ's base implementation
-     * <em>raises</em> for anything that is not nil/boolean/number/string, and {@code LuaTable} does
-     * not override it. Since an int64 is a table, {@code expect(cond, minecheck.int64("5"))} used
-     * to abort the whole script with <code>bad argument: String expected, got table</code> — the
-     * opposite of this action's documented "never aborts the script". A label that is not text is
-     * now reported and the check is numbered instead, so a run always keeps its recorded outcomes.
-     */
-    private String checkName(LuaValue arg) {
-      if (arg.isnil()) {
-        return null;
+  /**
+   * minecheck.check(cond[, name]) -> boolean
+   *
+   * <p>{@code expect} records and carries on; {@code check} records and, when the condition is
+   * false, fails the run with the check's label and stops the script. That is the assertion a suite
+   * sharing one world wants: the first failure ends the run instead of leaving a half-set-up world
+   * behind to produce a cascade of misleading verdicts.
+   */
+  private final class Check extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      boolean ok = args.arg1().toboolean();
+      String name = named(args.arg(2), "check");
+      if (engine != null) {
+        engine.recordExpect(name, ok);
       }
-      if (arg.isstring()) {
-        // True for numbers as well, which read as their digits — the same as every other string
-        // context in Lua.
-        return arg.tojstring();
+      if (!ok) {
+        failAndStop(name);
       }
-      LOG.warning(
-          String.format(
-              "Minecheck: expect: a %s is not a check name — using the numbered default instead",
-              arg.typename()));
-      return null;
+      return LuaValue.TRUE;
+    }
+  }
+
+  /**
+   * minecheck.checkEq(actual, expected[, name]) -> boolean
+   *
+   * <p>{@code check} with the comparison done here, so the verdict reads <code>expected 3, got
+   * 4</code> instead of whatever sentence each suite assembled by hand.
+   */
+  private final class CheckEq extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      LuaValue actual = args.arg1();
+      LuaValue expected = args.arg(2);
+      // Lua's own equality: numbers by value, strings by content, tables by identity.
+      boolean ok = actual.raweq(expected);
+      String name = named(args.arg(3), "checkEq");
+      if (engine != null) {
+        engine.recordExpect(name, ok);
+      }
+      if (!ok) {
+        failAndStop(name + ": expected " + expected.tojstring() + ", got " + actual.tojstring());
+      }
+      return LuaValue.TRUE;
     }
   }
 
@@ -881,14 +956,8 @@ public final class LuaMinecheck {
   private final class Fail extends VarArgFunction {
     @Override
     public Varargs invoke(Varargs args) {
-      String message = args.optjstring(1, "minecheck.fail called");
-      if (engine != null) {
-        engine.failScript(message);
-      }
-      // Stop the script regardless: yield forever (never resume finished).
-      while (true) {
-        globals.yield(LuaValue.NIL);
-      }
+      failAndStop(args.optjstring(1, "minecheck.fail called"));
+      return LuaValue.NIL;
     }
   }
 
