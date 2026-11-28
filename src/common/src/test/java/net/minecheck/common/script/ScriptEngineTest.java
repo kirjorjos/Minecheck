@@ -2934,6 +2934,85 @@ class ScriptEngineTest {
         result.expects());
   }
 
+  /**
+   * {@code check} is {@code expect} plus the fail-fast ending: the observation is recorded, the run
+   * fails with the check's own label, and nothing after it runs.
+   */
+  @Test
+  void checkRecordsTheObservationAndStopsTheRunOnAFailure() throws Exception {
+    FakeClient client = new FakeClient();
+    Path resultFile = tempDir.resolve("check-result.json");
+    Path scriptFile = tempDir.resolve("check-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.check(true, 'one')\n"
+            + "local ok = minecheck.check(false, 'the thing worked')\n"
+            + "minecheck.expect(true, 'never reached')\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(client),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("the thing worked", engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(new ExpectRecord("one", true), new ExpectRecord("the thing worked", false)),
+        result.expects(),
+        "the failing check is recorded, and the script stopped there");
+  }
+
+  @Test
+  void checkAndCheckEqShareTheExpectNumbering() throws Exception {
+    FakeClient client = new FakeClient();
+    Path resultFile = tempDir.resolve("check-numbered-result.json");
+    Path scriptFile = tempDir.resolve("check-numbered-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.expect(true)\n" + "minecheck.check(true)\n" + "minecheck.checkEq(2 + 2, 4)\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(client),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(
+            new ExpectRecord("expect #1", true),
+            new ExpectRecord("check #2", true),
+            new ExpectRecord("checkEq #3", true)),
+        result.expects());
+  }
+
+  @Test
+  void checkEqNamesBothValuesInTheFailure() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.checkEq(4, 3, 'slots filled')\n"
+                + "minecheck.expect(true, 'never reached')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("slots filled: expected 3, got 4", engine.failureMessage());
+  }
+
   /** A name is free text: a byte string, quotes, a backslash, a newline — the file stays valid. */
   @Test
   void aNameThatIsOpaqueTextStillProducesValidJson() throws Exception {
