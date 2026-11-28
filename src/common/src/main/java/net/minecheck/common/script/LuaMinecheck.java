@@ -123,6 +123,7 @@ public final class LuaMinecheck {
     minecheck.set("waitForChunk", new WaitForChunk());
     minecheck.set("worldGenSettled", new WorldGenSettled());
     minecheck.set("side", new Side());
+    minecheck.set("playerName", new PlayerName());
     minecheck.set("minecraftVersion", new MinecraftVersion());
     minecheck.set("isModLoaded", new IsModLoaded());
     minecheck.set("isInWorld", new IsInWorld());
@@ -3732,6 +3733,22 @@ public final class LuaMinecheck {
         }
         globals.yield(LuaValue.NIL);
       }
+    }
+  }
+
+  /**
+   * minecheck.playerName() -> string | nil
+   *
+   * <p>The player name the build launched this run with ({@code -Dminecheck.playerName}), so a
+   * server script waits for the player it actually expects instead of repeating a literal that a
+   * different dev config silently breaks. {@code nil} when the build pinned none, which lets a
+   * script fall back: {@code local name = minecheck.playerName() or "Dev"}.
+   */
+  private final class PlayerName extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String name = System.getProperty("minecheck.playerName");
+      return name == null || name.isBlank() ? LuaValue.NIL : LuaValue.valueOf(name);
     }
   }
 
