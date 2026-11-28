@@ -120,6 +120,12 @@ public final class LuaMinecheck {
     minecheck.set("isOnTitleScreen", new IsOnTitleScreen());
     minecheck.set("config", new ConfigView());
 
+    // World state (both sides): the clocks a shared world carries from phase to phase.
+    minecheck.set("getWorldTime", new GetWorldTime());
+    minecheck.set("setWorldTime", new SetWorldTime());
+    minecheck.set("getWeather", new GetWeather());
+    minecheck.set("setWeather", new SetWeather());
+
     // Coordinators: run another staged script as a phase of this same session.
     minecheck.set("runScript", new RunScript());
 
@@ -3477,6 +3483,90 @@ public final class LuaMinecheck {
         return LuaValue.valueOf(server.isWorldGenSettled());
       }
       return LuaValue.valueOf(client.isWorldGenSettled());
+    }
+  }
+
+  /**
+   * minecheck.getWorldTime() -> number | nil
+   *
+   * <p>The world's daylight time in ticks ({@code 0} sunrise, {@code 6000} noon, {@code 18000}
+   * midnight), or {@code nil} outside a world. Both sides: on a client this is the time the client
+   * sees, which vanilla keeps in step with the server's.
+   */
+  private final class GetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      Long ticks;
+      try {
+        ticks = client != null ? client.worldTime() : server.worldTime();
+      } catch (RuntimeException e) {
+        throw wrap("getWorldTime", e);
+      }
+      return ticks == null ? LuaValue.NIL : LuaValue.valueOf(ticks.longValue());
+    }
+  }
+
+  /**
+   * minecheck.setWorldTime(ticks) -> boolean
+   *
+   * <p>Sets the daylight time, so the next phase starts from a pinned time rather than from
+   * whatever the previous one advanced it to. False when this process does not own the world's
+   * clock — a client playing on somebody else's server — and a negative count is rejected as not a
+   * time of day.
+   */
+  private final class SetWorldTime extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      long ticks = args.arg1().checklong();
+      if (ticks < 0) {
+        throw new LuaError("setWorldTime: " + ticks + " is not a time of day");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWorldTime(ticks) : server.setWorldTime(ticks);
+      } catch (RuntimeException e) {
+        throw wrap("setWorldTime", e);
+      }
+      return LuaValue.valueOf(ok);
+    }
+  }
+
+  /** minecheck.getWeather() -> "clear" | "rain" | "thunder" | nil (both sides). */
+  private final class GetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather;
+      try {
+        weather = client != null ? client.weather() : server.weather();
+      } catch (RuntimeException e) {
+        throw wrap("getWeather", e);
+      }
+      return weather == null ? LuaValue.NIL : LuaValue.valueOf(weather);
+    }
+  }
+
+  /**
+   * minecheck.setWeather(weather) -> boolean
+   *
+   * <p>Sets the weather to {@code "clear"}, {@code "rain"} or {@code "thunder"}, with the same
+   * ownership rule as {@code setWorldTime}. An unknown name raises rather than silently doing
+   * nothing, because a suite that mistyped it would otherwise keep asserting against the old
+   * weather.
+   */
+  private final class SetWeather extends VarArgFunction {
+    @Override
+    public Varargs invoke(Varargs args) {
+      String weather = args.arg1().checkjstring().toLowerCase(java.util.Locale.ROOT);
+      if (!weather.equals("clear") && !weather.equals("rain") && !weather.equals("thunder")) {
+        throw new LuaError("setWeather: \"" + weather + "\" is not clear, rain or thunder");
+      }
+      boolean ok;
+      try {
+        ok = client != null ? client.setWeather(weather) : server.setWeather(weather);
+      } catch (RuntimeException e) {
+        throw wrap("setWeather", e);
+      }
+      return LuaValue.valueOf(ok);
     }
   }
 
