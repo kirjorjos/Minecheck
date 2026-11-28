@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.minecheck.common.config.ConfigData;
 import net.minecheck.common.result.ExpectRecord;
 import net.minecheck.common.result.RunResult;
+import net.minecheck.common.tick.TickClock;
 import net.minecheck.platform.api.ClientPlatform;
 import net.minecheck.platform.api.ClientPlatformBase;
 import net.minecheck.platform.api.ConfigDirProvider;
@@ -38,6 +39,53 @@ class ScriptEngineTest {
   static final class FakeClient extends ClientPlatformBase {
     Integer groundY = 64;
     String groundArgs;
+
+    Long worldTimeTicks = 6000L;
+    String weatherState = "clear";
+
+    /**
+     * True when this client hosts the world; false models one playing on somebody else's server.
+     */
+    boolean ownsWorld = true;
+
+    final java.util.List<String> weatherChanges = new java.util.ArrayList<>();
+
+    @Override
+    public Long worldTime() {
+      return worldTimeTicks;
+    }
+
+    @Override
+    public boolean setWorldTime(long ticks) {
+      if (!ownsWorld) {
+        return false;
+      }
+      worldTimeTicks = ticks;
+      return true;
+    }
+
+    @Override
+    public String weather() {
+      return weatherState;
+    }
+
+    @Override
+    public boolean setWeather(String weather) {
+      if (!ownsWorld) {
+        return false;
+      }
+      weatherChanges.add(weather);
+      weatherState = weather;
+      return true;
+    }
+
+    /** The saves this client can see; null models a platform with no saves directory. */
+    FakeWorldStorage storage;
+
+    @Override
+    public net.minecheck.platform.api.WorldStorage worlds() {
+      return storage;
+    }
 
     @Override
     public Integer groundHeight(int x, int z) {
@@ -523,6 +571,46 @@ class ScriptEngineTest {
     }
   }
 
+  /** Fake saves directory: a set of world names, and the deletes it was asked for. */
+  static final class FakeWorldStorage implements net.minecheck.platform.api.WorldStorage {
+    final java.util.Set<String> names = new java.util.HashSet<>();
+    final java.util.List<String> deleted = new java.util.ArrayList<>();
+
+    FakeWorldStorage(String... worlds) {
+      names.addAll(java.util.List.of(worlds));
+    }
+
+    @Override
+    public java.util.List<String> worlds() {
+      return java.util.List.copyOf(names);
+    }
+
+    @Override
+    public boolean exists(String name) {
+      return names.contains(name);
+    }
+
+    @Override
+    public boolean copy(String from, String to) {
+      if (!names.contains(from)) {
+        return false;
+      }
+      names.add(to);
+      return true;
+    }
+
+    @Override
+    public boolean delete(String name) {
+      deleted.add(name);
+      return names.remove(name);
+    }
+
+    @Override
+    public java.nio.file.Path directory(String name) {
+      return java.nio.file.Path.of("/saves", name);
+    }
+  }
+
   /** Fake recipe viewer: returns canned slots and records fill requests. */
   static final class FakeRecipeViewer implements RecipeViewer {
     String id = "fake";
@@ -557,6 +645,31 @@ class ScriptEngineTest {
   static final class FakeServer extends ServerPlatformBase {
     Integer groundY = 64;
     String groundArgs;
+
+    Long worldTimeTicks = 6000L;
+    String weatherState = "clear";
+
+    @Override
+    public Long worldTime() {
+      return worldTimeTicks;
+    }
+
+    @Override
+    public boolean setWorldTime(long ticks) {
+      worldTimeTicks = ticks;
+      return true;
+    }
+
+    @Override
+    public String weather() {
+      return weatherState;
+    }
+
+    @Override
+    public boolean setWeather(String weather) {
+      weatherState = weather;
+      return true;
+    }
 
     @Override
     public Integer groundHeight(int x, int z) {
@@ -877,6 +990,105 @@ class ScriptEngineTest {
     for (int i = 0; i < maxTicks && !engine.isFinished(); i++) {
       engine.tick();
     }
+  }
+
+  @Test
+  void playerNameReadsTheNameTheBuildPinned() throws Exception {
+    System.setProperty("minecheck.playerName", "Suite");
+    try {
+      ScriptEngine named =
+          engine(
+              new FakeClient(),
+              ConfigData.defaults(),
+              "assert(minecheck.playerName() == 'Suite', 'the pinned name')\n");
+      runUntilFinished(named, 5);
+      assertFalse(named.isFailed(), named.failureMessage());
+
+      System.clearProperty("minecheck.playerName");
+      ScriptEngine unpinned =
+          engine(
+              new FakeClient(),
+              ConfigData.defaults(),
+              "assert(minecheck.playerName() == nil, 'nothing pinned, so the script falls back')\n");
+      runUntilFinished(unpinned, 5);
+      assertFalse(unpinned.isFailed(), unpinned.failureMessage());
+    } finally {
+      System.clearProperty("minecheck.playerName");
+    }
+  }
+
+  @Test
+  void createWorldWithReuseJoinsAWorldThatIsAlreadyOnDisk() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local ok = minecheck.createWorld({ name = 'suite', reuse = true })\n"
+                + "assert(ok, 'the existing world was joined')\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals("suite", client.joinedWorld, "joined, not created over");
+    assertEquals(null, client.createdWorld);
+  }
+
+  @Test
+  void createWorldWithReuseCreatesTheWorldWhenThereIsNone() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "local ok = minecheck.createWorld({ name = 'fresh', reuse = true })\n"
+                + "assert(ok)\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals("fresh", client.createdWorld.name());
+    assertEquals(null, client.joinedWorld);
+  }
+
+  @Test
+  void worldExistsAndDeleteWorldGoThroughTheSavesDirectory() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.worldExists('suite'), 'the world is there')\n"
+                + "assert(minecheck.deleteWorld('suite'), 'deleted')\n"
+                + "assert(not minecheck.worldExists('suite'), 'and gone')\n"
+                + "assert(not minecheck.deleteWorld('suite'), 'deleting a missing world is false')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertEquals(java.util.List.of("suite", "suite"), client.storage.deleted);
+  }
+
+  @Test
+  void deleteWorldRefusesWhileAWorldIsOpen() throws Exception {
+    FakeClient client = new FakeClient();
+    client.storage = new FakeWorldStorage("suite");
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.joinLocalWorld('suite'))\n"
+                + "local ok, err = pcall(function() minecheck.deleteWorld('suite') end)\n"
+                + "assert(not ok, 'a world with its server open must not be deleted')\n"
+                + "assert(string.find(err, 'leave the world first', 1, true), err)\n");
+
+    runUntilFinished(engine, 20);
+
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    assertTrue(client.storage.deleted.isEmpty(), "nothing was deleted");
   }
 
   @Test
@@ -2934,6 +3146,267 @@ class ScriptEngineTest {
             new ExpectRecord("named", true),
             new ExpectRecord("expect #4", true)),
         result.expects());
+  }
+
+  /**
+   * {@code check} is {@code expect} plus the fail-fast ending: the observation is recorded, the run
+   * fails with the check's own label, and nothing after it runs.
+   */
+  @Test
+  void checkRecordsTheObservationAndStopsTheRunOnAFailure() throws Exception {
+    FakeClient client = new FakeClient();
+    Path resultFile = tempDir.resolve("check-result.json");
+    Path scriptFile = tempDir.resolve("check-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.check(true, 'one')\n"
+            + "local ok = minecheck.check(false, 'the thing worked')\n"
+            + "minecheck.expect(true, 'never reached')\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(client),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("the thing worked", engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(new ExpectRecord("one", true), new ExpectRecord("the thing worked", false)),
+        result.expects(),
+        "the failing check is recorded, and the script stopped there");
+  }
+
+  @Test
+  void checkAndCheckEqShareTheExpectNumbering() throws Exception {
+    FakeClient client = new FakeClient();
+    Path resultFile = tempDir.resolve("check-numbered-result.json");
+    Path scriptFile = tempDir.resolve("check-numbered-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.expect(true)\n" + "minecheck.check(true)\n" + "minecheck.checkEq(2 + 2, 4)\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(client),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(
+            new ExpectRecord("expect #1", true),
+            new ExpectRecord("check #2", true),
+            new ExpectRecord("checkEq #3", true)),
+        result.expects());
+  }
+
+  @Test
+  void checkEqNamesBothValuesInTheFailure() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.checkEq(4, 3, 'slots filled')\n"
+                + "minecheck.expect(true, 'never reached')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("slots filled: expected 3, got 4", engine.failureMessage());
+  }
+
+  @Test
+  void aPhaseNamesTheChecksRecordedInsideIt() throws Exception {
+    Path resultFile = tempDir.resolve("phase-result.json");
+    Path scriptFile = tempDir.resolve("phase-script.lua");
+    Files.writeString(
+        scriptFile,
+        "minecheck.phase('tunnels', function()\n"
+            + "  minecheck.expect(true, 'inside')\n"
+            + "end, 30)\n"
+            + "minecheck.expect(true, 'outside')\n");
+    ScriptEngine engine =
+        new ScriptEngine(
+            clientServices(new FakeClient()),
+            ConfigData.defaults(),
+            scriptFile,
+            resultFile,
+            System::currentTimeMillis);
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+    RunResult result = new Gson().fromJson(Files.readString(resultFile), RunResult.class);
+    assertEquals(
+        List.of(new ExpectRecord("inside", true, "tunnels"), new ExpectRecord("outside", true)),
+        result.expects());
+  }
+
+  @Test
+  void aPhaseThatOverrunsItsBudgetFailsTheRunWithItsName() throws Exception {
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.phase('slow transfer', function()\n"
+                + "  while true do minecheck.wait() end\n"
+                + "end, 1)\n",
+            clock);
+
+    engine.tick(); // starts the phase; its body parks at a waiting action
+    assertFalse(engine.isFinished());
+    clock.addAndGet(2000); // past the phase's one-second budget
+    engine.tick();
+
+    assertTrue(engine.isFinished());
+    assertTrue(engine.isFailed());
+    assertEquals("slow transfer: exceeded 1s", engine.failureMessage());
+  }
+
+  @Test
+  void withDeadlineReportsUnderTheEnclosingPhasesName() throws Exception {
+    AtomicLong clock = new AtomicLong(0);
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "minecheck.phase('outer', function()\n"
+                + "  minecheck.withDeadline(1, function()\n"
+                + "    while true do minecheck.wait() end\n"
+                + "  end)\n"
+                + "end, 300)\n",
+            clock);
+
+    engine.tick();
+    clock.addAndGet(2000);
+    engine.tick();
+
+    assertTrue(engine.isFinished());
+    assertEquals("outer: exceeded 1s", engine.failureMessage());
+  }
+
+  @Test
+  void worldTimeAndWeatherReadAndWriteTheClientsWorld() throws Exception {
+    FakeClient client = new FakeClient();
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(minecheck.getWorldTime() == 6000, 'the time it started at')\n"
+                + "assert(minecheck.setWorldTime(18000), 'the client owns its world')\n"
+                + "assert(minecheck.getWorldTime() == 18000, 'time set')\n"
+                + "assert(minecheck.getWeather() == 'clear', 'clear to begin with')\n"
+                + "assert(minecheck.setWeather('rain'), 'weather set')\n"
+                + "assert(minecheck.getWeather() == 'rain', 'rain afterwards')\n"
+                + "assert(minecheck.setWeather('THUNDER'), 'weather names are case-insensitive')\n"
+                + "assert(minecheck.getWeather() == 'thunder')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void aClientOnSomebodyElsesServerDoesNotOwnTheWorldsClocks() throws Exception {
+    FakeClient client = new FakeClient();
+    client.ownsWorld = false;
+    ScriptEngine engine =
+        engine(
+            client,
+            ConfigData.defaults(),
+            "assert(not minecheck.setWorldTime(18000), 'the clock belongs to the other process')\n"
+                + "assert(not minecheck.setWeather('rain'), 'and so does the weather')\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void setWeatherRejectsANameItDoesNotKnow() throws Exception {
+    ScriptEngine engine =
+        engine(
+            new FakeClient(),
+            ConfigData.defaults(),
+            "local ok, err = pcall(function() minecheck.setWeather('snow') end)\n"
+                + "assert(not ok, 'an unknown weather must raise')\n"
+                + "assert(string.find(err, 'snow', 1, true), err)\n");
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  @Test
+  void worldTimeAndWeatherWorkOnADedicatedServerToo() throws Exception {
+    FakeServer server = new FakeServer();
+    ScriptEngine engine =
+        serverEngine(
+            server,
+            ConfigData.defaults(),
+            "assert(minecheck.getWorldTime() == 6000)\n"
+                + "assert(minecheck.setWorldTime(1000))\n"
+                + "assert(minecheck.getWorldTime() == 1000)\n"
+                + "assert(minecheck.getWeather() == 'clear')\n"
+                + "assert(minecheck.setWeather('thunder'))\n"
+                + "assert(minecheck.getWeather() == 'thunder')\n",
+            new AtomicLong(0));
+
+    runUntilFinished(engine, 10);
+
+    assertTrue(engine.isFinished());
+    assertFalse(engine.isFailed(), engine.failureMessage());
+  }
+
+  /**
+   * The tick clock's opt-in, from the script rather than from a config key a build staged: the same
+   * contract, granted for the rest of the run and handed back with it.
+   */
+  @Test
+  void ownTickClockOptsInFromTheScriptAndCanBeWithdrawnAgain() throws Exception {
+    TickClock clock = TickClock.get();
+    clock.bind("test");
+    clock.countTick(); // a live clock, as a running integrated server has
+    clock.setScriptOwnership(false);
+    try {
+      ScriptEngine engine =
+          engine(
+              new FakeClient(),
+              // ownTickClock is false in the config: the script is the only thing opting in.
+              ConfigData.defaults(),
+              "assert(minecheck.ownTickClock(), 'the script opted in')\n"
+                  + "minecheck.pauseTicks()\n"
+                  + "assert(minecheck.ownTickClock(false) == false, 'the grant is withdrawn')\n"
+                  + "local ok, err = pcall(function() minecheck.pauseTicks() end)\n"
+                  + "assert(not ok, 'the clock is no longer owned here')\n"
+                  + "assert(string.find(err, 'ownTickClock', 1, true), err)\n");
+
+      runUntilFinished(engine, 10);
+
+      assertTrue(engine.isFinished());
+      assertFalse(engine.isFailed(), engine.failureMessage());
+      assertFalse(clock.scriptOwned(), "the engine hands the grant back with the run");
+    } finally {
+      clock.resume();
+      clock.setScriptOwnership(false);
+    }
   }
 
   /** A name is free text: a byte string, quotes, a backslash, a newline — the file stays valid. */
